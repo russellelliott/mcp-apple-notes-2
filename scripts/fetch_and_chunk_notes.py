@@ -67,6 +67,69 @@ import time
 MODEL = SentenceTransformer(MODEL_NAME)
 
 
+# ============================================================================
+# Cache Management
+# ============================================================================
+
+class NotesCache:
+    """Manage incremental indexing cache"""
+    
+    def __init__(self, cache_path: Path = CACHE_PATH):
+        self.cache_path = cache_path
+    
+    def load(self) -> Dict[str, Dict]:
+        """Load cache from disk. Returns {title: {creation_date, modification_date}}"""
+        if not self.cache_path.exists():
+            return {}
+        try:
+            with open(self.cache_path, 'r') as f:
+                data = json.load(f)
+                return data.get('notes', {})
+        except (json.JSONDecodeError, KeyError):
+            print("⚠️ Cache file corrupted, starting fresh")
+            return {}
+    
+    def save(self, notes: List[Dict[str, str]]) -> None:
+        """Save notes to cache. Each note should have title, creation_date, modification_date."""
+        cache = {
+            "last_sync": time.time(),
+            "notes": {note['title']: {
+                'creation_date': note['creation_date'],
+                'modification_date': note['modification_date']
+            } for note in notes}
+        }
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.cache_path, 'w') as f:
+            json.dump(cache, f, indent=2)
+    
+    def filter_unchanged(self, current_notes: List[Dict[str, str]]) -> tuple:
+        """Filter notes into (changed, unchanged).
+        
+        Changed = new or modified since last cache.
+        Unchanged = same creation_date and modification_date.
+        """
+        cached = self.load()
+        changed = []
+        unchanged = []
+        
+        for note in current_notes:
+            title = note['title']
+            cached_note = cached.get(title)
+            
+            if not cached_note:
+                # New note
+                changed.append(note)
+            elif (cached_note.get('creation_date') != note['creation_date'] or
+                  cached_note.get('modification_date') != note['modification_date']):
+                # Modified note
+                changed.append(note)
+            else:
+                # Unchanged
+                unchanged.append(note)
+        
+        return changed, unchanged
+
+
 def fetch_titles(limit: int) -> List[Dict[str, str]]:
     """Delegate to helper function in `scripts/print_note_titles.py`."""
     return helper_fetch_titles(limit)
@@ -302,6 +365,18 @@ def process(limit: int):
     if total == 0:
         return
 
+    # Always filter by cache to skip unchanged notes
+    cache = NotesCache(CACHE_PATH)
+    changed, unchanged = cache.filter_unchanged(titles)
+    print(f"📊 Cache check: {len(changed)} changed, {len(unchanged)} unchanged")
+    if unchanged:
+        print(f"   ⏭️  Skipping {len(unchanged)} unchanged notes")
+    titles = changed
+    if not titles:
+        print("✅ All notes up-to-date!")
+        return
+    total = len(titles)
+
     overall_processed = 0
     batch_count = (total + FETCH_BATCH_SIZE - 1) // FETCH_BATCH_SIZE
 
@@ -383,6 +458,10 @@ def process(limit: int):
         overall_processed += success
         print(f"📊 Batch {bidx+1} complete: {success}/{len(batch)} successful")
         print(f"🎯 Overall progress: {overall_processed}/{total} notes processed")
+
+    # Always save cache for future runs
+    cache.save(titles)
+    print(f"💾 Saved {len(titles)} notes to cache")
 
 
 def main():
