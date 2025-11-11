@@ -50,7 +50,7 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Persistence configuration (use LanceDB in the user's home directory)
 DATA_DIR = Path.home() / ".mcp-apple-notes-2"
 DB_PATH = DATA_DIR / "data"
-CACHE_PATH = DATA_DIR / "notes-cache.json"
+CACHE_PATH = DATA_DIR / "last-sync.txt"
 # LanceDB table name (configurable)
 TABLE_NAME = "notes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,15 +83,20 @@ class NotesCache:
             return 0
         try:
             with open(self.cache_path, 'r') as f:
-                return float(f.read().strip())
+                content = f.read().strip()
+                # Extract just the first line (timestamp)
+                return float(content.split('\n')[0])
         except (ValueError, OSError):
             return 0
     
     def save_last_sync_time(self) -> None:
-        """Save current time as last sync timestamp."""
+        """Save current time as last sync timestamp with human-readable ISO format."""
+        from datetime import datetime
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        current_time = time.time()
+        iso_time = datetime.fromtimestamp(current_time).isoformat()
         with open(self.cache_path, 'w') as f:
-            f.write(str(time.time()))
+            f.write(f"{current_time}\n{iso_time}\n")
     
     def filter_by_modification_time(self, notes: List[Dict[str, str]]) -> tuple:
         """Filter notes into (changed, unchanged) based on modification_date vs last sync.
