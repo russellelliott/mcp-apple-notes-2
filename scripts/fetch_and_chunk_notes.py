@@ -72,59 +72,61 @@ MODEL = SentenceTransformer(MODEL_NAME)
 # ============================================================================
 
 class NotesCache:
-    """Manage incremental indexing cache"""
+    """Manage incremental indexing cache using last-run timestamp."""
     
     def __init__(self, cache_path: Path = CACHE_PATH):
         self.cache_path = cache_path
     
-    def load(self) -> Dict[str, Dict]:
-        """Load cache from disk. Returns {title: {creation_date, modification_date}}"""
+    def load_last_sync_time(self) -> float:
+        """Load the timestamp of last successful sync. Returns 0 if no cache."""
         if not self.cache_path.exists():
-            return {}
+            return 0
         try:
             with open(self.cache_path, 'r') as f:
-                data = json.load(f)
-                return data.get('notes', {})
-        except (json.JSONDecodeError, KeyError):
-            print("⚠️ Cache file corrupted, starting fresh")
-            return {}
+                return float(f.read().strip())
+        except (ValueError, OSError):
+            return 0
     
-    def save(self, notes: List[Dict[str, str]]) -> None:
-        """Save notes to cache. Each note should have title, creation_date, modification_date."""
-        cache = {
-            "last_sync": time.time(),
-            "notes": {note['title']: {
-                'creation_date': note['creation_date'],
-                'modification_date': note['modification_date']
-            } for note in notes}
-        }
+    def save_last_sync_time(self) -> None:
+        """Save current time as last sync timestamp."""
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.cache_path, 'w') as f:
-            json.dump(cache, f, indent=2)
+            f.write(str(time.time()))
     
-    def filter_unchanged(self, current_notes: List[Dict[str, str]]) -> tuple:
-        """Filter notes into (changed, unchanged).
+    def filter_by_modification_time(self, notes: List[Dict[str, str]]) -> tuple:
+        """Filter notes into (changed, unchanged) based on modification_date vs last sync.
         
-        Changed = new or modified since last cache.
-        Unchanged = same creation_date and modification_date.
+        Changed = modification_date is newer than last sync time.
+        Unchanged = modification_date is older than or equal to last sync time.
         """
-        cached = self.load()
+        last_sync = self.load_last_sync_time()
+        if last_sync == 0:
+            # No cache yet; all notes are "new"
+            return notes, []
+        
         changed = []
         unchanged = []
         
-        for note in current_notes:
-            title = note['title']
-            cached_note = cached.get(title)
-            
-            if not cached_note:
-                # New note
+        for note in notes:
+            mod_date_str = note.get('modification_date', '')
+            if not mod_date_str:
+                # If no modification date, treat as changed
                 changed.append(note)
-            elif (cached_note.get('creation_date') != note['creation_date'] or
-                  cached_note.get('modification_date') != note['modification_date']):
-                # Modified note
+                continue
+            
+            # Parse ISO datetime and convert to timestamp
+            try:
+                from datetime import datetime
+                mod_dt = datetime.fromisoformat(mod_date_str.replace('Z', '+00:00'))
+                mod_timestamp = mod_dt.timestamp()
+            except (ValueError, AttributeError):
+                # Parse error; treat as changed
+                changed.append(note)
+                continue
+            
+            if mod_timestamp > last_sync:
                 changed.append(note)
             else:
-                # Unchanged
                 unchanged.append(note)
         
         return changed, unchanged
@@ -367,13 +369,14 @@ def process(limit: int):
 
     # Always filter by cache to skip unchanged notes
     cache = NotesCache(CACHE_PATH)
-    changed, unchanged = cache.filter_unchanged(titles)
+    changed, unchanged = cache.filter_by_modification_time(titles)
     print(f"📊 Cache check: {len(changed)} changed, {len(unchanged)} unchanged")
     if unchanged:
         print(f"   ⏭️  Skipping {len(unchanged)} unchanged notes")
     titles = changed
     if not titles:
         print("✅ All notes up-to-date!")
+        cache.save_last_sync_time()
         return
     total = len(titles)
 
@@ -459,9 +462,9 @@ def process(limit: int):
         print(f"📊 Batch {bidx+1} complete: {success}/{len(batch)} successful")
         print(f"🎯 Overall progress: {overall_processed}/{total} notes processed")
 
-    # Always save cache for future runs
-    cache.save(titles)
-    print(f"💾 Saved {len(titles)} notes to cache")
+    # Always save cache timestamp for future runs
+    cache.save_last_sync_time()
+    print(f"💾 Saved sync timestamp to cache")
 
 
 def main():
