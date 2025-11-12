@@ -272,20 +272,56 @@ def cluster_notes(
     current_timestamp = datetime.utcnow().isoformat() + "Z"
     
     # Build update map: id -> cluster info
+    # Compute a dynamic confidence score per note as the cosine similarity
+    # between the note's embedding and its assigned cluster centroid (0-1-ish).
+    # For true outliers (-1) we fall back to the best similarity to any centroid
+    # computed during pass 2 when available, otherwise 0.0.
     cluster_updates = {}
+
+    # Recompute cluster centroids from final labels to ensure consistency
+    cluster_centroids = {}
+    cluster_ids_final = [c for c in set(primary_labels) if c != -1]
+    for cid in cluster_ids_final:
+        mask = primary_labels == cid
+        if np.sum(mask) > 0:
+            cluster_centroids[cid] = np.mean(embeddings[mask], axis=0)
+
+    # Prepare a map of outlier best-scores from pass 2 if they exist
+    # (we computed `quality_scores` and `outlier_indices` earlier in pass 2)
+    outlier_best_score_map = {}
+    try:
+        # `outlier_indices` and `quality_scores` may only exist if there were outliers
+        for idx, score in zip(outlier_indices, quality_scores):
+            outlier_best_score_map[int(idx)] = float(score)
+    except NameError:
+        # No outliers were processed in pass 2
+        outlier_best_score_map = {}
+
+    # Compute confidence per note index
+    confidence_scores = [0.0] * len(note_data)
+    for i in range(len(note_data)):
+        label = int(primary_labels[i])
+        emb = embeddings[i].reshape(1, -1)
+        conf = 0.0
+        if label != -1 and label in cluster_centroids:
+            centroid = cluster_centroids[label].reshape(1, -1)
+            conf = float(cosine_similarity(emb, centroid)[0][0])
+        else:
+            # Use best score from pass 2 if present for this outlier, else 0.0
+            conf = float(outlier_best_score_map.get(i, 0.0))
+
+        # Clamp to [-1,1] then map to [0,1] to give an interpretable confidence
+        conf = max(-1.0, min(1.0, conf))
+        conf = (conf + 1.0) / 2.0
+        confidence_scores[i] = conf
+
     for i, note in enumerate(note_data):
         cluster_id = int(primary_labels[i])
         cluster_label = cluster_labels.get(cluster_id, "Outlier")
-        
-        # Calculate quality score (confidence) - use the quality score from pass 2 if available
-        if primary_labels[i] == -1:
-            # Outlier
-            confidence = "0.0"
-        else:
-            # For clustered notes, use a default high confidence
-            # In a real system, you might track the actual quality score from reassignment
-            confidence = "0.85"
-        
+
+        confidence_val = confidence_scores[i]
+        confidence = f"{confidence_val:.3f}"
+
         for chunk in note['chunks']:
             if 'id' in chunk:
                 cluster_updates[chunk['id']] = {
