@@ -21,6 +21,8 @@ import re
 import sys
 import threading
 import queue
+import hashlib
+import uuid
 # Ensure the repository root is on sys.path so `import scripts.*` works when this
 # script is executed directly (e.g. `python scripts/fetch_and_chunk_notes.py`).
 THIS_DIR = Path(__file__).resolve().parent
@@ -299,7 +301,10 @@ def _processing_worker(processing_q: "queue.Queue", embedding_q: "queue.Queue", 
         creation = note.get('creation_date', '')
         modification = note.get('modification_date', '')
         for ci, chunk_text in enumerate(ct_chunks):
+            # Generate unique ID for each chunk
+            chunk_id = str(uuid.uuid4())
             chunk_obj = {
+                'id': chunk_id,
                 'title': title,
                 'content': raw,
                 'creation_date': creation,
@@ -365,25 +370,32 @@ def _writer_worker(writer_q: "queue.Queue", batch_index: int):
 
 
 
-def process(limit: int):
+def process(limit: int, force: bool = False):
     titles = fetch_titles(limit)
     total = len(titles)
     print(f"📋 Found {total} note titles")
     if total == 0:
         return
 
-    # Always filter by cache to skip unchanged notes
+    # Filter by cache to skip unchanged notes (unless --force is used)
     cache = NotesCache(CACHE_PATH)
-    changed, unchanged = cache.filter_by_modification_time(titles)
-    print(f"📊 Cache check: {len(changed)} changed, {len(unchanged)} unchanged")
-    if unchanged:
-        print(f"   ⏭️  Skipping {len(unchanged)} unchanged notes")
-    titles = changed
-    if not titles:
-        print("✅ All notes up-to-date!")
-        cache.save_last_sync_time()
-        return
-    total = len(titles)
+    
+    if force:
+        print(f"🔄 Force mode: Processing all {total} notes (ignoring cache)")
+        changed = titles
+        unchanged = []
+    else:
+        changed, unchanged = cache.filter_by_modification_time(titles)
+        print(f"📊 Cache check: {len(changed)} changed, {len(unchanged)} unchanged")
+        if unchanged:
+            print(f"   ⏭️  Skipping {len(unchanged)} unchanged notes")
+        titles = changed
+        if not titles:
+            print("✅ All notes up-to-date!")
+            cache.save_last_sync_time()
+            return
+    
+    total = len(changed)
 
     overall_processed = 0
     batch_count = (total + FETCH_BATCH_SIZE - 1) // FETCH_BATCH_SIZE
@@ -475,9 +487,10 @@ def process(limit: int):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=0, help='Limit number of notes to fetch (0 = all)')
+    parser.add_argument('--force', action='store_true', help='Force reprocessing all notes, ignore cache, then update cache timestamp')
     args = parser.parse_args()
     start = time.time()
-    process(args.limit if args.limit > 0 else 0)
+    process(args.limit if args.limit > 0 else 0, force=args.force)
     print(f"\nCompleted in {time.time() - start:.2f}s")
 
 
