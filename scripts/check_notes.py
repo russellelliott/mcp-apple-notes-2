@@ -1,6 +1,9 @@
 import lancedb
 from pathlib import Path
 import pandas
+import time
+
+start_time = time.time()
 
 DATA_DIR = Path.home() / ".mcp-apple-notes-2"
 CACHE_PATH = DATA_DIR / "last-sync.txt"
@@ -49,3 +52,6 @@ newest = df.tail(5)[['title', 'chunk_index', 'total_chunks', 'chunk_content']].r
 for idx, row in newest.iterrows():
     print(f"\n   [{idx+1}] {row['title'][:60]} (chunk {row['chunk_index']}/{row['total_chunks']})")
     print(f"       {row['chunk_content'][:80]}...")
+
+elapsed = time.time() - start_time
+print(f"\n⏱️  Completed in {elapsed:.2f}s")

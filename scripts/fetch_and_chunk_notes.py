@@ -10,6 +10,10 @@ Usage:
 
 Logs progress to stdout; writes chunk JSONL files into ./data/chunks_batch_{i}.jsonl
 """
+import os
+# Set tokenizers parallelism to false to avoid deadlock warnings when using threading
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 import argparse
 import subprocess
 import time
@@ -57,16 +61,47 @@ CACHE_PATH = DATA_DIR / "last-sync.txt"
 TABLE_NAME = "notes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Set tokenizers parallelism to false to avoid deadlock warnings when using threading
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 # Import lancedb and pyarrow for storage
 import lancedb
 import pyarrow as pa
 from sentence_transformers import SentenceTransformer
-import os
 import shutil
-import time
 
-# Load embedding model eagerly (no lazy loading)
-MODEL = SentenceTransformer(MODEL_NAME)
+# Lazy load embedding model with progress output
+_MODEL = None
+
+def get_model():
+    """Load the embedding model with progress feedback."""
+    global _MODEL
+    if _MODEL is not None:
+        return _MODEL
+    
+    print(f"[*] Initializing embedding model: {MODEL_NAME}", flush=True)
+    print("[*] This may take 2-5 minutes on first run (downloading and loading 90MB model)...", flush=True)
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+        print(f"[*] Using device: {device}", flush=True)
+        if device == "cpu":
+            print("[*] ⚠️  Running on CPU. For faster embeddings, consider using a GPU.", flush=True)
+    except ImportError:
+        print("[*] torch not available, will use CPU", flush=True)
+    
+    _MODEL = SentenceTransformer(MODEL_NAME)
+    print("[✓] Model loaded successfully", flush=True)
+    return _MODEL
+
+# Don't load model at import time - load it when first needed
+MODEL = None
 
 
 # ============================================================================
@@ -321,7 +356,7 @@ def _processing_worker(processing_q: "queue.Queue", embedding_q: "queue.Queue", 
 
 
 def _embedding_worker(embedding_q: "queue.Queue", writer_q: "queue.Queue"):
-    model = MODEL
+    model = get_model()  # Load model on first use
     buffer = []
     while True:
         item = embedding_q.get()
@@ -371,6 +406,7 @@ def _writer_worker(writer_q: "queue.Queue", batch_index: int):
 
 
 def process(limit: int, force: bool = False):
+    print("🚀 Starting fetch_and_chunk_notes script", flush=True)
     titles = fetch_titles(limit)
     total = len(titles)
     print(f"📋 Found {total} note titles")
