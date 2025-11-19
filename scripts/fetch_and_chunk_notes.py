@@ -9,6 +9,9 @@ Usage:
 
 Logs progress to stdout; writes chunk JSONL files into ./data/chunks_batch_{i}.jsonl
 """
+# Print startup message ASAP to show script is running
+print("🚀 Starting fetch_and_chunk_notes script", flush=True)
+
 import os
 # Set tokenizers parallelism to false to avoid deadlock warnings when using threading
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -628,7 +631,6 @@ def _writer_worker(writer_q: "queue.Queue", batch_index: int):
 
 
 def process(limit: int, force: bool = False):
-    print("🚀 Starting fetch_and_chunk_notes script", flush=True)
     titles = fetch_titles(limit)
     total = len(titles)
     print(f"📋 Found {total} note titles")

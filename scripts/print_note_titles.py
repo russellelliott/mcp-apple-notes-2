@@ -8,6 +8,32 @@ import subprocess
 import argparse
 import time
 
+# Try to import py-applescript; fall back to subprocess if not available
+try:
+    from applescript import AppleScript
+    HAS_PY_APPLESCRIPT = True
+except ImportError:
+    HAS_PY_APPLESCRIPT = False
+
+
+def _run_applescript(script: str) -> str:
+    """Execute AppleScript using py-applescript if available, else subprocess."""
+    if HAS_PY_APPLESCRIPT:
+        try:
+            as_script = AppleScript(script)
+            result = as_script.run()
+            return result if result else ""
+        except Exception as e:
+            print(f"[!] py-applescript failed: {e}, falling back to osascript", flush=True)
+    
+    # Fallback to subprocess
+    try:
+        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
+        return r.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"[!] osascript failed: {e.stderr}", flush=True)
+        return ""
+
 
 def build_applescript(limit: int) -> str:
     apple_limit = limit if limit is not None else 0
@@ -67,37 +93,25 @@ def main():
     script = build_applescript(args.limit)
 
     start = time.time()
-    try:
-        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
-        out = r.stdout.strip()
-        if not out:
-            print('No output from osascript')
-            if r.stderr:
-                print('stderr:')
-                print(r.stderr)
-            return
+    out = _run_applescript(script).strip()
+    
+    if not out:
+        print('No output from osascript')
+        return
 
-        lines = out.splitlines()
-        if not lines:
-            print('No notes returned (empty output)')
-            return
+    lines = out.splitlines()
+    if not lines:
+        print('No notes returned (empty output)')
+        return
 
-        for i, line in enumerate(lines, 1):
-            parts = line.split('\t')
-            title = parts[0] if len(parts) > 0 else '<untitled>'
-            creation = parts[1] if len(parts) > 1 else ''
-            print(f"{i}. {title} ({creation})")
+    for i, line in enumerate(lines, 1):
+        parts = line.split('\t')
+        title = parts[0] if len(parts) > 0 else '<untitled>'
+        creation = parts[1] if len(parts) > 1 else ''
+        print(f"{i}. {title} ({creation})")
 
-        elapsed = time.time() - start
-        print(f"\nFetched {len(lines)} titles in {elapsed:.2f}s")
-
-    except subprocess.CalledProcessError as e:
-        print('osascript failed')
-        print('returncode:', e.returncode)
-        print('stdout:')
-        print(e.stdout)
-        print('stderr:')
-        print(e.stderr)
+    elapsed = time.time() - start
+    print(f"\nFetched {len(lines)} titles in {elapsed:.2f}s")
 
 
 if __name__ == '__main__':
@@ -110,18 +124,14 @@ def fetch_titles(limit: int) -> list:
     This reuses the same AppleScript used by the CLI entrypoint.
     """
     script = build_applescript(limit)
-    try:
-        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
-        out = r.stdout.strip()
-        if not out:
-            return []
-        items = []
-        for line in out.splitlines():
-            parts = line.split('\t')
-            title = parts[0] if len(parts) > 0 else '<untitled>'
-            creation = parts[1] if len(parts) > 1 else ''
-            modification = parts[2] if len(parts) > 2 else ''
-            items.append({'title': title, 'creation_date': creation, 'modification_date': modification})
-        return items
-    except subprocess.CalledProcessError:
+    out = _run_applescript(script).strip()
+    if not out:
         return []
+    items = []
+    for line in out.splitlines():
+        parts = line.split('\t')
+        title = parts[0] if len(parts) > 0 else '<untitled>'
+        creation = parts[1] if len(parts) > 1 else ''
+        modification = parts[2] if len(parts) > 2 else ''
+        items.append({'title': title, 'creation_date': creation, 'modification_date': modification})
+    return items
