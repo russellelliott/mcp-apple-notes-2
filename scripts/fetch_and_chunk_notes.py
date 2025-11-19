@@ -30,13 +30,6 @@ import hashlib
 import uuid
 import subprocess
 
-# Try to import py-applescript; fall back to subprocess if not available
-try:
-    from applescript import AppleScript
-    HAS_PY_APPLESCRIPT = True
-except ImportError:
-    HAS_PY_APPLESCRIPT = False
-
 # Ensure the repository root is on sys.path so `import scripts.*` works when this
 # script is executed directly (e.g. `python scripts/fetch_and_chunk_notes.py`).
 THIS_DIR = Path(__file__).resolve().parent
@@ -54,9 +47,10 @@ AVG_CHARS_PER_TOKEN = 4  # heuristic
 CHUNK_MAX_CHARS = min(CHUNK_SIZE_TOKENS * AVG_CHARS_PER_TOKEN, MAX_CHUNK_SIZE_TOKENS * AVG_CHARS_PER_TOKEN)
 CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP_TOKENS * AVG_CHARS_PER_TOKEN
 
-FETCH_BATCH_SIZE = 50
-EMBEDDING_BATCH_SIZE = 10
+FETCH_BATCH_SIZE = 50 #it was 50 in apple-mcp-notes repo #10  # Reduced from 50 to avoid overwhelming AppleScript
+EMBEDDING_BATCH_SIZE = 1  # Reduced to 1 for debugging MPS issues
 DB_BATCH_SIZE = 100
+APPLESCRIPT_TIMEOUT = 30  # Timeout for AppleScript calls in seconds
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Persistence configuration (use LanceDB in the user's home directory)
@@ -80,25 +74,26 @@ import shutil
 _MODEL = None
 
 def get_model():
-    """Load the embedding model with progress feedback."""
+    """Get the embedding model (already loaded at startup)."""
+    global _MODEL
+    if _MODEL is None:
+        raise RuntimeError("Model not initialized. Call load_embedding_model() at script startup.")
+    return _MODEL
+
+def load_embedding_model():
+    """Load the embedding model upfront with progress feedback."""
     global _MODEL
     if _MODEL is not None:
-        return _MODEL
+        return _MODEL  # Already loaded
     
     print(f"[*] Initializing embedding model: {MODEL_NAME}", flush=True)
     print("[*] This may take 2-5 minutes on first run (downloading and loading 90MB model)...", flush=True)
     
     try:
         import torch
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-        print(f"[*] Using device: {device}", flush=True)
-        if device == "cpu":
-            print("[*] ⚠️  Running on CPU. For faster embeddings, consider using a GPU.", flush=True)
+        # Force CPU to avoid MPS threading issues
+        device = "cpu"
+        print(f"[*] Using device: {device} (forced for stability)", flush=True)
     except ImportError:
         print("[*] torch not available, will use CPU", flush=True)
     
@@ -181,21 +176,25 @@ class NotesCache:
 
 
 def _run_applescript(script: str) -> str:
-    """Execute AppleScript using py-applescript if available, else subprocess."""
-    if HAS_PY_APPLESCRIPT:
-        try:
-            as_script = AppleScript(script)
-            result = as_script.run()
-            return result if result else ""
-        except Exception as e:
-            print(f"[!] py-applescript failed: {e}, falling back to osascript", flush=True)
+    """Execute AppleScript via subprocess osascript with timeout.
     
-    # Fallback to subprocess
+    Note: py-applescript doesn't support timeouts and can hang indefinitely,
+    so we use subprocess for reliable timeout enforcement.
+    """
+    print(f"    [DEBUG] _run_applescript: using osascript with timeout={APPLESCRIPT_TIMEOUT}s", flush=True)
     try:
-        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
+        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True, timeout=APPLESCRIPT_TIMEOUT)
+        print(f"    [DEBUG] _run_applescript: osascript returned {len(r.stdout)} chars", flush=True)
         return r.stdout
+    except subprocess.TimeoutExpired:
+        print(f"[!] ❌ AppleScript timed out after {APPLESCRIPT_TIMEOUT}s", flush=True)
+        return ""
     except subprocess.CalledProcessError as e:
-        print(f"[!] osascript failed: {e.stderr}", flush=True)
+        print(f"[!] ❌ AppleScript execution failed: {e.stderr}", flush=True)
+        return ""
+    except FileNotFoundError:
+        print(f"[!] ❌ osascript command not found (this is a macOS-only operation)", flush=True)
+        return ""
         return ""
 
 
@@ -251,6 +250,7 @@ def fetch_titles(limit: int) -> List[Dict[str, str]]:
     
     out = _run_applescript(script)
     if not out:
+        print(f"[!] ❌ Failed to fetch note titles from Notes.app", flush=True)
         return []
     
     titles = []
@@ -267,55 +267,50 @@ def fetch_titles(limit: int) -> List[Dict[str, str]]:
 
 
 def fetch_note_content(item: Dict[str, str]) -> Dict[str, str]:
-    """Fetch a single note's content by title and optional creation_date."""
+    """Fetch a single note's content by title and optional creation_date.
+    
+    Uses simple AppleScript filtering with 'whose' clause.
+    """
     title = item.get('title', '')
     creation = item.get('creation_date', '')
     
-    safe_title = title.replace('"', '"')
-    safe_creation = creation or ""
+    print(f"    [DEBUG] fetch_note_content: fetching '{title}'", flush=True)
     
     script = f'''
-        on replaceText(theText, searchString, replacementString)
-            set AppleScript's text item delimiters to searchString
-            set theItems to every text item of theText
-            set AppleScript's text item delimiters to replacementString
-            set theText to theItems as string
-            set AppleScript's text item delimiters to ""
-            return theText
-        end replaceText
+    set targetTitle to "{title}"
+    set targetDate to "{creation}"
 
-        tell application "Notes"
-            set noteList to every note
-            repeat with n in noteList
-                try
-                    if name of n is "{safe_title}" then
-                        set nCreation to ((creation date of n) as «class isot» as string)
-                        if "{safe_creation}" is not "" and nCreation is not "{safe_creation}" then
-                            -- skip
-                        else
-                            set nMod to ((modification date of n) as «class isot» as string)
-                            set nBody to body of n
-                            -- sanitize
-                            set t1 to my replaceText((name of n), tab, " ")
-                            set t2 to my replaceText(t1, return, " ")
-                            set t3 to my replaceText(t2, linefeed, " ")
-                            set b1 to my replaceText(nBody, tab, " ")
-                            set b2 to my replaceText(b1, return, " ")
-                            set b3 to my replaceText(b2, linefeed, " ")
-                            return t3 & tab & nCreation & tab & nMod & tab & b3
-                        end if
-                    end if
-                end try
+    tell application "Notes"
+        set matchingNotes to notes whose name is targetTitle
+        
+        if length of matchingNotes is 0 then
+            return ""
+        else if length of matchingNotes is 1 then
+            set theNote to item 1 of matchingNotes
+            return (name of theNote) & "||" & (creation date of theNote) & "||" & (modification date of theNote) & "||" & (body of theNote)
+        else
+            -- Multiple notes with same title - try to match by creation date
+            repeat with theNote in matchingNotes
+                set noteDate to creation date of theNote
+                if noteDate as string is equal to targetDate then
+                    return (name of theNote) & "||" & (creation date of theNote) & "||" & (modification date of theNote) & "||" & (body of theNote)
+                end if
             end repeat
-        end tell
-        return ""
+            -- Fallback: return first match if date doesn't match
+            set theNote to item 1 of matchingNotes
+            return (name of theNote) & "||" & (creation date of theNote) & "||" & (modification date of theNote) & "||" & (body of theNote)
+        end if
+    end tell
     '''
     
-    out = _run_applescript(script).strip()
-    if not out:
-        return {"error": "Note not found or no output", "title": title}
+    print(f"    [DEBUG] fetch_note_content: calling AppleScript (timeout={APPLESCRIPT_TIMEOUT}s)", flush=True)
+    result = _run_applescript(script)
+    print(f"    [DEBUG] fetch_note_content: AppleScript returned {len(result) if result else 0} chars", flush=True)
     
-    parts = out.split('\t')
+    if not result:
+        return {"error": f"Failed to fetch note content for '{title}'", "title": title}
+    
+    parts = result.split('||', 3)
     return {
         'title': parts[0] if len(parts) > 0 else title,
         'creation_date': parts[1] if len(parts) > 1 else creation,
@@ -393,7 +388,9 @@ def fetch_note_batch(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     
     if not out:
         # Return error dict for each item if batch failed
-        return [{"error": "Batch fetch failed", "title": item.get('title')} for item in items]
+        error_msg = f"Batch fetch failed for {len(items)} notes"
+        print(f"[!] ⚠️  {error_msg}", flush=True)
+        return [{"error": error_msg, "title": item.get('title')} for item in items]
     
     for line in out.splitlines():
         if not line:
@@ -545,18 +542,22 @@ def write_chunks_to_lancedb(chunks: list[dict], batch_index: int):
 
 
 def _processing_worker(processing_q: "queue.Queue", embedding_q: "queue.Queue", worker_id: int):
+    print(f"[DEBUG] Processing worker {worker_id} started", flush=True)
     while True:
         item = processing_q.get()
         if item is None:
+            print(f"[DEBUG] Processing worker {worker_id} received sentinel", flush=True)
             # propagate sentinel and exit
             processing_q.task_done()
             break
         idx, note = item
         title = note.get('title', '<untitled>')
+        print(f"[DEBUG] Processing worker {worker_id} processing item {idx}: '{title}'", flush=True)
         raw = note.get('content') or note.get('raw') or ''
         full_text = f"{title}\n\n{raw}"
         ct_chunks = create_chunks(full_text)
         total_chunks = len(ct_chunks)
+        print(f"[DEBUG] Processing worker {worker_id} created {total_chunks} chunks for '{title}'", flush=True)
         chunks = []
         creation = note.get('creation_date', '')
         modification = note.get('modification_date', '')
@@ -581,29 +582,45 @@ def _processing_worker(processing_q: "queue.Queue", embedding_q: "queue.Queue", 
 
 
 def _embedding_worker(embedding_q: "queue.Queue", writer_q: "queue.Queue"):
-    model = get_model()  # Load model on first use
+    print(f"[DEBUG] Embedding worker started", flush=True)
+    model = get_model()  # Get already-loaded model
     buffer = []
     while True:
         item = embedding_q.get()
         if item is None:
+            print(f"[DEBUG] Embedding worker received sentinel, flushing {len(buffer)} buffered chunks", flush=True)
             # flush buffer
             if buffer:
                 texts = [c['chunk_content'] for c in buffer]
-                embs = model.encode(texts, convert_to_numpy=True)
+                print(f"[DEBUG] Embedding worker encoding {len(texts)} chunks (BEFORE encode)", flush=True)
+                try:
+                    embs = model.encode(texts, convert_to_numpy=True)
+                    print(f"[DEBUG] Embedding worker encoding done (AFTER encode)", flush=True)
+                except Exception as e:
+                    print(f"[DEBUG] ❌ Embedding failed: {type(e).__name__}: {e}", flush=True)
+                    raise
                 for c, e in zip(buffer, embs.tolist() if hasattr(embs, 'tolist') else embs):
                     c['embedding'] = e.tolist() if hasattr(e, 'tolist') else list(e)
                     writer_q.put(c)
                 buffer = []
+            print(f"[DEBUG] Embedding worker propagating sentinel to writer", flush=True)
             # propagate sentinel to writer and exit
             writer_q.put(None)
             embedding_q.task_done()
             break
 
         buffer.append(item)
+        print(f"[DEBUG] Embedding worker buffered chunk, buffer size: {len(buffer)}", flush=True)
         # batch embeddings
         if len(buffer) >= EMBEDDING_BATCH_SIZE:
             texts = [c['chunk_content'] for c in buffer]
-            embs = model.encode(texts, convert_to_numpy=True)
+            print(f"[DEBUG] Embedding worker batch ready, encoding {len(texts)} chunks (BEFORE encode)", flush=True)
+            try:
+                embs = model.encode(texts, convert_to_numpy=True)
+                print(f"[DEBUG] Embedding worker encoding done (AFTER encode)", flush=True)
+            except Exception as e:
+                print(f"[DEBUG] ❌ Embedding failed: {type(e).__name__}: {e}", flush=True)
+                raise
             for c, e in zip(buffer, embs.tolist() if hasattr(embs, 'tolist') else embs):
                 c['embedding'] = e.tolist() if hasattr(e, 'tolist') else list(e)
                 writer_q.put(c)
@@ -612,18 +629,23 @@ def _embedding_worker(embedding_q: "queue.Queue", writer_q: "queue.Queue"):
 
 
 def _writer_worker(writer_q: "queue.Queue", batch_index: int):
+    print(f"[DEBUG] Writer worker {batch_index} started", flush=True)
     buffer = []
     while True:
         item = writer_q.get()
         if item is None:
+            print(f"[DEBUG] Writer worker {batch_index} received sentinel, flushing {len(buffer)} buffered chunks", flush=True)
             # flush remaining buffer
             if buffer:
                 write_chunks_to_lancedb(buffer, batch_index)
                 buffer = []
+            print(f"[DEBUG] Writer worker {batch_index} exiting", flush=True)
             writer_q.task_done()
             break
         buffer.append(item)
+        print(f"[DEBUG] Writer worker {batch_index} buffered chunk, buffer size: {len(buffer)}", flush=True)
         if len(buffer) >= DB_BATCH_SIZE:
+            print(f"[DEBUG] Writer worker {batch_index} writing batch of {len(buffer)} chunks to LanceDB", flush=True)
             write_chunks_to_lancedb(buffer, batch_index)
             buffer = []
         writer_q.task_done()
@@ -631,6 +653,11 @@ def _writer_worker(writer_q: "queue.Queue", batch_index: int):
 
 
 def process(limit: int, force: bool = False):
+    # Load embedding model upfront before any processing
+    print("\n🤖 Loading embedding model...", flush=True)
+    load_embedding_model()
+    print()  # blank line for readability
+    
     titles = fetch_titles(limit)
     total = len(titles)
     print(f"📋 Found {total} note titles")
@@ -699,7 +726,9 @@ def process(limit: int, force: bool = False):
                 try:
                     note = fut.result()
                 except Exception as e:
-                    note = {'error': str(e), 'title': item.get('title')}
+                    error_msg = f"Exception during fetch: {type(e).__name__}: {str(e)}"
+                    note = {'error': error_msg, 'title': item.get('title')}
+                    print(f"  ❌ [{completed_count}] Fetch error: {error_msg}", flush=True)
 
                 title = note.get('title', '<untitled>')
                 print(f"  📄 [{completed_count}/{len(batch)}] Finished fetch: \"{title}\"", flush=True)
