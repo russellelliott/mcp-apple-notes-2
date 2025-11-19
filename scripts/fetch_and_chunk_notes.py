@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Fetch notes, convert to plain text, chunk them and write chunk data files.
 
-This script avoids importing the full `main.py` (and heavy ML libs) and uses AppleScript
-via `osascript` to fetch note metadata and content. It then performs character-based
-chunking using the same heuristics as the main code.
+Uses py-applescript library for efficient AppleScript execution and batches multiple
+note fetches in single osascript calls for better performance.
 
 Usage:
   python scripts/fetch_and_chunk_notes.py --limit 100
@@ -15,7 +14,6 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
-import subprocess
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,16 +25,21 @@ import threading
 import queue
 import hashlib
 import uuid
+import subprocess
+
+# Try to import py-applescript; fall back to subprocess if not available
+try:
+    from applescript import AppleScript
+    HAS_PY_APPLESCRIPT = True
+except ImportError:
+    HAS_PY_APPLESCRIPT = False
+
 # Ensure the repository root is on sys.path so `import scripts.*` works when this
 # script is executed directly (e.g. `python scripts/fetch_and_chunk_notes.py`).
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-# import helper functions from scripts so we don't reimplement AppleScript here
-from scripts.print_note_titles import fetch_titles as helper_fetch_titles
-from scripts.get_note_content import fetch_note_content as helper_fetch_note_content
 
 
 # Configuration (token-based defaults mapped to approximate char counts)
@@ -174,19 +177,238 @@ class NotesCache:
         return changed, unchanged
 
 
+def _run_applescript(script: str) -> str:
+    """Execute AppleScript using py-applescript if available, else subprocess."""
+    if HAS_PY_APPLESCRIPT:
+        try:
+            as_script = AppleScript(script)
+            result = as_script.run()
+            return result if result else ""
+        except Exception as e:
+            print(f"[!] py-applescript failed: {e}, falling back to osascript", flush=True)
+    
+    # Fallback to subprocess
+    try:
+        r = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, check=True)
+        return r.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"[!] osascript failed: {e.stderr}", flush=True)
+        return ""
+
+
 def fetch_titles(limit: int) -> List[Dict[str, str]]:
-    """Delegate to helper function in `scripts/print_note_titles.py`."""
-    return helper_fetch_titles(limit)
+    """Fetch all note titles using AppleScript."""
+    apple_limit = limit if limit > 0 else 0
+    script = f"""
+        on replaceText(theText, searchString, replacementString)
+            set AppleScript's text item delimiters to searchString
+            set theItems to every text item of theText
+            set AppleScript's text item delimiters to replacementString
+            set theText to theItems as string
+            set AppleScript's text item delimiters to ""
+            return theText
+        end replaceText
+
+        set outLines to ""
+        tell application "Notes"
+            set noteList to every note
+            set totalCount to (count of noteList)
+            set maxNotes to {apple_limit}
+            if maxNotes = 0 then
+                set limitCount to totalCount
+            else
+                if maxNotes < totalCount then
+                    set limitCount to maxNotes
+                else
+                    set limitCount to totalCount
+                end if
+            end if
+
+            repeat with i from 1 to limitCount
+                try
+                    set n to item i of noteList
+                    set t to name of n
+                    set c to (creation date of n) as «class isot» as string
+                    set m to (modification date of n) as «class isot» as string
+
+                    -- sanitize title (remove tabs/newlines)
+                    set t1 to my replaceText(t, tab, " ")
+                    set t2 to my replaceText(t1, return, " ")
+                    set t3 to my replaceText(t2, linefeed, " ")
+
+                    set outLines to outLines & t3 & tab & c & tab & m & linefeed
+                on error errMsg
+                    -- skip problematic note
+                end try
+            end repeat
+        end tell
+
+        return outLines
+    """
+    
+    out = _run_applescript(script)
+    if not out:
+        return []
+    
+    titles = []
+    for line in out.strip().splitlines():
+        if not line:
+            continue
+        parts = line.split('\t')
+        titles.append({
+            'title': parts[0] if len(parts) > 0 else '<untitled>',
+            'creation_date': parts[1] if len(parts) > 1 else '',
+            'modification_date': parts[2] if len(parts) > 2 else '',
+        })
+    return titles
 
 
 def fetch_note_content(item: Dict[str, str]) -> Dict[str, str]:
-    """Delegate to helper function in `scripts/get_note_content.py`.
-
-    The helper returns a dict with keys 'title','creation_date','modification_date','content'.
-    """
+    """Fetch a single note's content by title and optional creation_date."""
     title = item.get('title', '')
     creation = item.get('creation_date', '')
-    return helper_fetch_note_content(title, creation)
+    
+    safe_title = title.replace('"', '"')
+    safe_creation = creation or ""
+    
+    script = f'''
+        on replaceText(theText, searchString, replacementString)
+            set AppleScript's text item delimiters to searchString
+            set theItems to every text item of theText
+            set AppleScript's text item delimiters to replacementString
+            set theText to theItems as string
+            set AppleScript's text item delimiters to ""
+            return theText
+        end replaceText
+
+        tell application "Notes"
+            set noteList to every note
+            repeat with n in noteList
+                try
+                    if name of n is "{safe_title}" then
+                        set nCreation to ((creation date of n) as «class isot» as string)
+                        if "{safe_creation}" is not "" and nCreation is not "{safe_creation}" then
+                            -- skip
+                        else
+                            set nMod to ((modification date of n) as «class isot» as string)
+                            set nBody to body of n
+                            -- sanitize
+                            set t1 to my replaceText((name of n), tab, " ")
+                            set t2 to my replaceText(t1, return, " ")
+                            set t3 to my replaceText(t2, linefeed, " ")
+                            set b1 to my replaceText(nBody, tab, " ")
+                            set b2 to my replaceText(b1, return, " ")
+                            set b3 to my replaceText(b2, linefeed, " ")
+                            return t3 & tab & nCreation & tab & nMod & tab & b3
+                        end if
+                    end if
+                end try
+            end repeat
+        end tell
+        return ""
+    '''
+    
+    out = _run_applescript(script).strip()
+    if not out:
+        return {"error": "Note not found or no output", "title": title}
+    
+    parts = out.split('\t')
+    return {
+        'title': parts[0] if len(parts) > 0 else title,
+        'creation_date': parts[1] if len(parts) > 1 else creation,
+        'modification_date': parts[2] if len(parts) > 2 else '',
+        'content': parts[3] if len(parts) > 3 else ''
+    }
+
+
+def fetch_note_batch(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Fetch multiple notes in a batch with a single AppleScript call for efficiency.
+    
+    Builds a single AppleScript that fetches all requested notes and returns them
+    as a batch, reducing osascript invocations.
+    """
+    if not items:
+        return []
+    
+    # Build array of note specifications
+    note_specs = []
+    for item in items:
+        title = item.get('title', '').replace('"', '"')
+        creation = item.get('creation_date', '')
+        note_specs.append(f'{{title:"{title}", creation:"{creation}"}}')
+    
+    note_array = ",".join(note_specs)
+    
+    script = f'''
+        on replaceText(theText, searchString, replacementString)
+            set AppleScript's text item delimiters to searchString
+            set theItems to every text item of theText
+            set AppleScript's text item delimiters to replacementString
+            set theText to theItems as string
+            set AppleScript's text item delimiters to ""
+            return theText
+        end replaceText
+
+        set resultLines to {{}}
+        set noteSpecs to {{{note_array}}}
+        
+        tell application "Notes"
+            set noteList to every note
+            repeat with spec in noteSpecs
+                set targetTitle to title of spec
+                set targetCreation to creation of spec
+                repeat with n in noteList
+                    try
+                        if name of n is targetTitle then
+                            set nCreation to ((creation date of n) as «class isot» as string)
+                            if targetCreation is not "" and nCreation is not targetCreation then
+                                -- skip
+                            else
+                                set nMod to ((modification date of n) as «class isot» as string)
+                                set nBody to body of n
+                                -- sanitize
+                                set t1 to my replaceText((name of n), tab, " ")
+                                set t2 to my replaceText(t1, return, " ")
+                                set t3 to my replaceText(t2, linefeed, " ")
+                                set b1 to my replaceText(nBody, tab, " ")
+                                set b2 to my replaceText(b1, return, " ")
+                                set b3 to my replaceText(b2, linefeed, " ")
+                                set end of resultLines to t3 & tab & nCreation & tab & nMod & tab & b3
+                                exit repeat
+                            end if
+                        end if
+                    end try
+                end repeat
+            end repeat
+        end tell
+        
+        return resultLines as string
+    '''
+    
+    out = _run_applescript(script).strip()
+    results = []
+    
+    if not out:
+        # Return error dict for each item if batch failed
+        return [{"error": "Batch fetch failed", "title": item.get('title')} for item in items]
+    
+    for line in out.splitlines():
+        if not line:
+            continue
+        parts = line.split('\t')
+        results.append({
+            'title': parts[0] if len(parts) > 0 else '',
+            'creation_date': parts[1] if len(parts) > 1 else '',
+            'modification_date': parts[2] if len(parts) > 2 else '',
+            'content': parts[3] if len(parts) > 3 else ''
+        })
+    
+    # Pad results with errors for any missing notes
+    while len(results) < len(items):
+        idx = len(results)
+        results.append({"error": "Note not found", "title": items[idx].get('title')})
+    
+    return results
 
 
 # We intentionally do NOT reimplement HTML sanitization here; the helper script
