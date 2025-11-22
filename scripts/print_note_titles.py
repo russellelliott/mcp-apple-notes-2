@@ -66,8 +66,8 @@ def build_applescript(limit: int) -> str:
                 try
                     set n to item i of noteList
                     set t to name of n
-                    set c to (creation date of n) as «class isot» as string
-                    set m to (modification date of n) as «class isot» as string
+                    set c to (creation date of n) as string
+                    set m to (modification date of n) as string
 
                     -- sanitize title (remove tabs/newlines)
                     set t1 to my replaceText(t, tab, " ")
@@ -108,7 +108,8 @@ def main():
         parts = line.split('\t')
         title = parts[0] if len(parts) > 0 else '<untitled>'
         creation = parts[1] if len(parts) > 1 else ''
-        print(f"{i}. {title} ({creation})")
+        modification = parts[2] if len(parts) > 2 else ''
+        print(f"{i}. {title} (created: {creation}, modified: {modification})")
 
     elapsed = time.time() - start
     print(f"\nFetched {len(lines)} titles in {elapsed:.2f}s")

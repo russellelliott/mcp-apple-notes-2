@@ -5,7 +5,7 @@ import time
 
 start_time = time.time()
 
-DATA_DIR = Path.home() / ".mcp-apple-notes-2"
+DATA_DIR = Path.home() / ".mcp-apple-notes"
 CACHE_PATH = DATA_DIR / "last-sync.txt"
 
 db = lancedb.connect(str(DATA_DIR / "data"))
