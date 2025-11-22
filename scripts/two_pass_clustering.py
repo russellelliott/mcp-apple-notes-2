@@ -322,14 +322,14 @@ def cluster_notes(
         confidence_val = confidence_scores[i]
         confidence = f"{confidence_val:.3f}"
 
-        for chunk in note['chunks']:
-            if 'id' in chunk:
-                cluster_updates[chunk['id']] = {
-                    'cluster_id': str(cluster_id),
-                    'cluster_label': cluster_label,
-                    'cluster_confidence': confidence,
-                    'last_clustered': current_timestamp
-                }
+        # Map cluster assignment to all chunks of this note using title+creation_date as key
+        note_key = note['key']  # title|||creation_date
+        cluster_updates[note_key] = {
+            'cluster_id': str(cluster_id),
+            'cluster_label': cluster_label,
+            'cluster_confidence': confidence,
+            'last_clustered': current_timestamp
+        }
     
     # Read all chunks, add cluster assignments, and rebuild table
     if cluster_updates:
@@ -340,15 +340,16 @@ def cluster_notes(
             
             # Add cluster assignments to each chunk
             for record in existing_data:
-                chunk_id = record.get('id')
-                if chunk_id in cluster_updates:
-                    cluster_info = cluster_updates[chunk_id]
+                # Create note key from title and creation_date
+                note_key = f"{record['title']}|||{record['creation_date']}"
+                if note_key in cluster_updates:
+                    cluster_info = cluster_updates[note_key]
                     record['cluster_id'] = cluster_info['cluster_id']
                     record['cluster_label'] = cluster_info['cluster_label']
                     record['cluster_confidence'] = cluster_info['cluster_confidence']
                     record['last_clustered'] = cluster_info['last_clustered']
                 else:
-                    # Chunks without ID mapping are marked as outliers
+                    # Chunks without note mapping are marked as outliers
                     record['cluster_id'] = '-1'
                     record['cluster_label'] = 'Outlier'
                     record['cluster_confidence'] = '0.0'
@@ -362,11 +363,19 @@ def cluster_notes(
                     else:
                         record['cluster_summary'] = f'Part of {cluster_label} cluster'
             
-            # Rebuild the table with cluster assignments using atomic rename
+            # Rebuild the table with cluster assignments
+            # Create backup before making changes
+            from datetime import datetime
+            backup_name = f"{TABLE_NAME}_backup_{int(datetime.now().timestamp())}"
+            current_data = notes_table.to_pandas()
+            db.create_table(backup_name, current_data)
+            if verbose:
+                print(f"   📦 Created backup table: {backup_name}")
+            
+            # Now safely update the main table
             pa_updated = pa.Table.from_pylist(existing_data)
-            db.create_table(f"{TABLE_NAME}_new", pa_updated)
             db.drop_table(TABLE_NAME)
-            db.rename_table(f"{TABLE_NAME}_new", TABLE_NAME)
+            db.create_table(TABLE_NAME, pa_updated)
             
             # Refresh the table reference after rebuild
             notes_table = db.open_table(TABLE_NAME)
