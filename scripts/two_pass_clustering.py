@@ -362,10 +362,11 @@ def cluster_notes(
                     else:
                         record['cluster_summary'] = f'Part of {cluster_label} cluster'
             
-            # Rebuild the table with cluster assignments
+            # Rebuild the table with cluster assignments using atomic rename
             pa_updated = pa.Table.from_pylist(existing_data)
+            db.create_table(f"{TABLE_NAME}_new", pa_updated)
             db.drop_table(TABLE_NAME)
-            db.create_table(TABLE_NAME, pa_updated)
+            db.rename_table(f"{TABLE_NAME}_new", TABLE_NAME)
             
             # Refresh the table reference after rebuild
             notes_table = db.open_table(TABLE_NAME)
