@@ -35,7 +35,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 # Configuration
-DATA_DIR = Path.home() / ".mcp-apple-notes-2"
+DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 TABLE_NAME = "notes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,7 @@ def cluster_notes(
     # Aggregate embeddings for each note (average of all chunks)
     note_data = []
     for key, chunks in unique_notes.items():
-        embeddings = [chunk['embedding'] for chunk in chunks]
+        embeddings = [chunk['vector'] for chunk in chunks]
         avg_embedding = np.mean(embeddings, axis=0)
         note_data.append({
             'key': key,
