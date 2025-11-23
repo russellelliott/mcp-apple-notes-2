@@ -81,7 +81,7 @@ def search_and_combine_results(
     notes_table: Any,
     query: str,
     display_limit: int = 5,
-    min_cosine_similarity: float = 0.05,
+    min_cosine_similarity: float = 0.01,
     compute_query_embedding: Optional[Callable[[str], List[float]]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -175,15 +175,11 @@ def search_and_combine_results(
     try:
         fts_raw = None
         try:
-            fts_raw = notes_table.search(query, "fts", "chunk_content")
-        except Exception:
-            try:
-                fts_raw = notes_table.search(query, mode="fts", field="chunk_content")
-            except Exception:
-                try:
-                    fts_raw = notes_table.search(query, fts=True, field="chunk_content")
-                except Exception:
-                    fts_raw = None
+            # Use correct FTS syntax
+            fts_raw = notes_table.search(query, "fts").limit(display_limit * 2)
+        except Exception as e:
+            print(f"⚠️ FTS search failed: {e}")
+            fts_raw = None
 
         fts_results = _ensure_list(fts_raw)
 
@@ -375,7 +371,7 @@ if __name__ == "__main__":
         sys.exit(1)
     
     # Connect to LanceDB database with the proper data directory
-    DATA_DIR = Path.home() / ".mcp-apple-notes-2"
+    DATA_DIR = Path.home() / ".mcp-apple-notes"
     DB_PATH = DATA_DIR / "data"
     
     print(f"📂 Connecting to LanceDB at: {DB_PATH}")
