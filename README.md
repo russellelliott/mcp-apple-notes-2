@@ -21,32 +21,115 @@ This system provides:
 
 ### 🔍 Search Notes (`scripts/search_notes.py`)
 
-Advanced multi-strategy semantic search with relevance scoring.
+**Hybrid semantic and text-based search** combining vector embeddings and full-text search for comprehensive note discovery.
 
-**Features:**
-- **Vector semantic search** using embeddings
-- **Full-text search (FTS)** on chunk content with re-scoring
-- **Database-level exact phrase matching**
-- **Combined relevance scoring** from multiple strategies
-- **Chunk-aware results** with preview and context
+#### Search Strategies
 
-**Usage:**
+The system uses **three complementary search strategies** that work together:
+
+1. **🎯 Vector Semantic Search**
+   - Uses sentence embeddings to find conceptually related content
+   - **Best for:** themes, concepts, related ideas, synonyms
+   - **Example:** "machine learning" finds notes about AI, neural networks, data science
+   - **Technology:** sentence-transformers/all-MiniLM-L6-v2 embeddings
+
+2. **📝 Full-Text Search (FTS)**
+   - Uses inverted indexes for exact text matching
+   - **Best for:** specific terms, names, codes, IDs, acronyms
+   - **Example:** "CRWN102" finds all notes containing that exact course code
+   - **Technology:** LanceDB inverted indexes on `title`, `content`, and `chunk_content`
+
+3. **🔄 Database-Level Filtering**
+   - Fallback text scanning when other methods fail
+   - **Best for:** comprehensive coverage and backup search
+   - **Technology:** Pandas-based text filtering
+
+#### Usage
+
 ```bash
-python scripts/search_notes.py "machine learning"
-python scripts/search_notes.py "project ideas" --limit 10
+# Basic search (uses all strategies)
+python scripts/search_notes.py "restaurant data filtering"
+
+# Limit results
+python scripts/search_notes.py "machine learning" --limit 10
+
+# Course codes and specific terms (primarily FTS)
+python scripts/search_notes.py "CRWN102"
+
+# Conceptual queries (benefits from semantic search)
+python scripts/search_notes.py "project planning and organization"
 ```
 
-**Search Strategies:**
-1. **Vector Search**: Semantic similarity using embeddings
-2. **FTS Search**: Full-text search with optional embedding re-scoring  
-3. **Exact Phrase**: Database LIKE queries for precise matches
+#### Search Results
 
-**Output:**
-- Title, creation/modification dates
-- Relevance score (0-1.0)
-- Search strategy used
-- Best matching chunk preview
-- Chunk index and total chunks
+Each result shows:
+- **Title** and creation/modification dates
+- **Relevance score** (0-100, higher = more relevant)
+- **Search source** (`vector_semantic`, `fts`, or `text_match`)
+- **Chunk information** (which part of the note matched)
+- **Preview** of matching content
+
+#### Example Output
+
+```
+🔎 Searching for: 'restaurant data filtering'
+
+1️⃣ Vector semantic search on chunks...
+🎯 Found 10 relevant chunks
+📋 Unique notes from vector search: 2
+
+2️⃣ Full-text search on chunks...
+📝 FTS results: 10 chunks
+
+📊 Final results: 6 notes (from 6 total matches)
+  1. "CRWN102 Data filtering" (score: 70.0, source: fts)
+  2. "Restaurant Analytics Project" (score: 45.3, source: vector_semantic)
+  3. "Data Processing Notes" (score: 42.1, source: vector_semantic)
+```
+
+#### When to Use Each Strategy
+
+| Query Type | Best Strategy | Example |
+|------------|---------------|---------|
+| **Specific terms/codes** | FTS | "CRWN102", "iPhone 14", "Project Alpha" |
+| **Concepts/themes** | Vector Semantic | "machine learning approaches", "project planning" |
+| **Mixed queries** | Hybrid (both) | "CRWN102 restaurant data" |
+| **Exploratory** | Vector Semantic | "innovative solutions", "creative ideas" |
+
+#### Setup Requirements
+
+**⚠️ Important:** FTS requires inverted indexes to be created first:
+
+```bash
+# Create indexes (run once)
+python scripts/create_inverted_index.py
+
+# Then search works fully
+python scripts/search_notes.py "your query"
+```
+
+**Without indexes:** Only semantic search works; FTS returns 0 results.
+**With indexes:** Full hybrid search with both semantic and exact matching.
+
+#### **Index Maintenance**
+
+**When you add new notes**, the inverted indexes persist but new data won't be searchable via FTS until indexed:
+
+```bash
+# After adding new notes, update indexes:
+python -c "
+from main import NotesDatabase
+db = NotesDatabase()
+table = db.get_or_create_table()
+table.optimize()  # Updates existing indexes with new data
+print('✅ Indexes updated with new data')
+"
+
+# Or recreate indexes entirely:
+python scripts/create_inverted_index.py
+```
+
+**Best practice:** Run `table.optimize()` after adding new notes to ensure full search coverage.
 
 ### 🎯 Two-Pass Clustering (`scripts/two_pass_clustering.py`)
 
@@ -201,10 +284,32 @@ The system uses LanceDB with the following key fields:
 
 ## Troubleshooting
 
-**No search results:**
+### Search Issues
+
+**No search results / FTS returning 0 results:**
 ```bash
-python scripts/check_notes.py  # Verify data exists
+# 1. Check if inverted indexes exist
+python scripts/create_inverted_index.py
+
+# 2. Verify data exists
+python scripts/check_notes.py
+
+# 3. Test with different query types
+python scripts/search_notes.py "machine learning"  # conceptual
+python scripts/search_notes.py "specific term"     # exact match
 ```
+
+**Only getting FTS results (no semantic results):**
+- This is normal for specific terms like course codes ("CRWN102")
+- Try conceptual queries like "data analysis" or "project planning"
+- Check similarity threshold (lowered to 0.01 for better coverage)
+
+**Vector search showing 0 unique notes:**
+- Indicates similarity threshold too strict or calculation error
+- Fixed in recent updates with proper L2 distance conversion
+- Should now show both `vector_semantic` and `fts` sources
+
+### Database Issues
 
 **Database errors:**
 ```bash
@@ -212,11 +317,20 @@ python debug_db.py             # Diagnose issues
 python fix_db.py               # Attempt repair
 ```
 
+**Wrong database path:**
+- Scripts use `~/.mcp-apple-notes/data` (not `~/.mcp-apple-notes-2/data`)
+- Ensure consistency across all scripts
+
+### Clustering Issues
+
 **Poor clustering:**
 - Try `--min-size=5` for more conservative clustering
 - Try `--min-size=1` for maximum coverage
 - Check note content quality and diversity
 
-**Dependencies:**
-- Ensure all packages installed: `lancedb`, `scikit-learn`, `numpy`, `pandas`
+### Dependencies
+
+**Missing packages:**
+- Ensure all packages installed: `lancedb`, `scikit-learn`, `numpy`, `pandas`, `sentence-transformers`
 - Verify embedding model initialization
+- Check GPU/MPS availability for faster processing
