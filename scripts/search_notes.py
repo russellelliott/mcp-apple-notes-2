@@ -112,7 +112,7 @@ def search_and_combine_results(
         # Not critical; continue
         pass
 
-    note_results: Dict[str, Dict[str, Any]] = {}
+    chunk_results: List[Dict[str, Any]] = []
 
     # Compute query embedding once at the beginning for vector search
     query_embedding = None
@@ -152,22 +152,25 @@ def search_and_combine_results(
                 similarity_score = 1.0 / (1.0 + distance)
                 if similarity_score > min_cosine_similarity:
                     title = _get_field(chunk, "title", "<untitled>")
-                    existing = note_results.get(title)
-                    if existing is None or (similarity_score * 100.0) > existing.get("_relevance_score", 0):
-                        note_results[title] = {
-                            "title": title,
-                            "content": _get_field(chunk, "content"),
-                            "creation_date": _get_field(chunk, "creation_date"),
-                            "modification_date": _get_field(chunk, "modification_date"),
-                            "_relevance_score": similarity_score * 100.0,
-                            "_source": "vector_semantic",
-                            "_best_chunk_index": _get_field(chunk, "chunk_index"),
-                            "_total_chunks": _get_field(chunk, "total_chunks"),
-                            "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                        }
+                    chunk_results.append({
+                        "title": title,
+                        "content": _get_field(chunk, "content"),
+                        "creation_date": _get_field(chunk, "creation_date"),
+                        "modification_date": _get_field(chunk, "modification_date"),
+                        "_relevance_score": similarity_score * 100.0,
+                        "_source": "vector_semantic",
+                        "_chunk_index": _get_field(chunk, "chunk_index"),
+                        "_total_chunks": _get_field(chunk, "total_chunks"),
+                        "_matching_chunk_content": _get_field(chunk, "chunk_content"),
+                        "_chunk_id": f"{title}_{_get_field(chunk, 'chunk_index', 0)}"  # Unique identifier
+                    })
         else:
             print("📋 No vector results (or vector search not available)")
-        print(f"📋 Unique notes from vector search: {len(note_results)}")
+        
+        # Get unique note titles from chunks for summary
+        vector_chunk_count = len([c for c in chunk_results if c.get('_source') == 'vector_semantic'])
+        unique_titles = set(c['title'] for c in chunk_results if c.get('_source') == 'vector_semantic')
+        print(f"📋 Vector search: {vector_chunk_count} chunks from {len(unique_titles)} unique notes")
     except Exception as e:
         print(f"❌ Vector Error: {getattr(e, 'message', repr(e))}")
         traceback.print_exc()
@@ -185,10 +188,18 @@ def search_and_combine_results(
 
         fts_results = _ensure_list(fts_raw)
 
+        # Check for duplicates from vector search to avoid double-counting
+        existing_chunk_ids = set(c.get('_chunk_id', '') for c in chunk_results)
+        
         for chunk in fts_results:
             title = _get_field(chunk, "title", "<untitled>")
-            if title in note_results:
+            chunk_index = _get_field(chunk, "chunk_index", 0)
+            chunk_id = f"{title}_{chunk_index}"
+            
+            # Skip if this exact chunk was already found in vector search
+            if chunk_id in existing_chunk_ids:
                 continue
+                
             score = 70.0  # fallback
             chunk_vector = _get_field(chunk, "embedding")
             if query_embedding and isinstance(chunk_vector, (list, tuple)) and len(chunk_vector) == len(query_embedding):
@@ -196,17 +207,19 @@ def search_and_combine_results(
                     score = max(0.0, _cosine_similarity(query_embedding, list(chunk_vector))) * 100.0
                 except Exception:
                     score = 70.0
-            note_results[title] = {
+            
+            chunk_results.append({
                 "title": title,
                 "content": _get_field(chunk, "content"),
                 "creation_date": _get_field(chunk, "creation_date"),
                 "modification_date": _get_field(chunk, "modification_date"),
                 "_relevance_score": score,
                 "_source": "fts",
-                "_best_chunk_index": _get_field(chunk, "chunk_index"),
+                "_chunk_index": chunk_index,
                 "_total_chunks": _get_field(chunk, "total_chunks"),
                 "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-            }
+                "_chunk_id": chunk_id
+            })
 
         print(f"📝 FTS results: {len(fts_results)} chunks")
     except Exception as e:
@@ -253,24 +266,33 @@ def search_and_combine_results(
 
         if exact_matches:
             print(f"📋 Database exact matches: {len(exact_matches)} chunks")
+            existing_chunk_ids = set(c.get('_chunk_id', '') for c in chunk_results)
+            
             for chunk in exact_matches:
                 title = _get_field(chunk, "title", "<untitled>")
-                if title in note_results:
+                chunk_index = _get_field(chunk, "chunk_index", 0)
+                chunk_id = f"{title}_{chunk_index}"
+                
+                # Skip if this exact chunk was already found
+                if chunk_id in existing_chunk_ids:
                     continue
+                    
                 chunk_content = (_get_field(chunk, "chunk_content") or "").lower()
                 title_low = (_get_field(chunk, "title") or "").lower()
                 is_exact_match = (query.lower() in chunk_content) or (query.lower() in title_low)
-                note_results[title] = {
+                
+                chunk_results.append({
                     "title": title,
                     "content": _get_field(chunk, "content"),
                     "creation_date": _get_field(chunk, "creation_date"),
                     "modification_date": _get_field(chunk, "modification_date"),
                     "_relevance_score": 100.0 if is_exact_match else 85.0,
                     "_source": "exact_match" if is_exact_match else "partial_match",
-                    "_best_chunk_index": _get_field(chunk, "chunk_index"),
+                    "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
                     "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                }
+                    "_chunk_id": chunk_id
+                })
         else:
             # If there were no exact_matches (maybe queryWords empty), do nothing here
             pass
@@ -299,36 +321,47 @@ def search_and_combine_results(
                 if query_regex.search(title_text) or query_regex.search(content_text):
                     matches.append(chunk)
             print(f"📋 Fallback matches: {len(matches)} chunks")
+            existing_chunk_ids = set(c.get('_chunk_id', '') for c in chunk_results)
+            
             for chunk in matches:
                 title = _get_field(chunk, "title", "<untitled>")
-                if title in note_results:
+                chunk_index = _get_field(chunk, "chunk_index", 0)
+                chunk_id = f"{title}_{chunk_index}"
+                
+                # Skip if this exact chunk was already found
+                if chunk_id in existing_chunk_ids:
                     continue
-                note_results[title] = {
+                    
+                chunk_results.append({
                     "title": title,
                     "content": _get_field(chunk, "content"),
                     "creation_date": _get_field(chunk, "creation_date"),
                     "modification_date": _get_field(chunk, "modification_date"),
                     "_relevance_score": 90.0,
                     "_source": "fallback_exact",
-                    "_best_chunk_index": _get_field(chunk, "chunk_index"),
+                    "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
                     "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                }
+                    "_chunk_id": chunk_id
+                })
         except Exception as fallback_error:
             print(f"❌ Fallback also failed: {getattr(fallback_error, 'message', repr(fallback_error))}")
             traceback.print_exc()
 
     # Combine and rank results
-    combined_results = sorted(note_results.values(), key=lambda r: r.get("_relevance_score", 0.0), reverse=True)
-    print(f"\n📊 Final results: {len(combined_results)} notes (from {len(note_results)} total matches)")
+    combined_results = sorted(chunk_results, key=lambda r: r.get("_relevance_score", 0.0), reverse=True)
+    
+    # Count unique notes for summary
+    unique_notes = set(c['title'] for c in combined_results)
+    print(f"\n📊 Final results: {len(combined_results)} chunks from {len(unique_notes)} unique notes")
 
     if combined_results:
         for idx, result in enumerate(combined_results[:display_limit]):
             score = result.get("_relevance_score", 0.0)
             source = result.get("_source", "unknown")
-            best_chunk = result.get("_best_chunk_index", "?")
+            chunk_idx = result.get("_chunk_index", "?")
             total_chunks = result.get("_total_chunks", "?")
-            print(f'  {idx + 1}. "{result.get("title")}" (score: {score:.1f}, source: {source}, chunk: {best_chunk}/{total_chunks})')
+            print(f'  {idx + 1}. "{result.get("title")}" (score: {score:.1f}, source: {source}, chunk: {chunk_idx}/{total_chunks})')
 
     # Map to the final output shape
     final = []
@@ -340,9 +373,10 @@ def search_and_combine_results(
                 "modification_date": result.get("modification_date"),
                 "_relevance_score": result.get("_relevance_score"),
                 "_source": result.get("_source"),
-                "_best_chunk_index": result.get("_best_chunk_index"),
+                "_chunk_index": result.get("_chunk_index"),
                 "_total_chunks": result.get("_total_chunks"),
                 "_matching_chunk_preview": result.get("_matching_chunk_content"),
+                "_chunk_id": result.get("_chunk_id"),
             }
         )
 
