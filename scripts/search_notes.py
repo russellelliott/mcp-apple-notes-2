@@ -147,17 +147,19 @@ def search_and_combine_results(
                     distance = float(distance)
                 except Exception:
                     distance = 0.0
-                cosine_sim = max(0.0, 1.0 - (distance * distance / 2.0))
-                if cosine_sim > min_cosine_similarity:
+                # For L2 distance, convert to similarity score (lower distance = higher similarity)
+                # Use inverse distance as similarity score, normalized to 0-1 range
+                similarity_score = 1.0 / (1.0 + distance)
+                if similarity_score > min_cosine_similarity:
                     title = _get_field(chunk, "title", "<untitled>")
                     existing = note_results.get(title)
-                    if existing is None or (cosine_sim * 100.0) > existing.get("_relevance_score", 0):
+                    if existing is None or (similarity_score * 100.0) > existing.get("_relevance_score", 0):
                         note_results[title] = {
                             "title": title,
                             "content": _get_field(chunk, "content"),
                             "creation_date": _get_field(chunk, "creation_date"),
                             "modification_date": _get_field(chunk, "modification_date"),
-                            "_relevance_score": cosine_sim * 100.0,
+                            "_relevance_score": similarity_score * 100.0,
                             "_source": "vector_semantic",
                             "_best_chunk_index": _get_field(chunk, "chunk_index"),
                             "_total_chunks": _get_field(chunk, "total_chunks"),
