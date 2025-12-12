@@ -461,7 +461,8 @@ def get_notes_in_cluster(notes_table, cluster_id: str) -> List[Dict[str, str]]:
             if key not in notes:
                 notes[key] = {
                     'title': chunk['title'],
-                    'creation_date': chunk['creation_date']
+                    'creation_date': chunk['creation_date'],
+                    'cluster_confidence': chunk.get('cluster_confidence')
                 }
     
     return list(notes.values())
