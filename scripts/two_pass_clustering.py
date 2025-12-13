@@ -33,6 +33,7 @@ import lancedb
 from sklearn.cluster import HDBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
+import ollama
 
 
 # Configuration
@@ -50,6 +51,47 @@ def get_cluster_centroid(notes_table, cluster_id):
     if len(vectors) == 0:
         return None
     return np.mean(vectors, axis=0)
+
+
+def generate_label_ollama(note_data, cluster_indices, cluster_id, confidence_scores, model='phi:2.7b'):
+    """Generate a label for a cluster using Ollama."""
+    # Get notes and their confidences
+    cluster_notes_with_conf = []
+    for i in cluster_indices:
+        cluster_notes_with_conf.append((note_data[i], confidence_scores[i]))
+    
+    # Sort by confidence descending
+    cluster_notes_with_conf.sort(key=lambda x: x[1], reverse=True)
+    
+    # Determine how many notes to use (e.g., top 20%, but at least 1 and max 10)
+    total_notes = len(cluster_notes_with_conf)
+    num_to_take = max(1, int(total_notes * 0.2))
+    num_to_take = min(num_to_take, 10) # Cap at 10 to avoid context limit issues
+    
+    top_chunks = [x[0] for x in cluster_notes_with_conf[:num_to_take]]
+    
+    notes_text = "\n".join([
+        f"Note {i+1}: {chunk['title']}: {chunk['chunks'][0]['content'][:200]}..." # Use first chunk text
+        for i, chunk in enumerate(top_chunks)
+    ])
+    
+    prompt = f"""Generate one concise title (5-8 words) summarizing the main theme 
+of this cluster from these top {len(top_chunks)} notes:
+
+{notes_text}
+
+Title only, no explanation needed."""
+
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[{'role': 'user', 'content': prompt}],
+            options={'temperature': 0.2, 'num_ctx': 8192}
+        )
+        return response['message']['content'].strip().split('\n')[0].replace('"', '')
+    except Exception as e:
+        print(f"Error generating label with Ollama: {e}")
+        return generate_label(note_data, cluster_indices, cluster_id) # Fallback
 
 
 def generate_label(note_data, cluster_indices, cluster_id):
@@ -465,35 +507,9 @@ def cluster_notes(
         if verbose:
             print(f"   ℹ️  No similar clusters found (threshold: 0.85)\n")
     
-    # ===== Generate Cluster Labels =====
+    # ===== Calculate Centroids & Confidence (Pre-Labeling) =====
     if verbose:
-        print("🏷️  Generating cluster labels...")
-    
-    cluster_labels = {}
-    for cluster_id in set(primary_labels):
-        if cluster_id == -1:
-            continue
-        
-        cluster_mask = primary_labels == cluster_id
-        cluster_indices = np.where(cluster_mask)[0]
-        label = generate_label(note_data, cluster_indices, cluster_id)
-        
-        cluster_labels[cluster_id] = label
-    
-    # ===== Update Database =====
-    if verbose:
-        print("💾 Updating database with cluster assignments...\n")
-    
-    # Get current timestamp for last_clustered
-    from datetime import datetime
-    current_timestamp = datetime.utcnow().isoformat() + "Z"
-    
-    # Build update map: id -> cluster info
-    # Compute a dynamic confidence score per note as the cosine similarity
-    # between the note's embedding and its assigned cluster centroid (0-1-ish).
-    # For true outliers (-1) we fall back to the best similarity to any centroid
-    # computed during pass 2 when available, otherwise 0.0.
-    cluster_updates = {}
+        print("📊 Calculating confidence scores...")
 
     # Recompute cluster centroids from final labels to ensure consistency
     cluster_centroids = {}
@@ -532,19 +548,56 @@ def cluster_notes(
         conf = (conf + 1.0) / 2.0
         confidence_scores[i] = conf
 
+    # ===== PASS 5: Confidence Filtering =====
+    if verbose:
+        print("=" * 50)
+        print("🧹 PASS 5: Confidence Filtering")
+        print("=" * 50)
+        print("   Ejecting notes with confidence < 0.75...\n")
+    
+    ejected_count = 0
+    for i in range(len(note_data)):
+        if primary_labels[i] != -1 and confidence_scores[i] < 0.75:
+            primary_labels[i] = -1
+            confidence_scores[i] = 0.0 # Reset confidence for outliers
+            ejected_count += 1
+            
+    if verbose:
+        print(f"   ✅ Ejected {ejected_count} low-confidence notes to outliers\n")
+
+    # ===== Generate Cluster Labels =====
+    if verbose:
+        print("🏷️  Generating cluster labels (using Ollama)...")
+    
+    cluster_labels = {}
+    for cluster_id in set(primary_labels):
+        if cluster_id == -1:
+            continue
+        
+        cluster_mask = primary_labels == cluster_id
+        cluster_indices = np.where(cluster_mask)[0]
+        
+        # Use Ollama for better labels, passing confidence scores
+        label = generate_label_ollama(note_data, cluster_indices, cluster_id, confidence_scores)
+        
+        cluster_labels[cluster_id] = label
+    
+    # ===== Update Database =====
+    if verbose:
+        print("💾 Updating database with cluster assignments...\n")
+    
+    # Get current timestamp for last_clustered
+    from datetime import datetime
+    current_timestamp = datetime.utcnow().isoformat() + "Z"
+    
+    # Build update map: id -> cluster info
+    cluster_updates = {}
+
     for i, note in enumerate(note_data):
         cluster_id = int(primary_labels[i])
         cluster_label = cluster_labels.get(cluster_id, "Outlier")
 
         confidence_val = confidence_scores[i]
-        
-        # ===== PASS 5: Confidence Filtering =====
-        # If confidence is low (< 0.75), eject to outlier
-        if cluster_id != -1 and confidence_val < 0.75:
-            cluster_id = -1
-            cluster_label = "Outlier"
-            confidence_val = 0.0 # Or keep the low score? Prompt says "eject it to -1"
-        
         confidence = f"{confidence_val:.3f}"
 
         # Map cluster assignment to all chunks of this note using title+creation_date as key
