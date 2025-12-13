@@ -32,6 +32,7 @@ import numpy as np
 import lancedb
 from sklearn.cluster import HDBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
+import umap
 
 
 # Configuration
@@ -41,9 +42,122 @@ TABLE_NAME = "notes"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_cluster_centroid(notes_table, cluster_id):
+    """Get centroid for a specific cluster from the database."""
+    df = notes_table.to_pandas()
+    cluster_notes = df[df['cluster_id'] == str(cluster_id)]
+    vectors = np.array([v for v in cluster_notes['vector']])
+    if len(vectors) == 0:
+        return None
+    return np.mean(vectors, axis=0)
+
+
+def generate_label(note_data, cluster_indices, cluster_id):
+    """Generate a label for a cluster based on common words in titles."""
+    cluster_note_data = [note_data[i] for i in cluster_indices]
+    
+    # Generate label from common words in titles
+    all_titles = ' '.join([note['title'] for note in cluster_note_data])
+    words = all_titles.lower().split()
+    word_freq = {}
+    for word in words:
+        if len(word) > 3:  # Skip short words
+            word_freq[word] = word_freq.get(word, 0) + 1
+    
+    if word_freq:
+        # Get top 2 most common words
+        top_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:2]
+        label = ' '.join([word for word, _ in top_words]).title()
+    else:
+        label = f"Cluster {cluster_id}"
+    return label
+
+
+def merge_similar_clusters(embeddings, labels, note_data, similarity_threshold=0.85, max_merge_size=50, verbose=True):
+    """
+    Merge clusters whose centroids are semantically similar based on note content.
+    
+    Args:
+        embeddings: Note embeddings (numpy array)
+        labels: Current cluster assignments (numpy array)
+        note_data: List of note dictionaries (for label generation)
+        similarity_threshold: Cosine similarity threshold for merging (0.85 = 85% similar)
+        max_merge_size: Maximum size of a merged cluster (prevent giant blobs)
+        verbose: Print merge details
+        
+    Returns:
+        new_labels: Updated cluster assignments
+        merge_count: Number of clusters merged
+    """
+    # Calculate centroids for all clusters
+    cluster_ids = sorted([c for c in set(labels) if c != -1])
+    cluster_centroids = {}
+    cluster_sizes = {cid: np.sum(labels == cid) for cid in cluster_ids}
+    
+    for cluster_id in cluster_ids:
+        cluster_mask = labels == cluster_id
+        cluster_embeddings = embeddings[cluster_mask]
+        cluster_centroids[cluster_id] = np.mean(cluster_embeddings, axis=0)
+    
+    # Find clusters to merge based on centroid similarity
+    merge_map = {}  # Maps old_cluster_id -> new_cluster_id
+    merged_pairs = []
+    
+    for i, cid1 in enumerate(cluster_ids):
+        if cid1 in merge_map:
+            continue
+            
+        for cid2 in cluster_ids[i+1:]:
+            if cid2 in merge_map:
+                continue
+                
+            # Calculate cosine similarity between centroids
+            cent1 = cluster_centroids[cid1].reshape(1, -1)
+            cent2 = cluster_centroids[cid2].reshape(1, -1)
+            similarity = cosine_similarity(cent1, cent2)[0][0]
+            
+            if similarity > similarity_threshold:
+                # Check size constraint
+                size1 = cluster_sizes[cid1]
+                size2 = cluster_sizes[cid2]
+                
+                if size1 + size2 > max_merge_size:
+                     if verbose:
+                        # Generate labels for display
+                        indices1 = np.where(labels == cid1)[0]
+                        indices2 = np.where(labels == cid2)[0]
+                        label1 = generate_label(note_data, indices1, cid1)
+                        label2 = generate_label(note_data, indices2, cid2)
+                        print(f"   ⚠️ Skipping merge {cid2} ({label2}) -> {cid1} ({label1}) (size {size1}+{size2} > {max_merge_size})")
+                     continue
+
+                # Merge cid2 into cid1 (keep lower ID)
+                merge_map[cid2] = cid1
+                cluster_sizes[cid1] += size2 # Update size of target cluster
+                merged_pairs.append((cid1, cid2, similarity))
+                if verbose:
+                    # Generate labels for display
+                    indices1 = np.where(labels == cid1)[0]
+                    indices2 = np.where(labels == cid2)[0]
+                    label1 = generate_label(note_data, indices1, cid1)
+                    label2 = generate_label(note_data, indices2, cid2)
+                    print(f"   🔗 Merging cluster {cid2} ({label2}) → {cid1} ({label1}) (similarity: {similarity:.3f})")
+    
+    # Apply all merges to labels
+    new_labels = labels.copy()
+    for i, label in enumerate(labels):
+        # Follow the merge chain to final cluster
+        while label in merge_map:
+            label = merge_map[label]
+        new_labels[i] = label
+    
+    return new_labels, len(merge_map)
+
+
 def cluster_notes(
     notes_table,
     min_cluster_size: int = 2,
+    merge_threshold: float = 0.85,
     verbose: bool = True
 ) -> Dict[str, Any]:
     """
@@ -52,6 +166,7 @@ def cluster_notes(
     Args:
         notes_table: LanceDB table containing notes
         min_cluster_size: Minimum cluster size for initial HDBSCAN
+        merge_threshold: Cosine similarity threshold for merging clusters
         verbose: Whether to print detailed progress
         
     Returns:
@@ -71,7 +186,10 @@ def cluster_notes(
     # Get unique notes (by title + creation_date)
     unique_notes = {}
     for chunk in all_chunks:
-        key = f"{chunk['title']}|||{chunk['creation_date']}"
+        # Normalize title and date to avoid duplicates due to whitespace
+        title = chunk['title'].strip()
+        date = str(chunk['creation_date']).strip()
+        key = f"{title}|||{date}"
         if key not in unique_notes:
             unique_notes[key] = []
         unique_notes[key].append(chunk)
@@ -95,6 +213,22 @@ def cluster_notes(
     
     embeddings = np.array([note['embedding'] for note in note_data])
     
+    # ===== PASS 0: Dimensionality Reduction (UMAP) =====
+    if verbose:
+        print("=" * 50)
+        print("📉 PASS 0: Dimensionality Reduction (UMAP)")
+        print("=" * 50)
+        print("   Reducing dimensions from 384 to 15 for better density detection...\n")
+    
+    reducer = umap.UMAP(
+        n_components=15, 
+        n_neighbors=15, 
+        min_dist=0.0, 
+        metric='cosine',
+        random_state=42
+    )
+    reduced_embeddings = reducer.fit_transform(embeddings)
+
     # ===== PASS 1: Initial HDBSCAN =====
     if verbose:
         print("=" * 50)
@@ -109,7 +243,7 @@ def cluster_notes(
         cluster_selection_method='eom'
     )
     
-    primary_labels = hdbscan_primary.fit_predict(embeddings)
+    primary_labels = hdbscan_primary.fit_predict(reduced_embeddings)
     
     # Count primary clusters and outliers
     primary_clusters = len(set(primary_labels)) - (1 if -1 in primary_labels else 0)
@@ -120,6 +254,79 @@ def cluster_notes(
         print(f"   • Clusters formed: {primary_clusters}")
         print(f"   • Notes in clusters: {total_notes - primary_outliers}")
         print(f"   • Outliers: {primary_outliers}\n")
+
+    # ===== PASS 1.5: Shatter Large Clusters =====
+    if verbose:
+        print("=" * 50)
+        print("🔨 PASS 1.5: Shattering Gravity Wells")
+        print("=" * 50)
+        print("   Breaking down clusters > 50 items...\n")
+
+    # Identify large clusters
+    unique_labels = set(primary_labels)
+    if -1 in unique_labels:
+        unique_labels.remove(-1)
+    
+    next_label_id = max(unique_labels) + 1 if unique_labels else 0
+    shattered_count = 0
+    
+    for label in list(unique_labels):
+        mask = primary_labels == label
+        cluster_size = np.sum(mask)
+        
+        if cluster_size > 50:
+            if verbose:
+                print(f"   💥 Shattering Cluster {label} ({cluster_size} items)...")
+            
+            # Get original embeddings for this cluster
+            cluster_indices = np.where(mask)[0]
+            cluster_original_embeddings = embeddings[cluster_indices]
+            
+            # Re-run UMAP on just this cluster to find internal structure
+            # Use fewer neighbors since the dataset is smaller
+            n_neighbors = min(15, len(cluster_indices) - 1)
+            if n_neighbors < 2: n_neighbors = 2
+            
+            shatter_reducer = umap.UMAP(
+                n_components=5, # Lower dimensions for sub-clustering
+                n_neighbors=n_neighbors,
+                min_dist=0.0,
+                metric='cosine',
+                random_state=42
+            )
+            cluster_reduced_embeddings = shatter_reducer.fit_transform(cluster_original_embeddings)
+            
+            # Re-cluster with leaf selection for tighter clusters
+            hdbscan_shatter = HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                metric='euclidean',
+                cluster_selection_method='leaf'
+            )
+            
+            shatter_labels = hdbscan_shatter.fit_predict(cluster_reduced_embeddings)
+            
+            # Update labels
+            new_subclusters = 0
+            for i, sub_label in enumerate(shatter_labels):
+                original_idx = cluster_indices[i]
+                if sub_label == -1:
+                    primary_labels[original_idx] = -1 # Become outlier
+                else:
+                    # Create unique new label
+                    primary_labels[original_idx] = next_label_id + sub_label
+            
+            num_new = len(set(shatter_labels)) - (1 if -1 in shatter_labels else 0)
+            next_label_id += num_new
+            shattered_count += 1
+            if verbose:
+                print(f"      -> Broken into {num_new} sub-clusters")
+    
+    if shattered_count == 0:
+        if verbose:
+            print("   No clusters > 50 items found. Skipping shattering.\n")
+    else:
+        if verbose:
+            print(f"   ✅ Shattered {shattered_count} large clusters\n")
     
     # ===== PASS 2: Semantic Quality Evaluation =====
     if verbose:
@@ -207,7 +414,8 @@ def cluster_notes(
         remaining_outliers = np.where(primary_labels == -1)[0]
         
         if len(remaining_outliers) >= 2:
-            remaining_embeddings = embeddings[remaining_outliers]
+            # Use reduced embeddings for secondary clustering too
+            remaining_reduced_embeddings = reduced_embeddings[remaining_outliers]
             
             hdbscan_secondary = HDBSCAN(
                 min_cluster_size=2,
@@ -215,7 +423,7 @@ def cluster_notes(
                 cluster_selection_method='eom'
             )
             
-            secondary_labels = hdbscan_secondary.fit_predict(remaining_embeddings)
+            secondary_labels = hdbscan_secondary.fit_predict(remaining_reduced_embeddings)
             
             # Remap secondary labels to avoid conflicts
             max_primary_label = np.max(primary_labels)
@@ -233,6 +441,29 @@ def cluster_notes(
         else:
             if verbose:
                 print(f"   ⏭️  Only {len(remaining_outliers)} outlier(s) remaining, cannot form pairs\n")
+
+    # ===== PASS 4: Semantic Cluster Merging =====
+    if verbose:
+        print("=" * 50)
+        print("🔗 PASS 4: Semantic Cluster Merging")
+        print("=" * 50)
+        print("   Comparing cluster centroids for semantic similarity...\n")
+    
+    primary_labels, merge_count = merge_similar_clusters(
+        embeddings, 
+        primary_labels, 
+        note_data,
+        similarity_threshold=merge_threshold,
+        max_merge_size=50, # Prevent giant blobs
+        verbose=verbose
+    )
+    
+    if merge_count > 0:
+        if verbose:
+            print(f"   ✅ Merged {merge_count} cluster pairs based on content similarity\n")
+    else:
+        if verbose:
+            print(f"   ℹ️  No similar clusters found (threshold: 0.85)\n")
     
     # ===== Generate Cluster Labels =====
     if verbose:
@@ -244,22 +475,8 @@ def cluster_notes(
             continue
         
         cluster_mask = primary_labels == cluster_id
-        cluster_note_data = [note_data[i] for i in np.where(cluster_mask)[0]]
-        
-        # Generate label from common words in titles
-        all_titles = ' '.join([note['title'] for note in cluster_note_data])
-        words = all_titles.lower().split()
-        word_freq = {}
-        for word in words:
-            if len(word) > 3:  # Skip short words
-                word_freq[word] = word_freq.get(word, 0) + 1
-        
-        if word_freq:
-            # Get top 2 most common words
-            top_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:2]
-            label = ' '.join([word for word, _ in top_words]).title()
-        else:
-            label = f"Cluster {cluster_id}"
+        cluster_indices = np.where(cluster_mask)[0]
+        label = generate_label(note_data, cluster_indices, cluster_id)
         
         cluster_labels[cluster_id] = label
     
@@ -320,6 +537,14 @@ def cluster_notes(
         cluster_label = cluster_labels.get(cluster_id, "Outlier")
 
         confidence_val = confidence_scores[i]
+        
+        # ===== PASS 5: Confidence Filtering =====
+        # If confidence is low (< 0.75), eject to outlier
+        if cluster_id != -1 and confidence_val < 0.75:
+            cluster_id = -1
+            cluster_label = "Outlier"
+            confidence_val = 0.0 # Or keep the low score? Prompt says "eject it to -1"
+        
         confidence = f"{confidence_val:.3f}"
 
         # Map cluster assignment to all chunks of this note using title+creation_date as key
@@ -478,21 +703,33 @@ def main():
         default=2,
         help='Minimum cluster size for initial HDBSCAN (default: 2)'
     )
+    parser.add_argument(
+        '--merge-threshold',
+        type=float,
+        default=0.85,
+        help='Cosine similarity threshold for merging clusters (default: 0.85)'
+    )
     
     args = parser.parse_args()
     min_cluster_size = args.min_size
+    merge_threshold = args.merge_threshold
     
     print("🎯 Two-Pass Clustering with Semantic Quality Scoring\n")
     print("Configuration:")
     print(f"  • minClusterSize: {min_cluster_size} (initial HDBSCAN density threshold)")
+    print(f"  • mergeThreshold: {merge_threshold} (semantic similarity threshold)")
     print(f"  • Outlier Evaluation: Semantic quality score (0-1 scale, cosine similarity)")
     print(f"  • Reassignment Strategy: Dynamic threshold (uses average quality score)\n")
     
     print("Clustering Pipeline:")
+    print("  0️⃣  Dimensionality Reduction: UMAP (384 -> 15 dims)")
     print("  1️⃣  Initial HDBSCAN: Find dense clusters respecting variable shapes")
+    print("  1️⃣.5️⃣ Shattering: Break large clusters (>50 items) into sub-clusters")
     print("  2️⃣  Quality Evaluation: Assess semantic fit of outliers to clusters")
     print("  3️⃣  Dynamic Filtering: Reassign only outliers with quality > average")
-    print("  4️⃣  Secondary HDBSCAN: Cluster remaining isolated notes (minClusterSize=1)\n")
+    print("  4️⃣  Secondary HDBSCAN: Cluster remaining isolated notes (minClusterSize=1)")
+    print("  5️⃣  Semantic Merging: Merge clusters with similar centroids")
+    print("  6️⃣  Confidence Filtering: Eject notes with < 0.75 confidence\n")
     
     try:
         # Connect to database
@@ -505,7 +742,12 @@ def main():
         print("=" * 50)
         print()
         
-        cluster_result = cluster_notes(notes_table, min_cluster_size, verbose=True)
+        cluster_result = cluster_notes(
+            notes_table, 
+            min_cluster_size=min_cluster_size, 
+            merge_threshold=merge_threshold,
+            verbose=True
+        )
         
         # Refresh the table reference after clustering (table was rebuilt)
         notes_table = db.open_table(TABLE_NAME)
@@ -537,40 +779,40 @@ def main():
             print()
         
         # Display final composition
-        print("=" * 50)
-        print("📊 FINAL CLUSTER COMPOSITION")
-        print("=" * 50)
-        print()
+        # print("=" * 50)
+        # print("📊 FINAL CLUSTER COMPOSITION")
+        # print("=" * 50)
+        # print()
         
         final_clusters = list_clusters(notes_table)
         real_clusters = [c for c in final_clusters if c['cluster_id'] != '-1']
         
-        print("🎯 ALL CLUSTERS:\n")
+        # print("🎯 ALL CLUSTERS:\n")
         total_clustered = 0
         
         for i, cluster in enumerate(real_clusters):
             notes = get_notes_in_cluster(notes_table, cluster['cluster_id'])
             total_clustered += len(notes)
             
-            print(f"📌 Cluster {i + 1}: \"{cluster['cluster_label']}\"")
-            print(f"   📊 {len(notes)} notes")
-            print(f"   📖 Notes:")
-            for idx, note in enumerate(notes[:10]):  # Show first 10
-                print(f"      {idx + 1}. \"{note['title']}\"")
-            if len(notes) > 10:
-                print(f"      ... and {len(notes) - 10} more")
-            print()
+            # print(f"📌 Cluster {i + 1}: \"{cluster['cluster_label']}\"")
+            # print(f"   📊 {len(notes)} notes")
+            # print(f"   📖 Notes:")
+            # for idx, note in enumerate(notes[:10]):  # Show first 10
+            #     print(f"      {idx + 1}. \"{note['title']}\"")
+            # if len(notes) > 10:
+            #     print(f"      ... and {len(notes) - 10} more")
+            # print()
         
         # Display outliers
         outlier_notes = get_notes_in_cluster(notes_table, '-1')
-        if outlier_notes:
-            print(f"📌 OUTLIERS ({len(outlier_notes)} notes):")
-            print(f"   Notes with poor semantic fit to any cluster:")
-            for idx, note in enumerate(outlier_notes[:10]):
-                print(f"      {idx + 1}. \"{note['title']}\"")
-            if len(outlier_notes) > 10:
-                print(f"      ... and {len(outlier_notes) - 10} more")
-            print()
+        # if outlier_notes:
+        #     print(f"📌 OUTLIERS ({len(outlier_notes)} notes):")
+        #     print(f"   Notes with poor semantic fit to any cluster:")
+        #     for idx, note in enumerate(outlier_notes[:10]):
+        #         print(f"      {idx + 1}. \"{note['title']}\"")
+        #     if len(outlier_notes) > 10:
+        #         print(f"      ... and {len(outlier_notes) - 10} more")
+        #     print()
         
         # Final summary
         print("=" * 50)
