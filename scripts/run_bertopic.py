@@ -120,9 +120,16 @@ vectors = np.vstack(df['vector'].values)
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
 # 1. High-Frequency Filtering in the Vectorizer
-# max_df=0.05: If a word appears in more than 5% of notes, KILL IT. 
-# This is a very strong filter that will force the model to look at unique keywords.
-vectorizer_model = CountVectorizer(max_df=0.05, min_df=2, stop_words="english")
+# Add words that appear in your labels that aren't helpful for categorization
+
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+final_stop_words = list(ENGLISH_STOP_WORDS)
+
+vectorizer_model = CountVectorizer(
+    max_df=0.1,                 # Relaxed slightly from 0.05 to 0.1
+    min_df=2, 
+    stop_words=final_stop_words
+)
 
 # 2. Automated c-TF-IDF Reduction
 # This tells BERTopic to mathematically down-weight words that appear 
@@ -156,8 +163,8 @@ Task: Provide a one-sentence executive summary explaining the common theme of th
 <|assistant|>"""
 
 representation_model = {
-    #"Label": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=label_prompt),
-    #"Summary": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=summary_prompt),
+    # "Label": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=label_prompt),
+    # "Summary": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=summary_prompt),
     "KeyBERT": KeyBERTInspired()
 }
 
@@ -176,15 +183,24 @@ else:
 embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 
 topic_model = BERTopic(
-    embedding_model=embedding_model, # Use the same model used for generating vectors
-    # BREAKING THE BLACK HOLE:
-    # Lower n_neighbors (5) forces UMAP to look for smaller, tighter groups.
-    umap_model=UMAP(n_neighbors=10, n_components=5, min_dist=0.0, metric='cosine', random_state=42),
-    # min_cluster_size=5 allows smaller projects (like CRWN102) to form their own groups
-    hdbscan_model=HDBSCAN(min_cluster_size=7, metric='euclidean', prediction_data=True),
+    embedding_model=embedding_model,
+    umap_model=UMAP(
+        n_neighbors=25,          # Increased to 25 to merge micro-clusters
+        n_components=5,          # Reduced to 5 to compress space
+        min_dist=0.0, 
+        metric='cosine', 
+        random_state=42
+    ),
+    hdbscan_model=HDBSCAN(
+        min_cluster_size=40,      # Increased to 40 to drastically reduce cluster count
+        min_samples=5,           # Increased to 5 for more robust clusters
+        metric='euclidean', 
+        prediction_data=True,
+        cluster_selection_method='eom'
+    ),
     vectorizer_model=vectorizer_model,
-    ctfidf_model=ctfidf_model, # Add the transformer here
-    nr_topics=80,
+    ctfidf_model=ctfidf_model,
+    nr_topics="auto",            # Change from 80 to "auto" to let the model decide natural breaks
     representation_model=representation_model,
     calculate_probabilities=True,
     verbose=True
@@ -193,6 +209,8 @@ topic_model = BERTopic(
 # --- 4. EXECUTION & REFINEMENT ---
 print("🚀 Running semantic clustering (BERTopic)...")
 topics, probs = topic_model.fit_transform(docs, embeddings=vectors)
+
+hierarchical_topics = topic_model.hierarchical_topics(docs)
 
 # Fix High-Confidence Outliers
 # This solves the issue where high-confidence notes are left as outliers (-1)
