@@ -8,7 +8,7 @@ import html
 from pathlib import Path
 from datetime import datetime
 from bertopic import BERTopic
-from bertopic.representation import KeyBERTInspired, BaseRepresentation
+from bertopic.representation import KeyBERTInspired, BaseRepresentation, MaximalMarginalRelevance
 from bertopic.vectorizers import ClassTfidfTransformer
 import ollama
 from sklearn.feature_extraction.text import CountVectorizer
@@ -120,10 +120,10 @@ vectors = np.vstack(df['vector'].values)
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
 # 1. High-Frequency Filtering in the Vectorizer
-# We don't hardcode categories, but we lower the threshold. 
-# 0.03 means: If a word is in > 3% of notes, it's too common to be a category label.
+# Relax the statistical filter. 
+# 0.03 was a "death sentence" for the word AI. 0.08 allows it back in.
 vectorizer_model = CountVectorizer(
-    max_df=0.03, 
+    max_df=0.08, 
     min_df=2, 
     stop_words="english"
 )
@@ -160,9 +160,7 @@ Task: Provide a one-sentence executive summary explaining the common theme of th
 <|assistant|>"""
 
 representation_model = {
-    # "Label": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=label_prompt),
-    # "Summary": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=summary_prompt),
-    "KeyBERT": KeyBERTInspired()
+    "Main": MaximalMarginalRelevance(diversity=0.3)
 }
 
 # Initialize Embedding Model (Required for KeyBERTInspired)
@@ -181,27 +179,17 @@ embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 
 topic_model = BERTopic(
     embedding_model=embedding_model,
-    umap_model=UMAP(
-        n_neighbors=15, 
-        n_components=10, # Give HDBSCAN more dimensions to find gaps between courses
-        min_dist=0.0, 
-        metric='cosine', 
-        random_state=42
-    ),
+    umap_model=UMAP(n_neighbors=20, n_components=10, metric='cosine'),
     hdbscan_model=HDBSCAN(
-        min_cluster_size=15,   # catch a 15-note class like CRWN102
-        min_samples=5,        # Makes the model less likely to dump things into Outliers (-1)
-        metric='euclidean', 
-        cluster_selection_method='leaf', # Finds specific sub-clusters (courses)
-        prediction_data=True,
-        cluster_selection_epsilon=0.3 # Prevents small groups from merging into balloons
+        min_cluster_size=15, 
+        min_samples=3,         # Lowering this from 5 to 3 will pop the Balloon 0
+        cluster_selection_method='eom', # 'eom' is better than 'leaf' for keeping projects together
+        prediction_data=True
     ),
     vectorizer_model=vectorizer_model,
     ctfidf_model=ctfidf_model,
-    nr_topics="auto", 
     representation_model=representation_model,
-    calculate_probabilities=True,
-    verbose=True
+    calculate_probabilities=True
 )
 
 # --- 4. EXECUTION & REFINEMENT ---
