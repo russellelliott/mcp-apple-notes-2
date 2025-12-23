@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import pyarrow as pa
 import re
+import torch
+import html
 from pathlib import Path
 from datetime import datetime
 from bertopic import BERTopic
@@ -11,6 +13,7 @@ import ollama
 from sklearn.feature_extraction.text import CountVectorizer
 from umap import UMAP
 from hdbscan import HDBSCAN
+from sentence_transformers import SentenceTransformer
 
 class Ollama(BaseRepresentation):
     def __init__(self, model="llama2", prompt=None, tokenizer=None):
@@ -70,6 +73,8 @@ TABLE_NAME = "notes"
 def clean_note_content(text):
     """Sanitizes raw note text by removing non-textual data."""
     if not isinstance(text, str): return ""
+    # Remove HTML noise first
+    text = html.unescape(text)
     text = re.sub(r'data:image\/[a-zA-Z]+;base64,[^\s"\'\)]+', '[IMAGE_REMOVED]', text)
     text = re.sub(r'!\[.*?\]\([^\)]{100,}\)', '[IMAGE_REMOVED]', text)
     text = re.sub(r'\S{100,}', '[LONG_DATA_REMOVED]', text)
@@ -111,9 +116,9 @@ vectors = np.vstack(df['vector'].values)
 
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
-# max_df=0.1 calculates stopwords automatically based on your specific life/notes.
-# If "UCSC" or "Notes" appears in >10% of documents, it is mathematically ignored.
-vectorizer_model = CountVectorizer(max_df=0.1, min_df=2, stop_words="english")
+# max_df=0.4 calculates stopwords automatically based on your specific life/notes.
+# If "UCSC" or "Notes" appears in >40% of documents, it is mathematically ignored.
+vectorizer_model = CountVectorizer(max_df=0.4, min_df=2, stop_words="english")
 
 # Phi-3 XML Prompts
 label_prompt = """<|user|>
@@ -142,14 +147,29 @@ Task: Provide a one-sentence executive summary explaining the common theme of th
 <|assistant|>"""
 
 representation_model = {
-    "Label": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=label_prompt),
-    "Summary": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=summary_prompt),
+    #"Label": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=label_prompt),
+    #"Summary": Ollama(model="phi3:3.8b-mini-128k-instruct-q4_K_M", prompt=summary_prompt),
     "KeyBERT": KeyBERTInspired()
 }
 
+# Initialize Embedding Model (Required for KeyBERTInspired)
+# Device detection
+if torch.backends.mps.is_available():
+    device = "mps"
+    print("🚀 Using Apple Silicon GPU (MPS)")
+elif torch.cuda.is_available():
+    device = "cuda"
+    print("🚀 Using NVIDIA GPU (CUDA)")
+else:
+    device = "cpu"
+    print("⚠️ Using CPU (no GPU acceleration)")
+
+embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
+
 topic_model = BERTopic(
-    embedding_model=None, # Use pre-computed LanceDB vectors
-    umap_model=UMAP(n_neighbors=15, n_components=10, metric='cosine', random_state=42),
+    embedding_model=embedding_model, # Use the same model used for generating vectors
+    umap_model=UMAP(n_neighbors=15, n_components=5, metric='cosine', random_state=42),
+    nr_topics="auto",
     hdbscan_model=HDBSCAN(min_cluster_size=10, metric='euclidean', prediction_data=True),
     vectorizer_model=vectorizer_model,
     representation_model=representation_model,
@@ -164,16 +184,26 @@ topics, probs = topic_model.fit_transform(docs, embeddings=vectors)
 # Fix High-Confidence Outliers
 # This solves the issue where high-confidence notes are left as outliers (-1)
 print("🎯 Refining outliers using mathematical probability...")
-new_topics = topic_model.reduce_outliers(docs, topics, strategy="probabilities")
+new_topics = topic_model.reduce_outliers(docs, topics, probabilities=probs, strategy="probabilities", threshold=0.1)
 topic_model.update_topics(docs, topics=new_topics)
 
 # --- 5. SCHEMA MAPPING & PERSISTENCE ---
 topic_info = topic_model.get_topic_info()
+print(f"DEBUG: topic_info columns: {topic_info.columns.tolist()}")
 
 # Map the Cluster ID (int) to the Label (string) and Summary (string)
 # We convert the Phi-3 outputs to clean strings
-label_map = dict(zip(topic_info.Topic, topic_info.Label.apply(lambda x: str(x[0]))))
-summary_map = dict(zip(topic_info.Topic, topic_info.Summary.apply(lambda x: str(x[0]))))
+if 'Label' in topic_info.columns:
+    label_map = dict(zip(topic_info['Topic'], topic_info['Label'].apply(lambda x: str(x[0]))))
+else:
+    print("⚠️ 'Label' column missing. Using default topic names.")
+    label_map = dict(zip(topic_info['Topic'], topic_info['Name']))
+
+if 'Summary' in topic_info.columns:
+    summary_map = dict(zip(topic_info['Topic'], topic_info['Summary'].apply(lambda x: str(x[0]))))
+else:
+    print("⚠️ 'Summary' column missing. Using default topic names.")
+    summary_map = dict(zip(topic_info['Topic'], topic_info['Name']))
 
 # Calculate Confidence Scores
 confidences = [str(round(np.max(p), 3)) if np.max(p) > 0 else "0.0" for p in probs]
