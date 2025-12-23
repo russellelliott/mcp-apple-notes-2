@@ -77,7 +77,7 @@ def clean_note_content(text):
     # Remove HTML noise first
     text = html.unescape(text)
     # Remove URLs entirely (this handles the https/www noise)
-    text = re.sub(r'http\S+', '[URL]', text) 
+    text = re.sub(r'http\S+', '', text) 
     text = re.sub(r'data:image\/[a-zA-Z]+;base64,[^\s"\'\)]+', '[IMAGE_REMOVED]', text)
     text = re.sub(r'!\[.*?\]\([^\)]{100,}\)', '[IMAGE_REMOVED]', text)
     text = re.sub(r'\S{100,}', '[LONG_DATA_REMOVED]', text)
@@ -179,12 +179,12 @@ topic_model = BERTopic(
     embedding_model=embedding_model, # Use the same model used for generating vectors
     # BREAKING THE BLACK HOLE:
     # Lower n_neighbors (5) forces UMAP to look for smaller, tighter groups.
-    umap_model=UMAP(n_neighbors=5, n_components=5, min_dist=0.0, metric='cosine', random_state=42),
+    umap_model=UMAP(n_neighbors=10, n_components=5, min_dist=0.0, metric='cosine', random_state=42),
     # min_cluster_size=5 allows smaller projects (like CRWN102) to form their own groups
-    hdbscan_model=HDBSCAN(min_cluster_size=5, metric='euclidean', prediction_data=True),
+    hdbscan_model=HDBSCAN(min_cluster_size=7, metric='euclidean', prediction_data=True),
     vectorizer_model=vectorizer_model,
     ctfidf_model=ctfidf_model, # Add the transformer here
-    nr_topics="auto",
+    nr_topics=80,
     representation_model=representation_model,
     calculate_probabilities=True,
     verbose=True
