@@ -121,9 +121,9 @@ vectors = np.vstack(df['vector'].values)
 
 # 1. High-Frequency Filtering in the Vectorizer
 # We don't hardcode categories, but we lower the threshold. 
-# 0.07 means: If a word is in > 7% of notes, it's too common to be a category label.
+# 0.03 means: If a word is in > 3% of notes, it's too common to be a category label.
 vectorizer_model = CountVectorizer(
-    max_df=0.07, 
+    max_df=0.03, 
     min_df=2, 
     stop_words="english"
 )
@@ -189,8 +189,8 @@ topic_model = BERTopic(
         random_state=42
     ),
     hdbscan_model=HDBSCAN(
-        min_cluster_size=10,   # catch a 15-note class like CRWN102
-        min_samples=3,        # Makes the model less likely to dump things into Outliers (-1)
+        min_cluster_size=15,   # catch a 15-note class like CRWN102
+        min_samples=5,        # Makes the model less likely to dump things into Outliers (-1)
         metric='euclidean', 
         cluster_selection_method='leaf', # Finds specific sub-clusters (courses)
         prediction_data=True,
