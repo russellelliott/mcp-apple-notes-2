@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 from bertopic import BERTopic
 from bertopic.representation import KeyBERTInspired, BaseRepresentation
+from bertopic.vectorizers import ClassTfidfTransformer
 import ollama
 from sklearn.feature_extraction.text import CountVectorizer
 from umap import UMAP
@@ -75,6 +76,8 @@ def clean_note_content(text):
     if not isinstance(text, str): return ""
     # Remove HTML noise first
     text = html.unescape(text)
+    # Remove URLs entirely (this handles the https/www noise)
+    text = re.sub(r'http\S+', '[URL]', text) 
     text = re.sub(r'data:image\/[a-zA-Z]+;base64,[^\s"\'\)]+', '[IMAGE_REMOVED]', text)
     text = re.sub(r'!\[.*?\]\([^\)]{100,}\)', '[IMAGE_REMOVED]', text)
     text = re.sub(r'\S{100,}', '[LONG_DATA_REMOVED]', text)
@@ -116,9 +119,14 @@ vectors = np.vstack(df['vector'].values)
 
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
-# max_df=0.4 calculates stopwords automatically based on your specific life/notes.
-# If "UCSC" or "Notes" appears in >40% of documents, it is mathematically ignored.
-vectorizer_model = CountVectorizer(max_df=0.4, min_df=2, stop_words="english")
+# 1. High-Frequency Filtering in the Vectorizer
+# max_df=0.2 means "if this word is in more than 20% of my notes, ignore it"
+vectorizer_model = CountVectorizer(max_df=0.2, min_df=2, stop_words="english")
+
+# 2. Automated c-TF-IDF Reduction
+# This tells BERTopic to mathematically down-weight words that appear 
+# frequently across ALL topics (like "https", "note", "the").
+ctfidf_model = ClassTfidfTransformer(reduce_frequent_words=True)
 
 # Phi-3 XML Prompts
 label_prompt = """<|user|>
@@ -168,10 +176,14 @@ embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 
 topic_model = BERTopic(
     embedding_model=embedding_model, # Use the same model used for generating vectors
-    umap_model=UMAP(n_neighbors=15, n_components=5, metric='cosine', random_state=42),
-    nr_topics="auto",
-    hdbscan_model=HDBSCAN(min_cluster_size=10, metric='euclidean', prediction_data=True),
+    # BREAKING THE BLACK HOLE:
+    # Lower n_neighbors (10) forces UMAP to look for smaller, tighter groups.
+    umap_model=UMAP(n_neighbors=10, n_components=5, metric='cosine', random_state=42),
+    # min_cluster_size=8 allows smaller projects (like CRWN102) to form their own groups
+    hdbscan_model=HDBSCAN(min_cluster_size=8, metric='euclidean', prediction_data=True),
     vectorizer_model=vectorizer_model,
+    ctfidf_model=ctfidf_model, # Add the transformer here
+    nr_topics="auto",
     representation_model=representation_model,
     calculate_probabilities=True,
     verbose=True
