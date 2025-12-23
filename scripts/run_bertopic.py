@@ -120,15 +120,12 @@ vectors = np.vstack(df['vector'].values)
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
 # 1. High-Frequency Filtering in the Vectorizer
-# Add words that appear in your labels that aren't helpful for categorization
-
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
-final_stop_words = list(ENGLISH_STOP_WORDS)
-
+# We don't hardcode categories, but we lower the threshold. 
+# 0.07 means: If a word is in > 7% of notes, it's too common to be a category label.
 vectorizer_model = CountVectorizer(
-    max_df=0.1,                 # Relaxed slightly from 0.05 to 0.1
+    max_df=0.07, 
     min_df=2, 
-    stop_words=final_stop_words
+    stop_words="english"
 )
 
 # 2. Automated c-TF-IDF Reduction
@@ -185,22 +182,23 @@ embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 topic_model = BERTopic(
     embedding_model=embedding_model,
     umap_model=UMAP(
-        n_neighbors=25,          # Increased to 25 to merge micro-clusters
-        n_components=5,          # Reduced to 5 to compress space
+        n_neighbors=15, 
+        n_components=10, # Give HDBSCAN more dimensions to find gaps between courses
         min_dist=0.0, 
         metric='cosine', 
         random_state=42
     ),
     hdbscan_model=HDBSCAN(
-        min_cluster_size=40,      # Increased to 40 to drastically reduce cluster count
-        min_samples=5,           # Increased to 5 for more robust clusters
+        min_cluster_size=10,   # catch a 15-note class like CRWN102
+        min_samples=3,        # Makes the model less likely to dump things into Outliers (-1)
         metric='euclidean', 
+        cluster_selection_method='leaf', # Finds specific sub-clusters (courses)
         prediction_data=True,
-        cluster_selection_method='eom'
+        cluster_selection_epsilon=0.3 # Prevents small groups from merging into balloons
     ),
     vectorizer_model=vectorizer_model,
     ctfidf_model=ctfidf_model,
-    nr_topics="auto",            # Change from 80 to "auto" to let the model decide natural breaks
+    nr_topics="auto", 
     representation_model=representation_model,
     calculate_probabilities=True,
     verbose=True
