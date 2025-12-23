@@ -13,7 +13,7 @@ from umap import UMAP
 from hdbscan import HDBSCAN
 
 class Ollama(BaseRepresentation):
-    def __init__(self, model="llama2", prompt=None, doc_length=None, tokenizer=None):
+    def __init__(self, model="llama2", prompt=None, tokenizer=None):
         self.model = model
         self.prompt = prompt if prompt else """
         I have a topic that contains the following documents: 
@@ -22,7 +22,6 @@ class Ollama(BaseRepresentation):
 
         Based on the above information, can you give a short label of the topic?
         """
-        self.doc_length = doc_length
         self.tokenizer = tokenizer
 
     def extract_topics(self, topic_model, documents, c_tf_idf, topics):
@@ -41,6 +40,9 @@ class Ollama(BaseRepresentation):
                     representative_docs = selection.sample(min(5, len(selection))).tolist()
                 else:
                     representative_docs = []
+
+            # Limit to top 4 representative docs to focus on centroids
+            representative_docs = representative_docs[:4]
 
             docs_text = "\n".join(representative_docs)
             
@@ -101,9 +103,8 @@ table = db.open_table(TABLE_NAME)
 df = table.to_pandas()
 
 print(f"🧹 Cleaning {len(df)} chunks of binary data...")
-df['clean_title'] = df['title'].apply(clean_note_content)
-df['clean_content'] = df['content'].apply(clean_note_content)
-docs = (df['clean_title'] + " " + df['clean_content']).fillna("").tolist()
+df['clean_chunk_content'] = df['chunk_content'].apply(clean_note_content)
+docs = df['clean_chunk_content'].fillna("").tolist()
 
 # Extract vectors already stored in LanceDB
 vectors = np.vstack(df['vector'].values)
@@ -184,8 +185,12 @@ df['cluster_summary'] = df['cluster_id'].astype(int).map(summary_map)
 df['cluster_confidence'] = confidences
 df['last_clustered'] = datetime.now().isoformat()
 
-# Clean up temp columns used for processing
-df = df.drop(columns=['clean_title', 'clean_content'])
+# Ensure we only write back the columns that exist in the schema
+schema_columns = ['title', 'content', 'creation_date', 'modification_date', 'chunk_index',
+       'total_chunks', 'chunk_content', 'clean_chunk_content', 'vector', 'cluster_id',
+       'cluster_label', 'cluster_confidence', 'cluster_summary',
+       'last_clustered']
+df = df[schema_columns]
 
 print(f"💾 Overwriting table '{TABLE_NAME}' with clustered data...")
 db.create_table(TABLE_NAME, data=df, mode="overwrite")
