@@ -162,7 +162,9 @@ def search_and_combine_results(
                         "_chunk_index": _get_field(chunk, "chunk_index"),
                         "_total_chunks": _get_field(chunk, "total_chunks"),
                         "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                        "_chunk_id": f"{title}_{_get_field(chunk, 'chunk_index', 0)}"  # Unique identifier
+                        "_chunk_id": f"{title}_{_get_field(chunk, 'chunk_index', 0)}",  # Unique identifier
+                        "cluster_id": _get_field(chunk, "cluster_id"),
+                        "cluster_label": _get_field(chunk, "cluster_label")
                     })
         else:
             print("📋 No vector results (or vector search not available)")
@@ -218,7 +220,9 @@ def search_and_combine_results(
                 "_chunk_index": chunk_index,
                 "_total_chunks": _get_field(chunk, "total_chunks"),
                 "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                "_chunk_id": chunk_id
+                "_chunk_id": chunk_id,
+                "cluster_id": _get_field(chunk, "cluster_id"),
+                "cluster_label": _get_field(chunk, "cluster_label")
             })
 
         print(f"📝 FTS results: {len(fts_results)} chunks")
@@ -291,7 +295,9 @@ def search_and_combine_results(
                     "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
                     "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                    "_chunk_id": chunk_id
+                    "_chunk_id": chunk_id,
+                    "cluster_id": _get_field(chunk, "cluster_id"),
+                    "cluster_label": _get_field(chunk, "cluster_label")
                 })
         else:
             # If there were no exact_matches (maybe queryWords empty), do nothing here
@@ -342,7 +348,9 @@ def search_and_combine_results(
                     "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
                     "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                    "_chunk_id": chunk_id
+                    "_chunk_id": chunk_id,
+                    "cluster_id": _get_field(chunk, "cluster_id"),
+                    "cluster_label": _get_field(chunk, "cluster_label")
                 })
         except Exception as fallback_error:
             print(f"❌ Fallback also failed: {getattr(fallback_error, 'message', repr(fallback_error))}")
@@ -377,6 +385,8 @@ def search_and_combine_results(
                 "_total_chunks": result.get("_total_chunks"),
                 "_matching_chunk_preview": result.get("_matching_chunk_content"),
                 "_chunk_id": result.get("_chunk_id"),
+                "cluster_id": result.get("cluster_id"),
+                "cluster_label": result.get("cluster_label"),
             }
         )
 
@@ -450,10 +460,32 @@ if __name__ == "__main__":
     if not results:
         print("No results found.")
     else:
+        # Count occurrences of each cluster in the results
+        cluster_counts = {}
+        cluster_labels = {}
+        for r in results:
+            c_id = r.get('cluster_id', 'N/A')
+            cluster_counts[c_id] = cluster_counts.get(c_id, 0) + 1
+            if c_id != 'N/A':
+                cluster_labels[c_id] = r.get('cluster_label', 'Uncategorized')
+        
+        print(f"Found {len(results)} results across {len(cluster_counts)} clusters:")
+        for c_id, count in sorted(cluster_counts.items(), key=lambda x: x[1], reverse=True):
+            label = cluster_labels.get(c_id, 'Uncategorized') if c_id != 'N/A' else 'N/A'
+            print(f"  - {label} (ID: {c_id}): {count} notes")
+
         for idx, result in enumerate(results, 1):
-            print(f"\n{idx}. {result.get('title', 'Untitled')}")
+            title = result.get('title', 'Untitled')
+            c_id = result.get('cluster_id', 'N/A')
+            c_label = result.get('cluster_label', 'Uncategorized')
+            c_count = cluster_counts.get(c_id, 0)
+
+            print(f"\n{idx}. {title}")
             print(f"   Created: {result.get('creation_date', 'N/A')}")
             print(f"   Modified: {result.get('modification_date', 'N/A')}")
             print(f"   Score: {result.get('_relevance_score', 0):.2f}")
             print(f"   Source: {result.get('_source', 'unknown')}")
+            print(f"   Chunk ID: {result.get('_chunk_id', 'N/A')}")
+            print(f"   Cluster: {c_label} (ID: {c_id})")
+            print(f"   Matches in this Cluster: {c_count}")
             print(f"   Preview: {result.get('_matching_chunk_preview', '')[:200]}...")
