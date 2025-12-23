@@ -140,6 +140,7 @@ def search_and_combine_results(
         vector_results = _ensure_list(vector_results_raw)
         if vector_results:
             print(f"🎯 Found {len(vector_results)} relevant chunks")
+            seen_vector_ids = set()
             for chunk in vector_results:
                 distance = _get_field(chunk, "_distance", 0) or 0
                 # Convert possible object/str to float safely
@@ -152,6 +153,13 @@ def search_and_combine_results(
                 similarity_score = 1.0 / (1.0 + distance)
                 if similarity_score > min_cosine_similarity:
                     title = _get_field(chunk, "title", "<untitled>")
+                    chunk_index = _get_field(chunk, "chunk_index", 0)
+                    chunk_id = f"{title}_{chunk_index}"
+                    
+                    if chunk_id in seen_vector_ids:
+                        continue
+                    seen_vector_ids.add(chunk_id)
+
                     chunk_results.append({
                         "title": title,
                         "content": _get_field(chunk, "content"),
@@ -159,10 +167,10 @@ def search_and_combine_results(
                         "modification_date": _get_field(chunk, "modification_date"),
                         "_relevance_score": similarity_score * 100.0,
                         "_source": "vector_semantic",
-                        "_chunk_index": _get_field(chunk, "chunk_index"),
+                        "_chunk_index": chunk_index,
                         "_total_chunks": _get_field(chunk, "total_chunks"),
                         "_matching_chunk_content": _get_field(chunk, "chunk_content"),
-                        "_chunk_id": f"{title}_{_get_field(chunk, 'chunk_index', 0)}",  # Unique identifier
+                        "_chunk_id": chunk_id,  # Unique identifier
                         "cluster_id": _get_field(chunk, "cluster_id"),
                         "cluster_label": _get_field(chunk, "cluster_label")
                     })
@@ -201,6 +209,8 @@ def search_and_combine_results(
             # Skip if this exact chunk was already found in vector search
             if chunk_id in existing_chunk_ids:
                 continue
+            
+            existing_chunk_ids.add(chunk_id)
                 
             score = 70.0  # fallback
             chunk_vector = _get_field(chunk, "embedding")
@@ -280,6 +290,8 @@ def search_and_combine_results(
                 # Skip if this exact chunk was already found
                 if chunk_id in existing_chunk_ids:
                     continue
+                
+                existing_chunk_ids.add(chunk_id)
                     
                 chunk_content = (_get_field(chunk, "chunk_content") or "").lower()
                 title_low = (_get_field(chunk, "title") or "").lower()
@@ -337,6 +349,8 @@ def search_and_combine_results(
                 # Skip if this exact chunk was already found
                 if chunk_id in existing_chunk_ids:
                     continue
+                
+                existing_chunk_ids.add(chunk_id)
                     
                 chunk_results.append({
                     "title": title,
