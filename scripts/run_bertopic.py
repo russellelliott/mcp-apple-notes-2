@@ -120,13 +120,14 @@ vectors = np.vstack(df['vector'].values)
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
 # 1. High-Frequency Filtering in the Vectorizer
-# max_df=0.2 means "if this word is in more than 20% of my notes, ignore it"
-vectorizer_model = CountVectorizer(max_df=0.2, min_df=2, stop_words="english")
+# max_df=0.05: If a word appears in more than 5% of notes, KILL IT. 
+# This is a very strong filter that will force the model to look at unique keywords.
+vectorizer_model = CountVectorizer(max_df=0.05, min_df=2, stop_words="english")
 
 # 2. Automated c-TF-IDF Reduction
 # This tells BERTopic to mathematically down-weight words that appear 
 # frequently across ALL topics (like "https", "note", "the").
-ctfidf_model = ClassTfidfTransformer(reduce_frequent_words=True)
+ctfidf_model = ClassTfidfTransformer(reduce_frequent_words=True, bm25_weighting=True)
 
 # Phi-3 XML Prompts
 label_prompt = """<|user|>
@@ -177,10 +178,10 @@ embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 topic_model = BERTopic(
     embedding_model=embedding_model, # Use the same model used for generating vectors
     # BREAKING THE BLACK HOLE:
-    # Lower n_neighbors (10) forces UMAP to look for smaller, tighter groups.
-    umap_model=UMAP(n_neighbors=10, n_components=5, metric='cosine', random_state=42),
-    # min_cluster_size=8 allows smaller projects (like CRWN102) to form their own groups
-    hdbscan_model=HDBSCAN(min_cluster_size=8, metric='euclidean', prediction_data=True),
+    # Lower n_neighbors (5) forces UMAP to look for smaller, tighter groups.
+    umap_model=UMAP(n_neighbors=5, n_components=5, min_dist=0.0, metric='cosine', random_state=42),
+    # min_cluster_size=5 allows smaller projects (like CRWN102) to form their own groups
+    hdbscan_model=HDBSCAN(min_cluster_size=5, metric='euclidean', prediction_data=True),
     vectorizer_model=vectorizer_model,
     ctfidf_model=ctfidf_model, # Add the transformer here
     nr_topics="auto",
