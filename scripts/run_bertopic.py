@@ -11,7 +11,7 @@ from bertopic import BERTopic
 from bertopic.representation import KeyBERTInspired, BaseRepresentation, MaximalMarginalRelevance
 from bertopic.vectorizers import ClassTfidfTransformer
 import ollama
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
 from umap import UMAP
 from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
@@ -122,10 +122,13 @@ vectors = np.vstack(df['vector'].values)
 # 1. High-Frequency Filtering in the Vectorizer
 # Relax the statistical filter. 
 # 0.03 was a "death sentence" for the word AI. 0.08 allows it back in.
+# Expanded stop words list
+custom_stop_words = list(ENGLISH_STOP_WORDS) + ["um", "uh", "like", "just", "so", "actually", "basically", "http", "https", "www", "com"]
+
 vectorizer_model = CountVectorizer(
     max_df=0.08, 
     min_df=2, 
-    stop_words="english"
+    stop_words=custom_stop_words
 )
 
 # 2. Automated c-TF-IDF Reduction
@@ -179,11 +182,20 @@ embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
 
 topic_model = BERTopic(
     embedding_model=embedding_model,
-    umap_model=UMAP(n_neighbors=20, n_components=10, metric='cosine'),
+    # UMAP: n_neighbors=30 (A middle ground between local and global).
+    # min_dist=0.0 (Default, packs points tightly)
+    umap_model=UMAP(
+        n_neighbors=30, 
+        n_components=5, 
+        min_dist=0.0, 
+        metric='cosine'
+    ),
+    # HDBSCAN: min_cluster_size=15, min_samples=10.
+    # min_samples=10 makes it stricter, forcing more into outliers (-1)
     hdbscan_model=HDBSCAN(
         min_cluster_size=15, 
-        min_samples=3,         # Lowering this from 5 to 3 will pop the Balloon 0
-        cluster_selection_method='eom', # 'eom' is better than 'leaf' for keeping projects together
+        min_samples=10,         
+        cluster_selection_method='eom', 
         prediction_data=True
     ),
     vectorizer_model=vectorizer_model,
@@ -200,8 +212,9 @@ hierarchical_topics = topic_model.hierarchical_topics(docs)
 
 # Fix High-Confidence Outliers
 # This solves the issue where high-confidence notes are left as outliers (-1)
+# Threshold raised to 0.25 to only move "almost perfect fits"
 print("🎯 Refining outliers using mathematical probability...")
-new_topics = topic_model.reduce_outliers(docs, topics, probabilities=probs, strategy="probabilities", threshold=0.1)
+new_topics = topic_model.reduce_outliers(docs, topics, probabilities=probs, strategy="probabilities", threshold=0.25)
 topic_model.update_topics(docs, topics=new_topics)
 
 # --- 5. SCHEMA MAPPING & PERSISTENCE ---
