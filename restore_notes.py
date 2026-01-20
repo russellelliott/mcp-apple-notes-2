@@ -3,28 +3,41 @@
 import lancedb
 from pathlib import Path
 import pandas as pd
+import list_tables
 
 DATA_DIR = Path.home() / ".mcp-apple-notes"
 db = lancedb.connect(str(DATA_DIR / "data"))
 
 def restore_notes_from_backup():
-    """Copy contents from notes_backup_1763846409 to notes table."""
+    """Copy contents from a backup table to notes table."""
     
-    print("Examining table schemas...")
+    print("Available tables:")
+    list_tables.list_tables_organized()
+    tables = db.table_names()
+        
+    source_table_name = input("\nEnter the name of the table to restore from (default: notes_backup_1763846409): ").strip()
+    if not source_table_name:
+        source_table_name = "notes_backup_1763846409"
+    
+    if source_table_name not in tables:
+        print(f"Error: Table '{source_table_name}' not found.")
+        return
+
+    print(f"\nExamining table schemas for '{source_table_name}'...")
     
     # Open both tables
     try:
-        backup_table = db.open_table("notes_backup_1763846409")
+        backup_table = db.open_table(source_table_name)
         notes_table = db.open_table("notes")
         
-        print(f"Backup table records: {len(backup_table.to_pandas())}")
+        print(f"Source table ({source_table_name}) records: {len(backup_table.to_pandas())}")
         print(f"Current notes table records: {len(notes_table.to_pandas())}")
         
         # Get schemas
         backup_df = backup_table.to_pandas()
         notes_df = notes_table.to_pandas()
         
-        print(f"\nBackup table columns: {list(backup_df.columns)}")
+        print(f"\nSource table columns: {list(backup_df.columns)}")
         print(f"Notes table columns: {list(notes_df.columns)}")
         
         # Check if schemas match
@@ -35,7 +48,7 @@ def restore_notes_from_backup():
             return
             
         # Confirm before proceeding
-        response = input(f"\nThis will replace {len(notes_df)} records in 'notes' table with {len(backup_df)} records from backup. Continue? (y/N): ")
+        response = input(f"\nThis will replace {len(notes_df)} records in 'notes' table with {len(backup_df)} records from '{source_table_name}'. Continue? (y/N): ")
         
         if response.lower() != 'y':
             print("Operation cancelled.")
