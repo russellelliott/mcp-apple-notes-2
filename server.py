@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 import sys
 import os
 
-from scripts.two_pass_clustering import (
+from scripts.cluster_utils import (
     list_clusters,
     get_notes_in_cluster,
     DB_PATH,

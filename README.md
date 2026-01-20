@@ -131,43 +131,20 @@ python scripts/create_inverted_index.py
 
 **Best practice:** Run `table.optimize()` after adding new notes to ensure full search coverage.
 
-### 🎯 Two-Pass Clustering (`scripts/two_pass_clustering.py`)
+### 🧠 Semantic Clustering (`scripts/run_bertopic.py`)
 
-Sophisticated semantic clustering with dynamic quality assessment.
-
-**Algorithm:**
-1. **Pass 1**: Initial HDBSCAN clustering with configurable minimum cluster size
-2. **Pass 2**: Semantic quality evaluation of outliers using cosine similarity
-3. **Dynamic reassignment** based on average quality threshold
-4. **Semantic preservation** - poor fits remain as outliers
+Advanced topic modeling using BERTopic with LLM-enhanced labeling.
 
 **Features:**
-- **Data-driven thresholds** (no hard-coded values)
-- **Semantic quality scoring** (0-1 scale)
-- **Variable cluster shapes** via HDBSCAN
-- **Outlier reassignment** with quality gates
-- **Full database persistence**
+- **BERTopic Algorithm**: Uses Transformers and c-TF-IDF to create dense semantic clusters
+- **LLM Labeling**: Generates human-readable topic labels using local LLMs (Ollama)
+- **Outlier Refinement**: Reduces noise by reassigning high-confidence outliers
+- **Hierarchical Analysis**: Understands topic relationships
 
 **Usage:**
 ```bash
-# Default (balanced)
-python scripts/two_pass_clustering.py
-
-# Conservative (fewer, stronger clusters)
-python scripts/two_pass_clustering.py --min-size=5
-
-# High-precision (only very strong clusters)
-python scripts/two_pass_clustering.py --min-size=10
+python scripts/run_bertopic.py
 ```
-
-**Configuration Guide:**
-- `--min-size=2` (default): Balanced semantic quality
-- `--min-size=5`: More robust initial clusters, less pollution
-- `--min-size=10`: Only strongest clusters, more outliers
-
-**Quality Metrics:**
-- Dynamic threshold based on average semantic fit
-- Cosine similarity scoring for reassignment decisions
 - Preserves semantic integrity over spatial proximity
 
 ### 📊 Check Notes (`scripts/check_notes.py`)
@@ -259,7 +236,7 @@ Database path: /Users/user/.mcp-apple-notes/data
 1. **Fetch Notes** → Use [mcp-apple-notes](https://github.com/russellelliott/mcp-apple-notes)
 2. **Process & Embed** → `scripts/fetch_and_chunk_notes.py` (creates embeddings)
 3. **Analyze** → `scripts/check_notes.py` (verify data)
-4. **Cluster** → `scripts/two_pass_clustering.py` (semantic grouping)
+4. **Cluster** → `scripts/run_bertopic.py` (semantic grouping)
 5. **Search** → `scripts/search_notes.py` (query & discover)
 
 ## Performance

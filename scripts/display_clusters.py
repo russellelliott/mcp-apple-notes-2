@@ -4,7 +4,7 @@ Script to display existing clusters and their notes.
 """
 
 import lancedb
-from two_pass_clustering import (
+from scripts.cluster_utils import (
     list_clusters,
     get_notes_in_cluster,
     DB_PATH,
