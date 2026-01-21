@@ -231,44 +231,86 @@ def main():
             # Display
             display_cols = ['search_score', 'title', 'cluster_label', 'creation_date', 'cluster_summary']
             
-            # Add styling to highlight rows selected in the chart
-            # We must include unique_key in the dataframe to check against selected_keys
-            styled_df = results_df[display_cols + ['unique_key']]
+            # Prepare data for editor
+            # We add a 'selected' column populated based on current chart selection
+            editor_df = results_df.copy()
+            editor_df['selected'] = editor_df['unique_key'].isin(selected_keys)
             
-            def highlight_selected_row(row):
-                if row['unique_key'] in selected_keys:
-                    return ['background-color: rgba(255, 255, 0, 0.2)'] * len(row)
-                return [''] * len(row)
+            # Order columns: selected first
+            cols_order = ['selected'] + display_cols
             
-            # Apply style
-            styled_df = styled_df.style.apply(highlight_selected_row, axis=1)
+            # Configure columns
+            col_config = {
+                "selected": st.column_config.CheckboxColumn("Select", width="small"),
+                "search_score": st.column_config.ProgressColumn("Relevance", format="%.1f", min_value=0, max_value=100),
+                "title": "Note Title",
+                "cluster_label": "Cluster",
+                "creation_date": "Created",
+                "cluster_summary": "Cluster Context"
+            }
 
-            event = st.dataframe(
-                styled_df,
-                column_config={
-                    "search_score": st.column_config.ProgressColumn("Relevance", format="%.1f", min_value=0, max_value=100),
-                    "title": "Note Title",
-                    "cluster_label": "Cluster",
-                    "creation_date": "Created",
-                    "cluster_summary": "Cluster Context",
-                    "unique_key": None # Hide the key column
-                },
+            # Use data_editor to allow checkbox interaction
+            # We disable editing for all columns except 'selected'
+            edited_df = st.data_editor(
+                editor_df[cols_order],
+                column_config=col_config,
+                disabled=display_cols, # Disable all content columns
                 hide_index=True,
                 use_container_width=True,
-                on_select="rerun",     # Enable selection
-                selection_mode="single-row"
+                key="results_editor" 
             )
             
-            # Handle Selection
-            if event.selection and event.selection.rows:
-                selected_index = event.selection.rows[0]
-                # Get the note details (using iloc on the filtered df)
-                # Note: results_df is sorted, event.selection.rows indices correspond to displayed order
-                selected_note = results_df.iloc[selected_index]
-                # Store the Unique Key for the chart to highlight
-                selected_keys.add(selected_note['unique_key'])
+            # Update selected_keys based on editor state
+            # This allows the Table to control the Chart
+            # We must map back to unique_key. editor_df aligns with results_df index-wise if sorted same?
+            # Yes, we just copied it. But better to join or use index if stable.
+            # editor_df returned by data_editor generally preserves index.
+            
+            # Get the indices of checked rows
+            if not edited_df.empty:
+                # We need to map back to unique keys. 
+                # Since we hid unique_key in the editor (it wasn't in cols_order), we need to rely on the index.
+                # editor_df should match editor_df index.
                 
-                st.info(f"Selected Note: **{selected_note['title']}** (Cluster: {selected_note['cluster_label']})")
+                # However, safe bet is to filter edited_df for selected=True, then grab index, then lookup unique_key in results_df
+                selected_indices = edited_df[edited_df['selected']].index
+                
+                # Update the main set. 
+                # Note: We replace the set effectively for the Chart rendering step because the Table claims authority on "current selection state" 
+                # effectively merging chart-init state + user-table-interaction.
+                
+                # Careful: If user unchecks in Table, we want to remove from selected_keys.
+                # If user selects in Chart (next loop), it adds to keys.
+                # So here we should probably re-establish selected_keys based on the Table's final say for THIS render cycle.
+                
+                current_table_keys = set(results_df.loc[selected_indices, 'unique_key'])
+                
+                # If the table is showing a subset of data (due to search), strictly speaking we only control selection for visible items.
+                # But here 'results_df' IS the visible data.
+                # So we take the visible selection.
+                
+                # What if there are selections outside the search results (from chart)?
+                # We should preserve them?
+                # The user probably focuses on search results.
+                # Let's just UNION them for now?
+                # No, if I uncheck a box, I want it gone.
+                
+                # Logic:
+                # 1. Any key visible in Table: State is determined by Table Checkbox.
+                # 2. Any key NOT visible in Table (filtered out): State is preserved from selected_keys (Chart).
+                
+                visible_keys = set(results_df['unique_key'])
+                hidden_selection = selected_keys - visible_keys
+                
+                # Final keys = Hidden (preserved) + Visible (from editor)
+                selected_keys = hidden_selection.union(current_table_keys)
+                
+                if current_table_keys:
+                     # Just show info for the first one for context
+                     first_key = list(current_table_keys)[0]
+                     # Find row
+                     row = results_df[results_df['unique_key'] == first_key].iloc[0]
+                     st.info(f"Selected Note: **{row['title']}** (Cluster: {row['cluster_label']})")
 
 
     # --- Chart Logic (Executed second, renders to top container) ---
