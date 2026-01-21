@@ -210,17 +210,38 @@ def main():
     table_container = st.container()
 
     # --- Table Logic & Selection (Executed first for state) ---
-    selected_keys = set()
+    
+    # Initialize Session State Variables
+    if "manual_selection" not in st.session_state:
+        st.session_state.manual_selection = set()
+    if "last_chart_selection" not in st.session_state:
+        st.session_state.last_chart_selection = set()
 
-    # Capture Chart Selection (from previous interaction)
+    # 1. Capture Current Chart Selection
+    current_chart_selection = set()
     if "cluster_chart" in st.session_state:
         selection_state = st.session_state.cluster_chart
         if selection_state and selection_state.get("selection", {}).get("points", []):
             for point in selection_state["selection"]["points"]:
                 # unique_key is validly stored in customdata
                 if "customdata" in point and len(point["customdata"]) > 0:
-                    # We ensure unique_key is at index 0 in the chart definition
-                    selected_keys.add(point["customdata"][0])
+                    current_chart_selection.add(point["customdata"][0])
+
+    # 2. Reconcile Selection State - ADDITIVE ONLY from Chart
+    # Logic: Only ADD things that are newly selected in the chart. 
+    # Do not remove things (allow Table checkboxes to handle removal).
+    
+    newly_selected_from_chart = current_chart_selection - st.session_state.last_chart_selection
+    
+    if newly_selected_from_chart:
+        st.session_state.manual_selection.update(newly_selected_from_chart)
+        # Force these new items to be visible if we wanted, but for now just update state.
+        
+    # Update baseline for next comparison
+    st.session_state.last_chart_selection = current_chart_selection
+    
+    # Establish authoritative selection for this run
+    selected_keys = st.session_state.manual_selection
     
     if search_query:
         with table_container:
@@ -232,7 +253,7 @@ def main():
             display_cols = ['search_score', 'title', 'cluster_label', 'creation_date', 'cluster_summary']
             
             # Prepare data for editor
-            # We add a 'selected' column populated based on current chart selection
+            # We add a 'selected' column populated based on current effective selection
             editor_df = results_df.copy()
             editor_df['selected'] = editor_df['unique_key'].isin(selected_keys)
             
@@ -260,57 +281,31 @@ def main():
                 key="results_editor" 
             )
             
-            # Update selected_keys based on editor state
-            # This allows the Table to control the Chart
-            # We must map back to unique_key. editor_df aligns with results_df index-wise if sorted same?
-            # Yes, we just copied it. But better to join or use index if stable.
-            # editor_df returned by data_editor generally preserves index.
-            
-            # Get the indices of checked rows
+            # 3. Update Selection from Table Interaction
             if not edited_df.empty:
-                # We need to map back to unique keys. 
-                # Since we hid unique_key in the editor (it wasn't in cols_order), we need to rely on the index.
-                # editor_df should match editor_df index.
-                
-                # However, safe bet is to filter edited_df for selected=True, then grab index, then lookup unique_key in results_df
+                # Identify which visible rows are checked
+                # We can now use unique_key column directly if exposed, but we rely on index alignment or id lookup
+                # Let's trust index alignment for now as results_df and editor_df are synced.
                 selected_indices = edited_df[edited_df['selected']].index
+                current_visible_selection = set(results_df.loc[selected_indices, 'unique_key'])
                 
-                # Update the main set. 
-                # Note: We replace the set effectively for the Chart rendering step because the Table claims authority on "current selection state" 
-                # effectively merging chart-init state + user-table-interaction.
+                # Identify which keys are currently visible in the table
+                all_visible_keys = set(results_df['unique_key'])
                 
-                # Careful: If user unchecks in Table, we want to remove from selected_keys.
-                # If user selects in Chart (next loop), it adds to keys.
-                # So here we should probably re-establish selected_keys based on the Table's final say for THIS render cycle.
+                # Update Manual Selection:
+                # 1. Remove all currently visible keys from the master set (clear the slate for the visible portion)
+                # 2. Add back the ones that are currently checked
+                # This ensures unchecking a box actually removes it from state.
                 
-                current_table_keys = set(results_df.loc[selected_indices, 'unique_key'])
+                new_state = (st.session_state.manual_selection - all_visible_keys).union(current_visible_selection)
                 
-                # If the table is showing a subset of data (due to search), strictly speaking we only control selection for visible items.
-                # But here 'results_df' IS the visible data.
-                # So we take the visible selection.
-                
-                # What if there are selections outside the search results (from chart)?
-                # We should preserve them?
-                # The user probably focuses on search results.
-                # Let's just UNION them for now?
-                # No, if I uncheck a box, I want it gone.
-                
-                # Logic:
-                # 1. Any key visible in Table: State is determined by Table Checkbox.
-                # 2. Any key NOT visible in Table (filtered out): State is preserved from selected_keys (Chart).
-                
-                visible_keys = set(results_df['unique_key'])
-                hidden_selection = selected_keys - visible_keys
-                
-                # Final keys = Hidden (preserved) + Visible (from editor)
-                selected_keys = hidden_selection.union(current_table_keys)
-                
-                if current_table_keys:
-                     # Just show info for the first one for context
-                     first_key = list(current_table_keys)[0]
-                     # Find row
-                     row = results_df[results_df['unique_key'] == first_key].iloc[0]
-                     st.info(f"Selected Note: **{row['title']}** (Cluster: {row['cluster_label']})")
+                # Update State
+                if new_state != st.session_state.manual_selection:
+                    st.session_state.manual_selection = new_state
+                    selected_keys = new_state # Update local var for immediate use if needed (though UI is already drawn)
+                    
+                if current_visible_selection:
+                     st.caption(f"Selected: **{len(current_visible_selection)}** notes")
 
 
     # --- Chart Logic (Executed second, renders to top container) ---
