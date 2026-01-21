@@ -211,6 +211,16 @@ def main():
 
     # --- Table Logic & Selection (Executed first for state) ---
     selected_keys = set()
+
+    # Capture Chart Selection (from previous interaction)
+    if "cluster_chart" in st.session_state:
+        selection_state = st.session_state.cluster_chart
+        if selection_state and selection_state.get("selection", {}).get("points", []):
+            for point in selection_state["selection"]["points"]:
+                # unique_key is validly stored in customdata
+                if "customdata" in point and len(point["customdata"]) > 0:
+                    # We ensure unique_key is at index 0 in the chart definition
+                    selected_keys.add(point["customdata"][0])
     
     if search_query:
         with table_container:
@@ -221,14 +231,27 @@ def main():
             # Display
             display_cols = ['search_score', 'title', 'cluster_label', 'creation_date', 'cluster_summary']
             
+            # Add styling to highlight rows selected in the chart
+            # We must include unique_key in the dataframe to check against selected_keys
+            styled_df = results_df[display_cols + ['unique_key']]
+            
+            def highlight_selected_row(row):
+                if row['unique_key'] in selected_keys:
+                    return ['background-color: rgba(255, 255, 0, 0.2)'] * len(row)
+                return [''] * len(row)
+            
+            # Apply style
+            styled_df = styled_df.style.apply(highlight_selected_row, axis=1)
+
             event = st.dataframe(
-                results_df[display_cols],
+                styled_df,
                 column_config={
                     "search_score": st.column_config.ProgressColumn("Relevance", format="%.1f", min_value=0, max_value=100),
                     "title": "Note Title",
                     "cluster_label": "Cluster",
                     "creation_date": "Created",
-                    "cluster_summary": "Cluster Context"
+                    "cluster_summary": "Cluster Context",
+                    "unique_key": None # Hide the key column
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -252,6 +275,7 @@ def main():
     with chart_container:
         # Prepare tooltip columns
         hover_data = {
+            'unique_key': False, # Index 0 in customdata for selection mapping
             'title': True,
             'creation_date': True,
             'modification_date': True,
@@ -263,7 +287,6 @@ def main():
             'marker_symbol': False,
             'marker_size': False,
             'opacity': False,
-            'unique_key': False,
             'line_width': False
         }
     
@@ -397,7 +420,7 @@ def main():
             legend_title_text='Cluster'
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="cluster_chart")
 
     # (Previous table location was here)
 
