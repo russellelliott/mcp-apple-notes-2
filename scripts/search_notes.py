@@ -139,7 +139,7 @@ def search_and_combine_results(
         
         vector_results = _ensure_list(vector_results_raw)
         if vector_results:
-            print(f"🎯 Found {len(vector_results)} relevant chunks")
+            print(f"🎯 Retrieved {len(vector_results)} raw candidates from vector store")
             seen_vector_ids = set()
             for chunk in vector_results:
                 distance = _get_field(chunk, "_distance", 0) or 0
@@ -404,7 +404,7 @@ def search_and_combine_results(
             }
         )
 
-    return final
+    return final[:display_limit]
 
 
 if __name__ == "__main__":
