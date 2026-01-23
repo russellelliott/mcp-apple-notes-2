@@ -1,10 +1,9 @@
-
 import os
 import lancedb
 import pandas as pd
 import numpy as np
 import umap
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -134,9 +133,14 @@ class SearchResult(BaseModel):
     cluster_label: str
     preview: Optional[str] = None
     
+class SearchStats(BaseModel):
+    total_chunks: int
+    unique_notes: int
+    
 class SearchResponse(BaseModel):
     results: List[SearchResult]
     match_ids: List[str] # List of unique_keys that matched
+    stats: SearchStats
 
 # --- Endpoints ---
 
@@ -159,7 +163,7 @@ async def get_points():
     return records
 
 @app.get("/search", response_model=SearchResponse)
-async def search(q: str = Query(..., min_length=1)):
+async def search(q: str = Query(..., min_length=1), limit: int = 5):
     """Search notes and return matches + IDs"""
     if state.table is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
@@ -173,7 +177,7 @@ async def search(q: str = Query(..., min_length=1)):
         results = search_and_combine_results(
             state.table, 
             q, 
-            # display_limit=50, 
+            display_limit=limit, 
             compute_query_embedding=embedding_fn
         )
     except Exception as e:
@@ -191,8 +195,8 @@ async def search(q: str = Query(..., min_length=1)):
         cluster_map = state.df_viz.set_index('unique_key')['cluster_label'].to_dict()
 
     for r in results:
-        idx = r.get('_chunk_index', r.get('chunk_index', 0))
         title = r.get('title', '')
+        idx = r.get('_chunk_index', r.get('chunk_index', 0))
         score = r.get('_relevance_score', 0)
         preview = r.get('_matching_chunk_preview', '') or r.get('chunk_content', '')[:200]
         
@@ -212,9 +216,15 @@ async def search(q: str = Query(..., min_length=1)):
         formatted_results.append(res_obj)
         match_ids.append(unique_key)
         
+    unique_titles_found = set(r.title for r in formatted_results)
+    
     return SearchResponse(
         results=formatted_results,
-        match_ids=match_ids
+        match_ids=match_ids,
+        stats=SearchStats(
+            total_chunks=len(formatted_results),
+            unique_notes=len(unique_titles_found)
+        )
     )
 
 @app.get("/health")
