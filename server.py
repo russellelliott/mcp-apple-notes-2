@@ -173,7 +173,7 @@ async def search(q: str = Query(..., min_length=1)):
         results = search_and_combine_results(
             state.table, 
             q, 
-            display_limit=50, 
+            # display_limit=50, 
             compute_query_embedding=embedding_fn
         )
     except Exception as e:
