@@ -129,7 +129,7 @@ class SearchResult(BaseModel):
     unique_key: str
     title: str
     chunk_index: int
-    score: float
+    distance: float
     cluster_label: str
     preview: Optional[str] = None
     
@@ -209,7 +209,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 5):
             unique_key=unique_key,
             title=title,
             chunk_index=idx,
-            score=score,
+            distance=score,
             cluster_label=cluster,
             preview=preview
         )

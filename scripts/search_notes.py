@@ -165,7 +165,7 @@ def search_and_combine_results(
                         "content": _get_field(chunk, "content"),
                         "creation_date": _get_field(chunk, "creation_date"),
                         "modification_date": _get_field(chunk, "modification_date"),
-                        "_relevance_score": similarity_score * 100.0,
+                        "_relevance_score": distance,
                         "_source": "vector_semantic",
                         "_chunk_index": chunk_index,
                         "_total_chunks": _get_field(chunk, "total_chunks"),
@@ -302,7 +302,7 @@ def search_and_combine_results(
                     "content": _get_field(chunk, "content"),
                     "creation_date": _get_field(chunk, "creation_date"),
                     "modification_date": _get_field(chunk, "modification_date"),
-                    "_relevance_score": 100.0 if is_exact_match else 85.0,
+                    "_relevance_score": 0.0 if is_exact_match else 0.05,
                     "_source": "exact_match" if is_exact_match else "partial_match",
                     "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
@@ -357,7 +357,7 @@ def search_and_combine_results(
                     "content": _get_field(chunk, "content"),
                     "creation_date": _get_field(chunk, "creation_date"),
                     "modification_date": _get_field(chunk, "modification_date"),
-                    "_relevance_score": 90.0,
+                    "_relevance_score": 0.0,
                     "_source": "fallback_exact",
                     "_chunk_index": chunk_index,
                     "_total_chunks": _get_field(chunk, "total_chunks"),
@@ -371,7 +371,7 @@ def search_and_combine_results(
             traceback.print_exc()
 
     # Combine and rank results
-    combined_results = sorted(chunk_results, key=lambda r: r.get("_relevance_score", 0.0), reverse=True)
+    combined_results = sorted(chunk_results, key=lambda r: r.get("_relevance_score", 1000.0), reverse=False)
     
     # Count unique notes for summary
     unique_notes = set(c['title'] for c in combined_results)
