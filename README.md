@@ -3,13 +3,22 @@
 
 This repository provides advanced semantic analysis and clustering for Apple Notes data. It's optimized for high-performance Python processing and includes sophisticated clustering algorithms.
 
-## Overview
+## Project Structure
 
-This system provides:
-- **Semantic clustering** of notes using two-pass HDBSCAN with dynamic quality scoring
-- **Multi-strategy search** combining vector search, FTS, and database queries
-- **Database management** tools for diagnostics and maintenance
-- **2x faster processing** than TypeScript implementations (5s vs 11s for 200 notes)
+The project code is organized in the `backend/` directory:
+
+- **`backend/analysis/`**: Core analysis tools
+  - `search_notes.py`: Hybrid semantic/FTS search engine
+  - `run_bertopic.py`: Topic modeling and clustering
+  - `cluster_utils.py`: Clustering helpers
+- **`backend/backup/`**: Database maintenance
+  - `list_tables.py`: View database backups
+  - `restore_notes.py`: Restore from backups
+- **`backend/scripts/`**: Server and utility scripts
+  - `server.py`: FastAPI server
+  - `main.py`: Main shared components
+  - `create_inverted_index.py`: Full-text search indexing
+  - `check_columns.py`: Database schema inspection
 
 ## Prerequisites
 
@@ -17,9 +26,18 @@ This system provides:
 - Apple Notes data (use [mcp-apple-notes](https://github.com/russellelliott/mcp-apple-notes) for fetching)
 - Virtual environment recommended ([setup guide](https://chatgpt.com/c/691d4f5e-777c-832d-8adf-5564a7896202))
 
+## Running the Server
+
+To start the API server:
+```bash
+python -m backend.scripts.server
+# or
+python backend/scripts/server.py
+```
+
 ## Core Scripts
 
-### 🔍 Search Notes (`scripts/search_notes.py`)
+### 🔍 Search Notes (`backend/analysis/search_notes.py`)
 
 **Hybrid semantic and text-based search** combining vector embeddings and full-text search for comprehensive note discovery.
 
@@ -48,16 +66,16 @@ The system uses **three complementary search strategies** that work together:
 
 ```bash
 # Basic search (uses all strategies)
-python scripts/search_notes.py "restaurant data filtering"
+python backend/analysis/search_notes.py "restaurant data filtering"
 
 # Limit results
-python scripts/search_notes.py "machine learning" --limit 10
+python backend/analysis/search_notes.py "machine learning" --limit 10
 
 # Course codes and specific terms (primarily FTS)
-python scripts/search_notes.py "CRWN102"
+python backend/analysis/search_notes.py "CRWN102"
 
 # Conceptual queries (benefits from semantic search)
-python scripts/search_notes.py "project planning and organization"
+python backend/analysis/search_notes.py "project planning and organization"
 ```
 
 #### Search Results
@@ -102,10 +120,10 @@ Each result shows:
 
 ```bash
 # Create indexes (run once)
-python scripts/create_inverted_index.py
+python backend/scripts/create_inverted_index.py
 
 # Then search works fully
-python scripts/search_notes.py "your query"
+python backend/analysis/search_notes.py "your query"
 ```
 
 **Without indexes:** Only semantic search works; FTS returns 0 results.
@@ -118,7 +136,7 @@ python scripts/search_notes.py "your query"
 ```bash
 # After adding new notes, update indexes:
 python -c "
-from main import NotesDatabase
+from backend.scripts.main import NotesDatabase
 db = NotesDatabase()
 table = db.get_or_create_table()
 table.optimize()  # Updates existing indexes with new data
@@ -126,12 +144,12 @@ print('✅ Indexes updated with new data')
 "
 
 # Or recreate indexes entirely:
-python scripts/create_inverted_index.py
+python backend/scripts/create_inverted_index.py
 ```
 
 **Best practice:** Run `table.optimize()` after adding new notes to ensure full search coverage.
 
-### 🧠 Semantic Clustering (`scripts/run_bertopic.py`)
+### 🧠 Semantic Clustering (`backend/analysis/run_bertopic.py`)
 
 Advanced topic modeling using BERTopic with LLM-enhanced labeling.
 
@@ -143,11 +161,30 @@ Advanced topic modeling using BERTopic with LLM-enhanced labeling.
 
 **Usage:**
 ```bash
-python scripts/run_bertopic.py
+python backend/analysis/run_bertopic.py
 ```
 - Preserves semantic integrity over spatial proximity
 
-### 📊 Check Notes (`scripts/check_notes.py`)
+### 🛡️ Backup & Restore
+
+Manage your database backups.
+
+**View Backups:**
+```bash
+python backend/backup/list_tables.py
+```
+
+**Restore Backup:**
+```bash
+python backend/backup/restore_notes.py
+```
+
+## Data Pipeline
+
+1. **Fetch Notes** → Use [mcp-apple-notes](https://github.com/russellelliott/mcp-apple-notes)
+2. **Process** → Create embeddings and indexes
+3. **Cluster** → `backend/analysis/run_bertopic.py` (semantic grouping)
+4. **Search** → `backend/analysis/search_notes.py` (query & discover)
 
 Database diagnostics and overview tool.
 
@@ -160,85 +197,6 @@ Database diagnostics and overview tool.
 
 **Usage:**
 ```bash
-python scripts/check_notes.py
-```
-
-**Sample Output:**
-```
-📋 Cache Info:
-   Last sync: 2024-11-22 10:30:15
-
-📊 Database Stats:
-   Total chunks: 1,247
-   Unique notes: 203
-
-📊 Chunks per Note (top 20):
-     15 chunks  →  Machine Learning Research Notes
-      8 chunks  →  Project Planning Documentation
-      6 chunks  →  Meeting Notes - Q4 Review
-   ...
-```
-
-## Database Management
-
-### 🔧 Fix Database (`fix_db.py`)
-
-Repairs database integrity by recreating tables from backup data.
-
-**Operations:**
-- Recreates `notes` table from `notes_new` backup
-- Cleans up temporary test tables
-- Verifies data integrity post-repair
-- Provides detailed success/failure reporting
-
-**Usage:**
-```bash
-python fix_db.py
-```
-
-**Use When:**
-- Database corruption detected
-- Table structure issues
-- After failed migrations
-- Inconsistent data states
-
-### 🐛 Debug Database (`debug_db.py`)
-
-Comprehensive database inspection and diagnostics.
-
-**Diagnostics:**
-- Lists all available tables
-- Shows record counts per table
-- Identifies table access issues
-- Displays database file paths
-- Error reporting for problematic tables
-
-**Usage:**
-```bash
-python debug_db.py
-```
-
-**Output Example:**
-```
-Available tables:
-  - notes
-    Records: 1,247
-  - notes_new
-    Records: 1,247
-  - test-cluster-20241122
-    Error reading table: Schema mismatch
-
-Database path: /Users/user/.mcp-apple-notes/data
-```
-
-## Data Pipeline
-
-1. **Fetch Notes** → Use [mcp-apple-notes](https://github.com/russellelliott/mcp-apple-notes)
-2. **Process & Embed** → `scripts/fetch_and_chunk_notes.py` (creates embeddings)
-3. **Analyze** → `scripts/check_notes.py` (verify data)
-4. **Cluster** → `scripts/run_bertopic.py` (semantic grouping)
-5. **Search** → `scripts/search_notes.py` (query & discover)
-
 ## Performance
 
 - **2x faster clustering** vs TypeScript (5s vs 11s for 200 notes)
@@ -266,14 +224,11 @@ The system uses LanceDB with the following key fields:
 **No search results / FTS returning 0 results:**
 ```bash
 # 1. Check if inverted indexes exist
-python scripts/create_inverted_index.py
+python backend/scripts/create_inverted_index.py
 
-# 2. Verify data exists
-python scripts/check_notes.py
-
-# 3. Test with different query types
-python scripts/search_notes.py "machine learning"  # conceptual
-python scripts/search_notes.py "specific term"     # exact match
+# 2. Test with different query types
+python backend/analysis/search_notes.py "machine learning"  # conceptual
+python backend/analysis/search_notes.py "specific term"     # exact match
 ```
 
 **Only getting FTS results (no semantic results):**
@@ -287,12 +242,6 @@ python scripts/search_notes.py "specific term"     # exact match
 - Should now show both `vector_semantic` and `fts` sources
 
 ### Database Issues
-
-**Database errors:**
-```bash
-python debug_db.py             # Diagnose issues
-python fix_db.py               # Attempt repair
-```
 
 **Wrong database path:**
 - Scripts use `~/.mcp-apple-notes/data` (not `~/.mcp-apple-notes-2/data`)
