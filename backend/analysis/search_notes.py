@@ -414,11 +414,11 @@ if __name__ == "__main__":
     import argparse
     
     # Add repo root to path
-    REPO_ROOT = Path(__file__).resolve().parent.parent
+    REPO_ROOT = Path(__file__).resolve().parent.parent.parent
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     
-    from main import NotesDatabase, EmbeddingModel
+    from backend.scripts.main import NotesDatabase, EmbeddingModel
     
     parser = argparse.ArgumentParser(description="Search notes in the database")
     parser.add_argument("query", nargs="?", default="", help="Search query")

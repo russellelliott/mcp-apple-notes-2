@@ -1,4 +1,5 @@
 import os
+import sys  # Added sys
 import lancedb
 import pandas as pd
 import numpy as np
@@ -11,8 +12,13 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from contextlib import asynccontextmanager
 
+# Add repo root to path so we can import from backend
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 # Import search logic
-from scripts.search_notes import search_and_combine_results
+from backend.analysis.search_notes import search_and_combine_results
 
 # Configuration
 # NOTE: Matching streamlit_app.py configuration

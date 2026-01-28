@@ -8,11 +8,11 @@ from pathlib import Path
 import lancedb
 
 # Add repo root to path
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from main import NotesDatabase
+from backend.scripts.main import NotesDatabase
 
 def main():
     # Connect to database

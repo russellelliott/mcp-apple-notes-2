@@ -10,7 +10,7 @@ echo "Indexing first 10 notes..."
 python - <<'PYCODE'
 import asyncio, json, sys
 sys.path.insert(0, '.')
-from main import NotesIndexer
+from backend.scripts.main import NotesIndexer
 
 async def run():
     indexer = NotesIndexer()
