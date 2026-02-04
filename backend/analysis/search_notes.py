@@ -81,7 +81,7 @@ def search_and_combine_results(
     notes_table: Any,
     query: str,
     display_limit: int = 5,
-    min_cosine_similarity: float = 0.01,
+    max_distance: float = 2.0,
     compute_query_embedding: Optional[Callable[[str], List[float]]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -148,10 +148,8 @@ def search_and_combine_results(
                     distance = float(distance)
                 except Exception:
                     distance = 0.0
-                # For L2 distance, convert to similarity score (lower distance = higher similarity)
-                # Use inverse distance as similarity score, normalized to 0-1 range
-                similarity_score = 1.0 / (1.0 + distance)
-                if similarity_score > min_cosine_similarity:
+                
+                if distance <= max_distance:
                     title = _get_field(chunk, "title", "<untitled>")
                     chunk_index = _get_field(chunk, "chunk_index", 0)
                     chunk_id = f"{title}_{chunk_index}"

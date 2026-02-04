@@ -169,12 +169,12 @@ async def get_points():
     return records
 
 @app.get("/search", response_model=SearchResponse)
-async def search(q: str = Query(..., min_length=1), limit: int = 5):
+async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_distance: float = 0.8):
     """Search notes and return matches + IDs"""
     if state.table is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    print(f"🔍 Searching for: {q}")
+    print(f"🔍 Searching for: {q} (threshold: {max_distance})")
     
     # helper for search_and_combine_results
     embedding_fn = lambda query: get_query_embedding(query)
@@ -184,6 +184,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 5):
             state.table, 
             q, 
             display_limit=limit, 
+            max_distance=max_distance,
             compute_query_embedding=embedding_fn
         )
     except Exception as e:
