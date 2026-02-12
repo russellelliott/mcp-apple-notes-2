@@ -1,4 +1,4 @@
-# MCP Apple Notes
+# MCP Server
 
 ![MCP Apple Notes](./images/logo.png)
 

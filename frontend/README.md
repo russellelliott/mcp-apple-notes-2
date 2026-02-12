@@ -1,4 +1,4 @@
-# Frontend
+# Frontend: Cluster Display And Search
 
 This project is an Electron application based on [Electron React Boilerplate](https://github.com/electron-react-boilerplate/electron-react-boilerplate).
 
