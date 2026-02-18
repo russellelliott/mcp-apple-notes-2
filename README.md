@@ -6,17 +6,27 @@ This system integrates Apple Notes with the Model Context Protocol (MCP), provid
 
 We provide convenience scripts in the root directory to manage the application lifecycle.
 
-### 1. Data Pipeline
-To update the incremental note data and run the BERTopic analysis:
+### 1. Standard Pipeline
+To process **all** new or modified notes and update the analysis:
 
 ```bash
 ./run_pipeline.sh
 ```
-This script will:
-- Run the MCP server CLI (`server/cli.ts`) to fetch incremental updates.
-- Run the Python analysis (`backend/analysis/run_bertopic.py`) to cluster and verify data.
+This script runs the full incremental update process:
+- Fetches all new/modified notes from Apple Notes.
+- Updates the vector database.
+- Runs the BERTopic analysis to update clusters.
 
-### 2. Start Application
+### 2. Limited Pipeline (Batched)
+To process a specific number of notes:
+
+```bash
+./run_pipeline_limit.sh <number_of_notes>
+# Example: ./run_pipeline_limit.sh 50
+```
+This script iterates through notes and stops when the limit is reached. It is particularly useful for fetching older notes that may not have been covered in previous runs.
+
+### 3. Start Application
 To start the full application (Backend API + Frontend UI):
 
 ```bash

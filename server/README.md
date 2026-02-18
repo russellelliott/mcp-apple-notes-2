@@ -57,15 +57,15 @@ Both incremental strategies share these core features:
 #### Default Incremental
 `bun cli.ts` or `bun cli.ts --mode=incremental`
 
-- **Usage**: Good for daily usage or when you want to control the batch size.
-- **Specific**: Useful when you want to process a specific number of recent notes (via `--max`).
+**Usage**: Iteratively checks notes (skipping unchanged ones) up to a limit.
+**Catch-up**: Excellent for initial bulk indexing or processing older notes that verified as "unchanged" in previous runs. Use `--max` to batch this process (e.g., process 1000 notes at a time).
 
 #### Incremental Since
 `bun cli.ts --mode=incremental-since`
 
-- **Date-Based**: Fetches all notes modified after the latest modification date in the database.
-- **Fastest for Large Sets**: Avoids checking metadata for every single note if you haven't synced in a while.
-- **Best for**: Processing all notes since the last run without knowing the exact count.
+**Usage**: The best mode for daily usage.
+**Fastest**: Only asks Apple Notes for items modified *after* the last sync date. Efficiently ignores the thousands of old, unchanged notes.
+**Best for**: Routine updates to grab just what you've worked on recently.
 
 ### Fresh Mode
 `bun cli.ts --mode=fresh`
