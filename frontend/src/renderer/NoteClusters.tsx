@@ -24,8 +24,19 @@ export default function NoteClusters() {
   const [data, setData] = useState<NotePoint[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 500);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -43,23 +54,28 @@ export default function NoteClusters() {
     fetchData();
   }, []);
 
-  const handleSearch = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const query = e.target.value;
-    setSearchQuery(query);
-    
-    if (!query.trim()) {
-      setSearchResults([]);
-      return;
-    }
-
-    try {
-      // Use a larger limit (1000) and filter by max_distance (default 0.8 is fine, but being explicit)
-      const response = await axios.get(`http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=1000&max_distance=0.8`);
-      setSearchResults(response.data.results || []);
-    } catch (error) {
-      console.error('Error searching:', error);
-    }
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
   };
+
+  useEffect(() => {
+    const runSearch = async () => {
+      if (!debouncedQuery.trim()) {
+        setSearchResults([]);
+        return;
+      }
+
+      try {
+        // Use a larger limit (1000) and filter by max_distance (default 0.8 is fine, but being explicit)
+        const response = await axios.get(`http://127.0.0.1:8000/search?q=${encodeURIComponent(debouncedQuery)}&limit=1000&max_distance=0.8`);
+        setSearchResults(response.data.results || []);
+      } catch (error) {
+        console.error('Error searching:', error);
+      }
+    };
+
+    runSearch();
+  }, [debouncedQuery]);
 
   const searchScoreMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -222,7 +238,9 @@ export default function NoteClusters() {
                                 border: '1px solid #eee',
                                 cursor: 'pointer',
                                 transition: 'all 0.2s',
-                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word'
                             }}
                         >
                              <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#007bff' }}>
