@@ -301,7 +301,10 @@ export default function NoteClusters() {
                             xaxis: { title: 'X', showgrid: false, zeroline: false, showticklabels: false },
                             yaxis: { title: 'Y', showgrid: false, zeroline: false, showticklabels: false },
                             zaxis: { title: 'Z', showgrid: false, zeroline: false, showticklabels: false },
-                            aspectmode: 'cube'
+                            aspectmode: 'cube',
+                            camera: {
+                                projection: { type: 'orthographic' }
+                            }
                         },
                         margin: { t: 40, r: 20, b: 20, l: 20 },
                         legend: {
