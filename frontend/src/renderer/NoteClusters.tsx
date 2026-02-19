@@ -53,7 +53,8 @@ export default function NoteClusters() {
     }
 
     try {
-      const response = await axios.get(`http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=20`);
+      // Use a larger limit (1000) and filter by max_distance (default 0.8 is fine, but being explicit)
+      const response = await axios.get(`http://127.0.0.1:8000/search?q=${encodeURIComponent(query)}&limit=1000&max_distance=0.8`);
       setSearchResults(response.data.results || []);
     } catch (error) {
       console.error('Error searching:', error);
