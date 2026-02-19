@@ -190,13 +190,12 @@ topic_model = BERTopic(
         min_dist=0.0, 
         metric='cosine'
     ),
-    # HDBSCAN: min_cluster_size=15, min_samples=10.
-    # min_samples=10 makes it stricter, forcing more into outliers (-1)
     hdbscan_model=HDBSCAN(
-        min_cluster_size=15, 
-        min_samples=10,         
-        cluster_selection_method='eom', 
-        prediction_data=True
+        min_cluster_size=10,     # REDUCED from 15 - allows smaller clusters
+        min_samples=3,           # VERY PERMISSIVE (was 10)
+        cluster_selection_method='eom',
+        prediction_data=True,
+        cluster_selection_epsilon=0.2  # NEW - allows more aggressive merging
     ),
     vectorizer_model=vectorizer_model,
     ctfidf_model=ctfidf_model,
@@ -210,11 +209,73 @@ topics, probs = topic_model.fit_transform(docs, embeddings=vectors)
 
 hierarchical_topics = topic_model.hierarchical_topics(docs)
 
-# Fix High-Confidence Outliers
-# This solves the issue where high-confidence notes are left as outliers (-1)
-# Threshold raised to 0.25 to only move "almost perfect fits"
-print("🎯 Refining outliers using mathematical probability...")
-new_topics = topic_model.reduce_outliers(docs, topics, probabilities=probs, strategy="probabilities", threshold=0.25)
+# === AGGRESSIVE OUTLIER REASSIGNMENT ===
+print("🎯 Aggressively reassigning outliers to nearby clusters...")
+
+# Pass 1: High-confidence outliers (probability-based)
+print("  📊 Pass 1: Probability-based reassignment...")
+new_topics = topic_model.reduce_outliers(
+    docs, 
+    topics, 
+    probabilities=probs, 
+    strategy="probabilities", 
+    threshold=0.05  # VERY LOW - captures weak matches
+)
+outliers_before = sum(1 for t in topics if t == -1)
+outliers_after_p1 = sum(1 for t in new_topics if t == -1)
+print(f"    ✓ Reassigned {outliers_before - outliers_after_p1} outliers ({outliers_after_p1} remaining)")
+
+topic_model.update_topics(docs, topics=new_topics)
+
+# Pass 2: Topic representation similarity (c-TF-IDF based)
+print("  📊 Pass 2: c-TF-IDF similarity reassignment...")
+new_topics = topic_model.reduce_outliers(
+    docs, 
+    new_topics, 
+    strategy="c-tf-idf",
+    threshold=0.05  # VERY LOW
+)
+outliers_after_p2 = sum(1 for t in new_topics if t == -1)
+print(f"    ✓ Reassigned {outliers_after_p1 - outliers_after_p2} more outliers ({outliers_after_p2} remaining)")
+
+topic_model.update_topics(docs, topics=new_topics)
+
+# Pass 3: Embedding distance (cosine similarity in vector space)
+print("  📊 Pass 3: Embedding-based reassignment...")
+new_topics = topic_model.reduce_outliers(
+    docs,
+    new_topics,
+    strategy="embeddings",
+    embeddings=vectors,
+    threshold=0.5  # Cosine similarity threshold (0-1, higher = stricter)
+)
+outliers_after_p3 = sum(1 for t in new_topics if t == -1)
+print(f"    ✓ Reassigned {outliers_after_p2 - outliers_after_p3} more outliers ({outliers_after_p3} remaining)")
+
+topic_model.update_topics(docs, topics=new_topics)
+
+# Pass 4: Custom manual reassignment for stubborn outliers
+print("  📊 Pass 4: Manual probability check for remaining outliers...")
+reassigned_manual = 0
+for idx, (topic, prob_dist) in enumerate(zip(new_topics, probs)):
+    if topic == -1:  # Still an outlier
+        # Get probabilities for all real topics (skip -1 at index 0)
+        if len(prob_dist) > 1:
+            topic_probs = prob_dist[1:]  # Skip outlier probability
+            max_prob = max(topic_probs)
+            
+            # If ANY cluster has >3% probability, assign to it
+            if max_prob > 0.03:  # VERY PERMISSIVE
+                best_topic = topic_probs.argmax()
+                new_topics[idx] = best_topic
+                reassigned_manual += 1
+
+print(f"    ✓ Manually reassigned {reassigned_manual} stubborn outliers")
+
+outliers_final = sum(1 for t in new_topics if t == -1)
+total_reassigned = outliers_before - outliers_final
+print(f"\n✨ Total outlier reduction: {outliers_before} → {outliers_final} ({total_reassigned} reassigned, {100*(1-outliers_final/outliers_before):.1f}% reduction)")
+
 topic_model.update_topics(docs, topics=new_topics)
 
 # --- 5. SCHEMA MAPPING & PERSISTENCE ---
