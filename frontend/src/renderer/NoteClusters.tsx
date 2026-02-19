@@ -163,11 +163,14 @@ export default function NoteClusters() {
           let size = 8;
           let opacity = 0.6;
           let lw = 0;
-          let lc = 'white';
+          // Default line color to transparent so no outline is visible
+          let lc = 'rgba(0,0,0,0)'; 
 
           if (score !== undefined) {
              size = 15 + (score * 20); 
              opacity = 0.9;
+             // Highlight search results slightly if desired, or keep no outline
+             // lw = 1; lc = 'white'; 
           } else if (searchResults.length > 0) {
              opacity = 0.1;
              size = 5;
@@ -178,6 +181,7 @@ export default function NoteClusters() {
               if (size < 12) size = 12;
               opacity = 1.0;
               lw = 2;
+              // Add a dark outline on hover for contrast
               lc = '#333';
           }
           
