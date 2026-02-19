@@ -70,7 +70,7 @@ def load_and_process_data():
         embeddings = np.stack(df['vector'].values)
         
         reducer = umap.UMAP(
-            n_components=2, 
+            n_components=3, 
             random_state=42,
             n_neighbors=30,
             min_dist=0.0,
@@ -81,6 +81,7 @@ def load_and_process_data():
         
         df['umap_x'] = projections[:, 0]
         df['umap_y'] = projections[:, 1]
+        df['umap_z'] = projections[:, 2]
         
         # Ensure ID/Key columns exist for frontend
         df['chunk_index'] = df['chunk_index'].fillna(0).astype(int)
@@ -127,6 +128,7 @@ class NotePoint(BaseModel):
     cluster_label: str
     umap_x: float
     umap_y: float
+    umap_z: float
     creation_date: Optional[Any] = None
     modification_date: Optional[Any] = None
     # We avoid sending full content or vector to keep payload light, unless requested
@@ -163,7 +165,7 @@ async def get_points():
     
     records = valid_df[[
         'unique_key', 'title', 'chunk_index', 'cluster_label', 
-        'umap_x', 'umap_y', 'creation_date', 'modification_date'
+        'umap_x', 'umap_y', 'umap_z', 'creation_date', 'modification_date'
     ]].to_dict(orient='records')
     
     return records

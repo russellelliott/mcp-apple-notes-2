@@ -9,6 +9,7 @@ interface NotePoint {
   cluster_label: string;
   umap_x: number;
   umap_y: number;
+  umap_z: number;
 }
 
 interface SearchResult {
@@ -102,7 +103,7 @@ export default function NoteClusters() {
 
   const { clusterGroups, clusterColors } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
-    const processingGroups: { [key: string]: { x: number[]; y: number[]; ids: string[]; text: string[] } } = {};
+    const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[] } } = {};
     let globalSumX = 0;
     let globalSumY = 0;
     let count = 0;
@@ -111,10 +112,11 @@ export default function NoteClusters() {
       data.forEach(point => {
           const label = point.cluster_label || 'Unclustered';
           if (!processingGroups[label]) {
-              processingGroups[label] = { x: [], y: [], ids: [], text: [] };
+              processingGroups[label] = { x: [], y: [], z: [], ids: [], text: [] };
           }
           processingGroups[label].x.push(point.umap_x);
           processingGroups[label].y.push(point.umap_y);
+          processingGroups[label].z.push(point.umap_z);
           processingGroups[label].ids.push(point.unique_key);
           processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index}<br>Cluster: ${label}`);
           
@@ -188,10 +190,11 @@ export default function NoteClusters() {
       return {
         x: group.x,
         y: group.y,
+        z: group.z,
         text: group.text,
         customdata: group.ids,
         mode: 'markers',
-        type: 'scatter',
+        type: 'scatter3d',
         name: label,
         marker: { 
             size: markerSizes,
@@ -285,23 +288,18 @@ export default function NoteClusters() {
                 <Plot
                     data={plotData}
                     layout={{
-                        title: 'Notes Landscape',
+                        title: 'Notes Landscape (3D)',
                         autosize: true,
                         hovermode: 'closest',
                         showlegend: true,
                         paper_bgcolor: 'white',
-                        plot_bgcolor: 'white',
+                        scene: {
+                            xaxis: { title: 'X', showgrid: false, zeroline: false, showticklabels: false },
+                            yaxis: { title: 'Y', showgrid: false, zeroline: false, showticklabels: false },
+                            zaxis: { title: 'Z', showgrid: false, zeroline: false, showticklabels: false },
+                            aspectmode: 'cube'
+                        },
                         margin: { t: 40, r: 20, b: 20, l: 20 },
-                        xaxis: {
-                            showgrid: false,
-                            zeroline: false,
-                            showticklabels: false
-                        },
-                        yaxis: {
-                            showgrid: false,
-                            zeroline: false,
-                            showticklabels: false
-                        },
                         legend: {
                             orientation: 'v',
                             y: 1,
