@@ -48,30 +48,31 @@ def display_clusters():
     if outliers:
         print(f"Outliers: {outliers[0]['count']} notes")
 
-    # 2. List off all the titles of the notes in a given cluster
-    print("\n" + "="*50)
-    print("DETAILED CLUSTER CONTENTS")
-    print("="*50)
-    
-    # Sort clusters by ID for consistent output, or by count? 
-    # The list_clusters function sorts by count descending.
-    
-    for cluster in real_clusters:
-        cluster_id = cluster['cluster_id']
-        label = cluster['cluster_label']
-        count = cluster['count']
+    # Ask user if they want to see detailed notes
+    response = input("\nDo you want to see the detailed list of notes? (y/N): ").strip().lower()
+    if response == 'y':
+        # 2. List off all the titles of the notes in a given cluster
+        print("\n" + "="*50)
+        print("DETAILED CLUSTER CONTENTS")
+        print("="*50)
         
-        print(f"\n📌 Cluster {cluster_id}: \"{label}\" ({count} notes)")
-        
-        notes = get_notes_in_cluster(notes_table, cluster_id)
-        for i, note in enumerate(notes, 1):
-            print(f"   {i}. {note['title']}")
+        for cluster in real_clusters:
+            cluster_id = cluster['cluster_id']
+            label = cluster['cluster_label']
+            count = cluster['count']
+            
+            print(f"\n📌 Cluster {cluster_id}: \"{label}\" ({count} notes)")
+            
+            notes = get_notes_in_cluster(notes_table, cluster_id)
+            for i, note in enumerate(notes, 1):
+                print(f"   {i}. {note['title']}")
 
-    if outliers:
-        print(f"\n📌 Outliers ({outliers[0]['count']} notes)")
-        notes = get_notes_in_cluster(notes_table, '-1')
-        for i, note in enumerate(notes, 1):
-            print(f"   {i}. {note['title']}")
+        if outliers:
+            print(f"\n📌 Outliers ({outliers[0]['count']} notes)")
+            notes = get_notes_in_cluster(notes_table, '-1')
+            for i, note in enumerate(notes, 1):
+                print(f"   {i}. {note['title']}")
+
 
 if __name__ == "__main__":
     display_clusters()
