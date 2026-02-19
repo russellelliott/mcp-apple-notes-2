@@ -29,16 +29,6 @@ export default function NoteClusters() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-    }, 500);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [searchQuery]);
-
-  useEffect(() => {
     const fetchData = async () => {
       try {
         const response = await axios.get('http://127.0.0.1:8000/points');
@@ -55,26 +45,53 @@ export default function NoteClusters() {
   }, []);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
+    const val = e.target.value;
+    setSearchQuery(val);
+    if (val === '') {
+      setDebouncedQuery('');
+      setSearchResults([]);
+    }
   };
 
   useEffect(() => {
+    // If the search query is empty, we don't need a debounce timer
+    // because we handled it immediately in handleSearch for instant feedback.
+    if (searchQuery === '') return;
+
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 2000);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [searchQuery]);
+
+  useEffect(() => {
+    let active = true;
+
     const runSearch = async () => {
+      // If empty query, clear results immediately (though handleSearch does this too)
       if (!debouncedQuery.trim()) {
-        setSearchResults([]);
+        if (active) setSearchResults([]);
         return;
       }
 
       try {
-        // Use a larger limit (1000) and filter by max_distance (default 0.8 is fine, but being explicit)
         const response = await axios.get(`http://127.0.0.1:8000/search?q=${encodeURIComponent(debouncedQuery)}&limit=1000&max_distance=0.8`);
-        setSearchResults(response.data.results || []);
+        if (active) {
+          setSearchResults(response.data.results || []);
+        }
       } catch (error) {
         console.error('Error searching:', error);
       }
     };
 
     runSearch();
+
+    return () => {
+      active = false;
+    };
   }, [debouncedQuery]);
 
   const searchScoreMap = useMemo(() => {
@@ -83,48 +100,53 @@ export default function NoteClusters() {
     return map;
   }, [searchResults]);
 
-  // Logic calculation - always run it, but safely handle empty data
-  const clusterGroups: { [key: string]: { x: number[]; y: number[]; ids: string[]; text: string[] } } = {};
-  let globalSumX = 0;
-  let globalSumY = 0;
-  let count = 0;
+  const { clusterGroups, clusterColors } = useMemo(() => {
+    // Logic calculation - always run it, but safely handle empty data
+    const processingGroups: { [key: string]: { x: number[]; y: number[]; ids: string[]; text: string[] } } = {};
+    let globalSumX = 0;
+    let globalSumY = 0;
+    let count = 0;
 
-  if (data.length > 0) {
-    data.forEach(point => {
-        const label = point.cluster_label || 'Unclustered';
-        if (!clusterGroups[label]) {
-            clusterGroups[label] = { x: [], y: [], ids: [], text: [] };
-        }
-        clusterGroups[label].x.push(point.umap_x);
-        clusterGroups[label].y.push(point.umap_y);
-        clusterGroups[label].ids.push(point.unique_key);
-        clusterGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index}<br>Cluster: ${label}`);
+    if (data.length > 0) {
+      data.forEach(point => {
+          const label = point.cluster_label || 'Unclustered';
+          if (!processingGroups[label]) {
+              processingGroups[label] = { x: [], y: [], ids: [], text: [] };
+          }
+          processingGroups[label].x.push(point.umap_x);
+          processingGroups[label].y.push(point.umap_y);
+          processingGroups[label].ids.push(point.unique_key);
+          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index}<br>Cluster: ${label}`);
+          
+          globalSumX += point.umap_x;
+          globalSumY += point.umap_y;
+          count++;
+      });
+    }
+    
+    const centerX = count > 0 ? globalSumX / count : 0;
+    const centerY = count > 0 ? globalSumY / count : 0;
+
+    const processingColors: { [key: string]: string } = {};
+    
+    Object.keys(processingGroups).forEach(label => {
+        const points = processingGroups[label];
+        const cx = points.x.reduce((a, b) => a + b, 0) / points.x.length;
+        const cy = points.y.reduce((a, b) => a + b, 0) / points.y.length;
         
-        globalSumX += point.umap_x;
-        globalSumY += point.umap_y;
-        count++;
+        const dx = cx - centerX;
+        const dy = cy - centerY;
+        let angle = (Math.atan2(dy, dx) * 180 / Math.PI);
+        if (angle < 0) angle += 360;
+        
+        processingColors[label] = `hsl(${Math.round(angle)}, 75%, 45%)`;
     });
-  }
-  
-  const centerX = count > 0 ? globalSumX / count : 0;
-  const centerY = count > 0 ? globalSumY / count : 0;
 
-  const clusterColors: { [key: string]: string } = {};
-  
-  Object.keys(clusterGroups).forEach(label => {
-      const points = clusterGroups[label];
-      const cx = points.x.reduce((a, b) => a + b, 0) / points.x.length;
-      const cy = points.y.reduce((a, b) => a + b, 0) / points.y.length;
-      
-      const dx = cx - centerX;
-      const dy = cy - centerY;
-      let angle = (Math.atan2(dy, dx) * 180 / Math.PI);
-      if (angle < 0) angle += 360;
-      
-      clusterColors[label] = `hsl(${Math.round(angle)}, 75%, 45%)`;
-  });
+    return { clusterGroups: processingGroups, clusterColors: processingColors };
+  }, [data]);
 
-  const plotData: any[] = Object.keys(clusterGroups).map(label => {
+  const plotData: any[] = useMemo(() => {
+    return Object.keys(clusterGroups).map(label => {
       const group = clusterGroups[label];
       
       const markerSizes: number[] = [];
@@ -182,7 +204,8 @@ export default function NoteClusters() {
         },
         hoverinfo: 'text'
       };
-  });
+    });
+  }, [clusterGroups, clusterColors, searchScoreMap, hoveredId, searchResults.length]);
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
