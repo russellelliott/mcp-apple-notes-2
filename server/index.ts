@@ -895,84 +895,165 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
   // Step 1: First fetch all titles, creation dates, and modification dates
   console.log('\nStep 1: Fetching note titles, creation dates, and modification dates...');
   
-  // First get the total count quickly
-  console.log('📊 Getting total note count...');
-  const totalNotesCount = await runJxa(`
-    const app = Application('Notes');
-    return app.notes().length;
-  `) as number;
-  
-  const limitCount = maxNotes ? Math.min(totalNotesCount, maxNotes) : totalNotesCount;
-  console.log(`📋 Found ${totalNotesCount} notes${maxNotes ? `, limiting to ${limitCount}` : ''}`);
-  
-  // Process notes in batches with progress updates
+  // Prepare batching variables. For incremental-since with a known threshold we avoid fetching total count.
   const TITLE_BATCH_SIZE = 50;
   const allNoteTitles: Array<{
     title: string;
     creation_date: string;
     modification_date: string;
   }> = [];
-  
+
   let titleProgress = 0;
-  const totalTitleBatches = Math.ceil(limitCount / TITLE_BATCH_SIZE);
-  
-  console.log(`🔄 Processing titles in ${totalTitleBatches} batches of ${TITLE_BATCH_SIZE}...`);
-  
-  for (let batchStart = 0; batchStart < limitCount; batchStart += TITLE_BATCH_SIZE) {
-    const batchEnd = Math.min(batchStart + TITLE_BATCH_SIZE, limitCount);
-    const batchNum = Math.floor(batchStart / TITLE_BATCH_SIZE) + 1;
-    
-    console.log(`📦 [${batchNum}/${totalTitleBatches}] Fetching titles ${batchStart + 1}-${batchEnd}...`);
-    
-    const batchTitlesData = await runJxa(`
+  let totalNotesCount = 0;
+  let limitCount = 0;
+  let totalTitleBatches = 0;
+
+  if (!(mode === 'incremental-since' && thresholdDate !== null)) {
+    // First get the total count quickly (skip when incremental-since has a threshold)
+    console.log('📊 Getting total note count...');
+    totalNotesCount = await runJxa(`
       const app = Application('Notes');
-      const notes = app.notes();
-      const startIdx = ${batchStart};
-      const endIdx = ${batchEnd};
-      const noteTitles = [];
-      
-      for (let i = startIdx; i < endIdx; i++) {
+      return app.notes().length;
+    `) as number;
+
+    limitCount = maxNotes ? Math.min(totalNotesCount, maxNotes) : totalNotesCount;
+    console.log(`📋 Found ${totalNotesCount} notes${maxNotes ? `, limiting to ${limitCount}` : ''}`);
+
+    totalTitleBatches = Math.ceil(limitCount / TITLE_BATCH_SIZE);
+    console.log(`🔄 Processing titles in ${totalTitleBatches} batches of ${TITLE_BATCH_SIZE}...`);
+  } else {
+    // In incremental-since mode with a threshold, we'll fetch recent notes via JXA whose filter
+    console.log(`ℹ️ incremental-since detected — skipping full count and batched title fetch`);
+  }
+  
+  if (mode === 'incremental-since' && thresholdDate !== null) {
+    console.log(`📦 incremental-since mode: fetching only notes newer than ${new Date(thresholdDate).toLocaleString()}...`);
+    // Use JXA whose filter to fetch only notes with creationDate or modificationDate greater than threshold
+    try {
+      const recentNotesData = await runJxa(`
+        const app = Application('Notes');
+        app.includeStandardAdditions = true;
+        const targetDate = new Date("${new Date(thresholdDate).toISOString()}");
+        const filter = { _or: [ { creationDate: { _greaterThan: targetDate } }, { modificationDate: { _greaterThan: targetDate } } ] };
         try {
-          const note = notes[i];
-          noteTitles.push({
-            title: note.name(),
-            creation_date: note.creationDate().toLocaleString(),
-            modification_date: note.modificationDate().toLocaleString()
-          });
-        } catch (error) {
-          // Skip problematic notes
-          continue;
+          const matches = app.notes.whose(filter);
+          const results = [];
+          for (let i = 0; i < matches.length; i++) {
+            try {
+              const note = matches[i];
+              results.push({
+                title: note.name(),
+                creation_date: note.creationDate().toLocaleString(),
+                modification_date: note.modificationDate().toLocaleString()
+              });
+            } catch (e) {
+              continue;
+            }
+          }
+          return JSON.stringify(results);
+        } catch (e) {
+          return "[]";
         }
-      }
-      
-      return JSON.stringify(noteTitles);
-    `);
-    
-    let batchTitles = JSON.parse(batchTitlesData as string) as Array<{
-      title: string;
-      creation_date: string;
-      modification_date: string;
-    }>;
-    
-    // For incremental-since mode, check if we've reached older notes
-    if (thresholdDate !== null) {
-      // Find the first note that is older than or equal to the threshold
-      const cutoffIndex = batchTitles.findIndex(n => new Date(n.modification_date).getTime() <= thresholdDate!);
-      
-      if (cutoffIndex !== -1) {
-        console.log(`🛑 Found note overlapping with threshold at index ${cutoffIndex} in batch. Stopping fetch.`);
-        // Take only the new notes
-        batchTitles = batchTitles.slice(0, cutoffIndex);
+      `);
+
+      const recent = JSON.parse(recentNotesData as string) as Array<{
+        title: string;
+        creation_date: string;
+        modification_date: string;
+      }>;
+
+      // Respect maxNotes limit if provided
+      const sliceLimit = maxNotes ? Math.min(recent.length, maxNotes) : recent.length;
+      const sliced = recent.slice(0, sliceLimit);
+      allNoteTitles.push(...sliced);
+      console.log(`✅ Got ${sliced.length} recent titles (incremental-since)`);
+    } catch (e) {
+      console.log(`⚠️ incremental-since JXA fetch failed, falling back to batched fetch: ${(e as Error).message}`);
+      // Fallback to previous batched approach if specialized fetch fails
+      for (let batchStart = 0; batchStart < limitCount; batchStart += TITLE_BATCH_SIZE) {
+        const batchEnd = Math.min(batchStart + TITLE_BATCH_SIZE, limitCount);
+        const batchNum = Math.floor(batchStart / TITLE_BATCH_SIZE) + 1;
+
+        console.log(`📦 [${batchNum}/${totalTitleBatches}] Fetching titles ${batchStart + 1}-${batchEnd}...`);
+
+        const batchTitlesData = await runJxa(`
+          const app = Application('Notes');
+          const notes = app.notes();
+          const startIdx = ${batchStart};
+          const endIdx = ${batchEnd};
+          const noteTitles = [];
+          
+          for (let i = startIdx; i < endIdx; i++) {
+            try {
+              const note = notes[i];
+              noteTitles.push({
+                title: note.name(),
+                creation_date: note.creationDate().toLocaleString(),
+                modification_date: note.modificationDate().toLocaleString()
+              });
+            } catch (error) {
+              // Skip problematic notes
+              continue;
+            }
+          }
+          
+          return JSON.stringify(noteTitles);
+        `);
+
+        let batchTitles = JSON.parse(batchTitlesData as string) as Array<{
+          title: string;
+          creation_date: string;
+          modification_date: string;
+        }>;
+
         allNoteTitles.push(...batchTitles);
-        console.log(`✅ [${batchNum}/${totalTitleBatches}] Got ${batchTitles.length} titles (truncated)`);
-        break; // Stop fetching more batches
+        titleProgress = batchEnd;
+
+        console.log(`✅ [${batchNum}/${totalTitleBatches}] Got ${batchTitles.length} titles (${titleProgress}/${limitCount} total)`);
       }
     }
-    
-    allNoteTitles.push(...batchTitles);
-    titleProgress = batchEnd;
-    
-    console.log(`✅ [${batchNum}/${totalTitleBatches}] Got ${batchTitles.length} titles (${titleProgress}/${limitCount} total)`);
+  } else {
+    for (let batchStart = 0; batchStart < limitCount; batchStart += TITLE_BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + TITLE_BATCH_SIZE, limitCount);
+      const batchNum = Math.floor(batchStart / TITLE_BATCH_SIZE) + 1;
+      
+      console.log(`📦 [${batchNum}/${totalTitleBatches}] Fetching titles ${batchStart + 1}-${batchEnd}...`);
+      
+      const batchTitlesData = await runJxa(`
+        const app = Application('Notes');
+        const notes = app.notes();
+        const startIdx = ${batchStart};
+        const endIdx = ${batchEnd};
+        const noteTitles = [];
+        
+        for (let i = startIdx; i < endIdx; i++) {
+          try {
+            const note = notes[i];
+            noteTitles.push({
+              title: note.name(),
+              creation_date: note.creationDate().toLocaleString(),
+              modification_date: note.modificationDate().toLocaleString()
+            });
+          } catch (error) {
+            // Skip problematic notes
+            continue;
+          }
+        }
+        
+        return JSON.stringify(noteTitles);
+      `);
+      
+      let batchTitles = JSON.parse(batchTitlesData as string) as Array<{
+        title: string;
+        creation_date: string;
+        modification_date: string;
+      }>;
+      
+      allNoteTitles.push(...batchTitles);
+      titleProgress = batchEnd;
+      
+      console.log(`✅ [${batchNum}/${totalTitleBatches}] Got ${batchTitles.length} titles (${titleProgress}/${limitCount} total)`);
+    }
   }
   
   console.log(`✨ Fetched ${allNoteTitles.length} note titles in ${((performance.now() - start)/1000).toFixed(1)}s`);
