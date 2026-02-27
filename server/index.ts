@@ -928,6 +928,22 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
   
   if (mode === 'incremental-since' && thresholdDate !== null) {
     console.log(`📦 incremental-since mode: fetching only notes newer than ${new Date(thresholdDate).toLocaleString()}...`);
+    // First perform a lightweight count-only JXA query so we can show how many notes match the threshold
+    try {
+      const recentCount = await runJxa(`
+        const app = Application('Notes');
+        app.includeStandardAdditions = true;
+        const targetDate = new Date("${new Date(thresholdDate).toISOString()}");
+        const filter = { _or: [ { creationDate: { _greaterThan: targetDate } }, { modificationDate: { _greaterThan: targetDate } } ] };
+        try { return app.notes.whose(filter).length; } catch (e) { return 0; }
+      `) as number;
+
+      // Log count (if count succeeded)
+      console.log(`📦 incremental-since: ${recentCount} notes match threshold${maxNotes ? ` (will limit to ${Math.min(recentCount, maxNotes)})` : ''}`);
+    } catch (countErr) {
+      console.log(`⚠️ incremental-since count query failed: ${(countErr as Error).message}`);
+    }
+
     // Use JXA whose filter to fetch only notes with creationDate or modificationDate greater than threshold
     try {
       const recentNotesData = await runJxa(`
