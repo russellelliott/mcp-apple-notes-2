@@ -19,12 +19,77 @@ def load_model(model_dir: Path):
 
 
 def print_all_representative_docs(model, top_n=None, skip_negative=True):
+    # Prefer to use topic_info if available because it may contain
+    # labels, summaries, and representative docs generated during
+    # the original training/representation step.
+    try:
+        topic_info = model.get_topic_info()
+    except Exception:
+        topic_info = None
+
+    out = {}
+    if topic_info is not None and not topic_info.empty:
+        # Detect representative docs column if present
+        rep_col = None
+        cols = [c.lower() for c in topic_info.columns]
+        for c in topic_info.columns:
+            if 'represent' in c.lower():
+                rep_col = c
+                break
+
+        for _, row in topic_info.iterrows():
+            topic = int(row['Topic'])
+            if skip_negative and topic == -1:
+                continue
+
+            # Get representative docs from the topic_info row if present,
+            # otherwise fall back to model.representative_docs_
+            docs = []
+            if rep_col and row.get(rep_col) is not None and row.get(rep_col) != '':
+                docs_val = row.get(rep_col)
+                # It may already be a list, or a stringified list; try to normalize
+                if isinstance(docs_val, (list, tuple)):
+                    docs = list(docs_val)
+                else:
+                    try:
+                        import ast
+                        parsed = ast.literal_eval(docs_val)
+                        if isinstance(parsed, (list, tuple)):
+                            docs = list(parsed)
+                        else:
+                            docs = [str(docs_val)]
+                    except Exception:
+                        docs = [str(docs_val)]
+            else:
+                rep = getattr(model, "representative_docs_", None)
+                if rep and topic in rep:
+                    docs = rep[topic]
+
+            docs = docs if top_n is None else docs[:top_n]
+            out[topic] = docs
+
+            # Print header with optional label/summary if available
+            header = f"--- Topic {topic} ({len(docs)} docs) ---"
+            if 'Label' in topic_info.columns:
+                header += f"  Label: {row['Label']}"
+            elif 'Name' in topic_info.columns:
+                header += f"  Name: {row['Name']}"
+            if 'Summary' in topic_info.columns:
+                header += f"  Summary: {row['Summary']}"
+
+            print(header)
+            for i, d in enumerate(docs, 1):
+                print(f"{i}. {d}")
+            print()
+
+        return out
+
+    # Fallback: use model.representative_docs_
     rep = getattr(model, "representative_docs_", None)
     if rep is None:
         print("No `representative_docs_` attribute found on the model.")
         return {}
 
-    out = {}
     for topic, docs in rep.items():
         if skip_negative and topic == -1:
             continue
@@ -38,16 +103,66 @@ def print_all_representative_docs(model, top_n=None, skip_negative=True):
 
 
 def print_topic_docs(model, topic: int, top_n: int = 5):
+    # Try to use get_topic_info first to provide a richer output
     try:
-        docs = model.get_representative_docs(topic=topic)
+        topic_info = model.get_topic_info()
     except Exception:
-        docs = None
+        topic_info = None
+
+    docs = None
+    label = None
+    summary = None
+    if topic_info is not None and not topic_info.empty:
+        row = topic_info[topic_info['Topic'] == topic]
+        if not row.empty:
+            row = row.iloc[0]
+            # Representative docs column detection
+            rep_col = None
+            for c in topic_info.columns:
+                if 'represent' in c.lower():
+                    rep_col = c
+                    break
+            if rep_col and row.get(rep_col) is not None and row.get(rep_col) != '':
+                val = row.get(rep_col)
+                if isinstance(val, (list, tuple)):
+                    docs = list(val)
+                else:
+                    try:
+                        import ast
+                        parsed = ast.literal_eval(val)
+                        if isinstance(parsed, (list, tuple)):
+                            docs = list(parsed)
+                        else:
+                            docs = [str(val)]
+                    except Exception:
+                        docs = [str(val)]
+
+            # Extract label/summary if present
+            if 'Label' in topic_info.columns:
+                label = row['Label']
+            elif 'Name' in topic_info.columns:
+                label = row['Name']
+            if 'Summary' in topic_info.columns:
+                summary = row['Summary']
+
+    # Fallback to model.get_representative_docs
+    if docs is None:
+        try:
+            docs = model.get_representative_docs(topic=topic)
+        except Exception:
+            docs = None
+
     if not docs:
         print(f"No representative docs found for topic {topic}")
         return {topic: []}
 
     docs = docs[:top_n]
-    print(f"Representative docs for topic {topic}:")
+    header = f"Representative docs for topic {topic}:"
+    if label is not None:
+        header += f"  Label: {label}"
+    if summary is not None:
+        header += f"  Summary: {summary}"
+    print(header)
     for i, d in enumerate(docs, 1):
         print(f"{i}. {d}")
     print()
