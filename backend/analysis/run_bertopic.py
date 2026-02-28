@@ -317,3 +317,13 @@ print(f"💾 Overwriting table '{TABLE_NAME}' with clustered data...")
 db.create_table(TABLE_NAME, data=df, mode="overwrite")
 
 print(f"✨ Success! Identified {len(topic_info)-1} semantically distinct clusters.")
+
+# --- 6. SAVE TOPIC MODEL (safetensors) ---
+MODEL_DIR = Path.home() / ".mcp-apple-notes" / "bertopic_model"
+try:
+    print(f"💾 Saving BERTopic model to {MODEL_DIR} (safetensors)...")
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    topic_model.save(MODEL_DIR, serialization="safetensors", save_ctfidf=True)
+    print("✅ BERTopic model saved.")
+except Exception as e:
+    print(f"⚠️ Failed to save BERTopic model: {e}")
