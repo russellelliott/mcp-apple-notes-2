@@ -11,6 +11,8 @@ from pathlib import Path
 import argparse
 import json
 from bertopic import BERTopic
+import lancedb
+import pandas as pd
 
 
 def load_model(model_dir: Path):
@@ -26,6 +28,17 @@ def print_all_representative_docs(model, top_n=None, skip_negative=True):
         topic_info = model.get_topic_info()
     except Exception:
         topic_info = None
+
+    # Attempt to load notes table for metadata lookup
+    notes_df = None
+    try:
+        DATA_DIR = Path.home() / ".mcp-apple-notes"
+        DB_PATH = DATA_DIR / "data"
+        db = lancedb.connect(DB_PATH)
+        table = db.open_table("notes")
+        notes_df = table.to_pandas()
+    except Exception:
+        notes_df = None
 
     out = {}
     if topic_info is not None and not topic_info.empty:
@@ -79,7 +92,8 @@ def print_all_representative_docs(model, top_n=None, skip_negative=True):
 
             print(header)
             for i, d in enumerate(docs, 1):
-                print(f"{i}. {d}")
+                meta = _find_metadata_for_doc(d, notes_df)
+                print(f"{i}. Title: {meta.get('title','-')}  Created: {meta.get('creation_date','-')}  Modified: {meta.get('modification_date','-')}")
             print()
 
         return out
@@ -96,7 +110,8 @@ def print_all_representative_docs(model, top_n=None, skip_negative=True):
         out[topic] = docs if top_n is None else docs[:top_n]
         print(f"--- Topic {topic} ({len(out[topic])} docs) ---")
         for i, d in enumerate(out[topic], 1):
-            print(f"{i}. {d}")
+            meta = _find_metadata_for_doc(d, notes_df)
+            print(f"{i}. Title: {meta.get('title','-')}  Created: {meta.get('creation_date','-')}  Modified: {meta.get('modification_date','-')}")
         print()
 
     return out
@@ -163,10 +178,60 @@ def print_topic_docs(model, topic: int, top_n: int = 5):
     if summary is not None:
         header += f"  Summary: {summary}"
     print(header)
+    # Load notes table for metadata lookup
+    notes_df = None
+    try:
+        DATA_DIR = Path.home() / ".mcp-apple-notes"
+        DB_PATH = DATA_DIR / "data"
+        db = lancedb.connect(DB_PATH)
+        table = db.open_table("notes")
+        notes_df = table.to_pandas()
+    except Exception:
+        notes_df = None
+
     for i, d in enumerate(docs, 1):
-        print(f"{i}. {d}")
+        meta = _find_metadata_for_doc(d, notes_df)
+        print(f"{i}. Title: {meta.get('title','-')}  Created: {meta.get('creation_date','-')}  Modified: {meta.get('modification_date','-')}")
     print()
     return {topic: docs}
+
+
+def _find_metadata_for_doc(doc_text, notes_df: pd.DataFrame):
+    """Try to locate a note row matching given doc text and return metadata.
+
+    Returns dict with keys: title, creation_date, modification_date. If not found,
+    returns empty strings for those fields.
+    """
+    default = {"title": "-", "creation_date": "-", "modification_date": "-"}
+    if notes_df is None:
+        return default
+
+    # Ensure the cleaned column exists
+    if 'clean_chunk_content' in notes_df.columns:
+        col = 'clean_chunk_content'
+    elif 'chunk_content' in notes_df.columns:
+        col = 'chunk_content'
+    else:
+        return default
+
+    try:
+        mask = notes_df[col].fillna("") == doc_text
+        matches = notes_df[mask]
+        if matches.empty:
+            # fallback to contains
+            mask2 = notes_df[col].fillna("").str.contains(str(doc_text), na=False)
+            matches = notes_df[mask2]
+        if not matches.empty:
+            row = matches.iloc[0]
+            return {
+                "title": row.get('title', '-') if row.get('title') is not None else '-',
+                "creation_date": row.get('creation_date', '-') if row.get('creation_date') is not None else '-',
+                "modification_date": row.get('modification_date', '-') if row.get('modification_date') is not None else '-',
+            }
+    except Exception:
+        return default
+
+    return default
 
 
 def main():
