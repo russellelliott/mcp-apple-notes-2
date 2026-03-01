@@ -35,7 +35,7 @@ def load_notes_df() -> Optional[pd.DataFrame]:
 
 
 def _find_metadata_for_doc(doc_text: str, notes_df: Optional[pd.DataFrame]) -> Dict[str, str]:
-    default = {"title": "-", "creation_date": "-", "modification_date": "-"}
+    default = {"title": "-", "creation_date": "-", "modification_date": "-", "cluster_id": None, "cluster_confidence": None}
     if notes_df is None:
         return default
 
@@ -59,6 +59,8 @@ def _find_metadata_for_doc(doc_text: str, notes_df: Optional[pd.DataFrame]) -> D
                 "title": str(row.get('title', '-')) if row.get('title') is not None else '-',
                 "creation_date": str(row.get('creation_date', '-')) if row.get('creation_date') is not None else '-',
                 "modification_date": str(row.get('modification_date', '-')) if row.get('modification_date') is not None else '-',
+                "cluster_id": str(row.get('cluster_id')) if row.get('cluster_id') is not None else None,
+                "cluster_confidence": (float(row.get('cluster_confidence')) if row.get('cluster_confidence') is not None and _is_number(row.get('cluster_confidence')) else None),
             }
     except Exception:
         return default
@@ -82,6 +84,14 @@ def _normalize_docs_val(val) -> list:
     return [str(val)]
 
 
+def _is_number(x) -> bool:
+    try:
+        float(x)
+        return True
+    except Exception:
+        return False
+
+
 def _get_keywords_for_topic(model: BERTopic, topic: int) -> list:
     try:
         kws = model.get_topic(topic)
@@ -90,7 +100,7 @@ def _get_keywords_for_topic(model: BERTopic, topic: int) -> list:
         return []
 
 
-def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: bool = True) -> Dict[int, Dict[str, Any]]:
+def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: bool = True, include_prob_top_n: Optional[int] = None) -> Dict[int, Dict[str, Any]]:
     notes_df = load_notes_df()
     out: Dict[int, Dict[str, Any]] = {}
 
@@ -112,13 +122,47 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
             if skip_negative and topic == -1:
                 continue
 
+            # Prefer DB-derived representative docs if available (use cluster_id and cluster_confidence)
             docs = []
-            if rep_col and row.get(rep_col) not in (None, ''):
-                docs = _normalize_docs_val(row.get(rep_col))
-            else:
-                rep = getattr(model, 'representative_docs_', None)
-                if rep and topic in rep:
-                    docs = list(rep[topic])
+            rep_docs_meta = []
+            if notes_df is not None and 'cluster_id' in notes_df.columns:
+                try:
+                    s = notes_df['cluster_id'].fillna('').astype(str)
+                    mask = s == str(topic)
+                    rows = notes_df[mask]
+                    if not rows.empty:
+                        # Sort by cluster_confidence if present
+                        if 'cluster_confidence' in rows.columns:
+                            try:
+                                rows = rows.copy()
+                                rows['__conf__'] = pd.to_numeric(rows['cluster_confidence'], errors='coerce').fillna(0.0)
+                                rows = rows.sort_values('__conf__', ascending=False)
+                            except Exception:
+                                pass
+                        content_col = 'clean_chunk_content' if 'clean_chunk_content' in rows.columns else ('chunk_content' if 'chunk_content' in rows.columns else None)
+                        if content_col is not None:
+                            docs = rows[content_col].fillna("").astype(str).tolist()
+                            for _, r in rows.iterrows():
+                                rep_docs_meta.append({
+                                    'title': str(r.get('title','-')) if r.get('title') is not None else '-',
+                                    'creation_date': str(r.get('creation_date','-')) if r.get('creation_date') is not None else '-',
+                                    'modification_date': str(r.get('modification_date','-')) if r.get('modification_date') is not None else '-',
+                                    'cluster_id': str(r.get('cluster_id')) if r.get('cluster_id') is not None else None,
+                                    'cluster_confidence': (float(r.get('cluster_confidence')) if r.get('cluster_confidence') is not None and _is_number(r.get('cluster_confidence')) else None),
+                                })
+                        else:
+                            docs = []
+                except Exception:
+                    docs = []
+
+            # Fallback to topic_info representative column or model attribute
+            if not docs:
+                if rep_col and row.get(rep_col) not in (None, ''):
+                    docs = _normalize_docs_val(row.get(rep_col))
+                else:
+                    rep = getattr(model, 'representative_docs_', None)
+                    if rep and topic in rep:
+                        docs = list(rep[topic])
 
             if top_n is not None:
                 docs = docs[:top_n]
@@ -130,11 +174,13 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
                 'summary': str(row['Summary']) if 'Summary' in topic_info.columns and row.get('Summary') is not None else None,
                 'keywords': keywords,
                 'representative_docs': [str(d) for d in docs],
-                'representative_docs_meta': [],
+                'representative_docs_meta': rep_docs_meta if rep_docs_meta else [],
             }
 
-            for d in topic_obj['representative_docs']:
-                topic_obj['representative_docs_meta'].append(_find_metadata_for_doc(d, notes_df))
+            # If we didn't build rep_docs_meta from DB rows, fill by lookup
+            if not topic_obj['representative_docs_meta']:
+                for d in topic_obj['representative_docs']:
+                    topic_obj['representative_docs_meta'].append(_find_metadata_for_doc(d, notes_df))
 
             out[topic] = topic_obj
 
@@ -166,6 +212,82 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
     return out
 
 
+def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]], notes_df: Optional[pd.DataFrame], prob_top_n: int = 5):
+    """Compute document-topic probabilities by re-transforming all notes and
+    attach top-N highest-probability docs per topic under key `top_probability_docs`
+    (with metadata).
+    """
+    if notes_df is None:
+        print("⚠️ Cannot compute probabilities: notes table not available.")
+        return
+
+    docs = notes_df['clean_chunk_content'].fillna("").tolist()
+    try:
+        topics_pred, probs = model.transform(docs)
+    except Exception as e:
+        print(f"⚠️ Failed to transform docs for probabilities: {e}")
+        return
+
+    # Map probs columns to topic ids using topic_info ordering
+    try:
+        topic_info = model.get_topic_info()
+        topic_order = list(topic_info['Topic'])
+    except Exception:
+        # Fallback: try to infer from topics dict keys sorted
+        topic_order = sorted(topics.keys())
+
+    # For each topic, collect (doc_index, prob) pairs
+    for t in list(topics.keys()):
+        if t not in topic_order:
+            # topic may be missing in order; skip
+            continue
+        idx = topic_order.index(t)
+        doc_probs = []
+        for i, p_row in enumerate(probs):
+            try:
+                prob_val = float(p_row[idx])
+            except Exception:
+                prob_val = 0.0
+            doc_probs.append((i, prob_val))
+
+        # sort by probability desc and take top N
+        doc_probs.sort(key=lambda x: x[1], reverse=True)
+        top_docs = []
+        # Build a mapping of doc_text -> probability for later lookup
+        doc_prob_map = {}
+        for doc_idx, prob_val in doc_probs:
+            doc_text = docs[doc_idx]
+            doc_prob_map[str(doc_text)] = float(prob_val)
+
+        for doc_idx, prob_val in doc_probs[:prob_top_n]:
+            doc_text = docs[doc_idx]
+            meta = _find_metadata_for_doc(doc_text, notes_df)
+            meta_entry = {"probability": float(prob_val), "doc_text_snippet": (doc_text[:200] if doc_text else '')}
+            meta_entry.update(meta)
+            top_docs.append(meta_entry)
+
+        topics[t]['top_probability_docs'] = top_docs
+
+        # Annotate existing representative_docs_meta entries with their probability if available
+        rep_docs = topics[t].get('representative_docs', [])
+        rep_metas = topics[t].get('representative_docs_meta', [])
+        for i, d in enumerate(rep_docs):
+            key = str(d)
+            prob = doc_prob_map.get(key)
+            if prob is None:
+                # try substring match
+                for k, v in doc_prob_map.items():
+                    if k and key and k in key or key in k:
+                        prob = v
+                        break
+            if i < len(rep_metas):
+                rep_metas[i]['probability'] = float(prob) if prob is not None else None
+            else:
+                # ensure we still store metadata mapping
+                topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None)})
+
+
+
 def print_topics_console(topics: Dict[int, Dict[str, Any]]):
     for topic, obj in topics.items():
         header = f"--- Topic {topic} ({len(obj['representative_docs'])} docs) ---"
@@ -187,6 +309,7 @@ def main():
     p.add_argument('--topic', type=int, help='Specific topic id to fetch')
     p.add_argument('--top-n', type=int, default=None, help='Number of representative docs to include per topic')
     p.add_argument('--output-file', help='Optional JSON file to write representative docs mapping')
+    p.add_argument('--prob-top-n', type=int, default=None, help='Include top-N docs by model probability for each topic')
     args = p.parse_args()
 
     model_dir = Path(args.model_dir)
@@ -197,6 +320,9 @@ def main():
     model = load_model(model_dir)
 
     topics = gather_topics(model, top_n=args.top_n)
+    notes_df = load_notes_df()
+    if args.prob_top_n:
+        _add_probability_rankings(model, topics, notes_df, prob_top_n=args.prob_top_n)
     if args.topic is not None:
         topics = {args.topic: topics.get(args.topic, {'representative_docs': [], 'representative_docs_meta': []})}
 
