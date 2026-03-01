@@ -860,15 +860,15 @@ const getNoteByTitleAndDate = async (title: string, creationDate: string, custom
 };
 
 // Enhanced fetchAndIndexAllNotes function that fetches by title and creation date
-export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, mode: 'fresh' | 'incremental' | 'incremental-since' = 'incremental') => {
+export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, mode: 'fresh' | 'incremental' | 'incremental-since' | 'incremental-since-debug' = 'incremental') => {
   const start = performance.now();
   
   console.log(`Starting notes fetch and indexing${maxNotes ? ` (max: ${maxNotes} notes)` : ''} in ${mode} mode...`);
 
   // Step 0: For incremental-since mode, determine the threshold date
   let thresholdDate: number | null = null;
-  if (mode === 'incremental-since') {
-    console.log('📅 determining threshold date for incremental-since mode...');
+  if (mode === 'incremental-since' || mode === 'incremental-since-debug') {
+    console.log(`📅 determining threshold date for ${mode} mode...`);
     try {
       const dbChunks = await notesTable.query()
         .limit(100000)
@@ -908,7 +908,7 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
   let limitCount = 0;
   let totalTitleBatches = 0;
 
-  if (!(mode === 'incremental-since' && thresholdDate !== null)) {
+  if (!((mode === 'incremental-since' || mode === 'incremental-since-debug') && thresholdDate !== null)) {
     // First get the total count quickly (skip when incremental-since has a threshold)
     console.log('📊 Getting total note count...');
     totalNotesCount = await runJxa(`
@@ -923,11 +923,11 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
     console.log(`🔄 Processing titles in ${totalTitleBatches} batches of ${TITLE_BATCH_SIZE}...`);
   } else {
     // In incremental-since mode with a threshold, we'll fetch recent notes via JXA whose filter
-    console.log(`ℹ️ incremental-since detected — skipping full count and batched title fetch`);
+    console.log(`ℹ️ ${mode} detected — skipping full count and batched title fetch`);
   }
   
-  if (mode === 'incremental-since' && thresholdDate !== null) {
-    console.log(`📦 incremental-since mode: fetching only notes newer than ${new Date(thresholdDate).toLocaleString()}...`);
+  if ((mode === 'incremental-since' || mode === 'incremental-since-debug') && thresholdDate !== null) {
+    console.log(`📦 ${mode} mode: fetching only notes newer than ${new Date(thresholdDate).toLocaleString()}...`);
     // First perform a lightweight count-only JXA query so we can show how many notes match the threshold
     try {
       const recentCount = await runJxa(`
@@ -939,9 +939,13 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
       `) as number;
 
       // Log count (if count succeeded)
-      console.log(`📦 incremental-since: ${recentCount} notes match threshold${maxNotes ? ` (will limit to ${Math.min(recentCount, maxNotes)})` : ''}`);
+      console.log(`📦 ${mode}: ${recentCount} notes match threshold${maxNotes ? ` (will limit to ${Math.min(recentCount, maxNotes)})` : ''}`);
     } catch (countErr) {
-      console.log(`⚠️ incremental-since count query failed: ${(countErr as Error).message}`);
+      console.log(`⚠️ ${mode} count query failed: ${(countErr as Error).message}`);
+    }
+
+    if (mode === 'incremental-since-debug') {
+      console.log(`🔍 Debug: Starting JXA fetch for title/date metadata...`);
     }
 
     // Use JXA whose filter to fetch only notes with creationDate or modificationDate greater than threshold
@@ -953,14 +957,24 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
         const filter = { _or: [ { creationDate: { _greaterThan: targetDate } }, { modificationDate: { _greaterThan: targetDate } } ] };
         try {
           const matches = app.notes.whose(filter);
+          
           const results = [];
-          for (let i = 0; i < matches.length; i++) {
+          
+          // Debug limit for testing hanging
+          const limit = matches.length; 
+          
+          for (let i = 0; i < limit; i++) {
             try {
               const note = matches[i];
+              // Minimal property access to test speed
+              const title = note.name();
+              const creation = note.creationDate().toLocaleString(); 
+              const modification = note.modificationDate().toLocaleString();
+              
               results.push({
-                title: note.name(),
-                creation_date: note.creationDate().toLocaleString(),
-                modification_date: note.modificationDate().toLocaleString()
+                title: title,
+                creation_date: creation,
+                modification_date: modification
               });
             } catch (e) {
               continue;
@@ -982,9 +996,9 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
       const sliceLimit = maxNotes ? Math.min(recent.length, maxNotes) : recent.length;
       const sliced = recent.slice(0, sliceLimit);
       allNoteTitles.push(...sliced);
-      console.log(`✅ Got ${sliced.length} recent titles (incremental-since)`);
+      console.log(`✅ Got ${sliced.length} recent titles (${mode})`);
     } catch (e) {
-      console.log(`⚠️ incremental-since JXA fetch failed, falling back to batched fetch: ${(e as Error).message}`);
+      console.log(`⚠️ ${mode} JXA fetch failed, falling back to batched fetch: ${(e as Error).message}`);
       // Fallback to previous batched approach if specialized fetch fails
       for (let batchStart = 0; batchStart < limitCount; batchStart += TITLE_BATCH_SIZE) {
         const batchEnd = Math.min(batchStart + TITLE_BATCH_SIZE, limitCount);
@@ -1072,6 +1086,31 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
     }
   }
   
+  if (mode === 'incremental-since-debug') {
+    console.log(`\n🛑 Debug mode: Stopping after fetching titles.`);
+    console.log(`📋 Found ${allNoteTitles.length} notes matching criteria.`);
+    console.log(`\nNext steps if this worked:`);
+    console.log(`1. Run without --mode=incremental-since-debug to process these notes.`);
+    console.log(`2. If this hung, the issue is in the JXA fetching of titles/dates.`);
+    
+    // Print the titles found
+    if (allNoteTitles.length > 0) {
+      console.log(`\n📝 Notes found:`);
+      allNoteTitles.forEach((note, idx) => {
+        console.log(`   ${idx + 1}. "${note.title}" (created: ${note.creation_date}, modified: ${note.modification_date})`);
+      });
+    }
+
+    // Return dummy result to satisfy type signature
+    return {
+      processed: 0,
+      totalChunks: 0,
+      failed: 0,
+      skipped: 0,
+      timeSeconds: (performance.now() - start) / 1000
+    };
+  }
+
   console.log(`✨ Fetched ${allNoteTitles.length} note titles in ${((performance.now() - start)/1000).toFixed(1)}s`);
   
   const noteTitles = allNoteTitles;
@@ -1628,7 +1667,7 @@ const createFTSIndex = async (notesTable: any) => {
 };
 
 // Replace your createNotesTable function with this smart version:
-export const createNotesTableSmart = async (overrideName?: string, mode: 'fresh' | 'incremental' = 'incremental') => {
+export const createNotesTableSmart = async (overrideName?: string, mode: 'fresh' | 'incremental' | 'incremental-since' | 'incremental-since-debug' = 'incremental') => {
   const start = performance.now();
   const tableName = overrideName || "notes";
   

@@ -26,7 +26,7 @@ async function main() {
   const tableArg = args.find(arg => arg.startsWith('--table='));
   
   const maxNotes = maxNotesArg ? parseInt(maxNotesArg.split('=')[1]) : undefined;
-  const mode = (modeArg?.split('=')[1] as 'fresh' | 'incremental' | 'incremental-since') || 'incremental'; // Default to incremental
+  const mode = (modeArg?.split('=')[1] as 'fresh' | 'incremental' | 'incremental-since' | 'incremental-since-debug') || 'incremental'; // Default to incremental
   const tableName = tableArg?.split('=')[1] || 'notes'; // Default to 'notes'
   
   // Fresh mode confirmation
@@ -47,7 +47,8 @@ async function main() {
   const modeDescriptions = {
     'fresh': 'Fresh rebuild',
     'incremental': 'Incremental updates',
-    'incremental-since': 'Incremental updates (Date-based)'
+    'incremental-since': 'Incremental updates (Date-based)',
+    'incremental-since-debug': 'Debug Incremental updates (Date-based)'
   };
 
   console.log(`📊 Mode: ${modeDescriptions[mode]}`);
