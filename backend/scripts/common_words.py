@@ -179,6 +179,10 @@ def main():
         action='store_true',
         help='Disable bar chart display'
     )
+    parser.add_argument(
+        '--output-file', '-o',
+        help='Optional JSON file to write the full word counts and percentages'
+    )
     
     args = parser.parse_args()
     
@@ -190,6 +194,29 @@ def main():
     
     # Display results
     display_results(results, total_words, show_bar_chart=not args.no_chart)
+
+    # Optionally write JSON with full data
+    if args.output_file:
+        out_path = Path(args.output_file)
+        words_list = []
+        for word, count in results:
+            pct = (count / total_words) * 100 if total_words > 0 else 0.0
+            words_list.append({
+                'word': word,
+                'count': int(count),
+                'percentage': pct,
+            })
+
+        payload = {
+            'total_words': int(total_words),
+            'unique_words': int(len(results)),
+            'words': words_list,
+        }
+
+        with out_path.open('w', encoding='utf-8') as f:
+            import json
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"Wrote common words to {out_path}")
 
 
 if __name__ == "__main__": 
