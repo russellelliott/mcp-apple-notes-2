@@ -3,15 +3,23 @@ import pandas as pd
 import numpy as np
 import pyarrow as pa
 import re
+import sys
+from collections import Counter
 import torch
 import html
 from pathlib import Path
+# Ensure repo root is on sys.path so backend.* imports work when running
+# this script directly (not as an installed package).
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from datetime import datetime
 from bertopic import BERTopic
 from bertopic.representation import KeyBERTInspired, BaseRepresentation, MaximalMarginalRelevance
 from bertopic.vectorizers import ClassTfidfTransformer
 import ollama
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
+from backend.scripts.common_words import clean_text
 from umap import UMAP
 from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
@@ -120,15 +128,33 @@ vectors = np.vstack(df['vector'].values)
 # --- 3. THE "NO-HARDCODE" CLUSTERING ENGINE ---
 
 # 1. High-Frequency Filtering in the Vectorizer
-# Relax the statistical filter. 
-# 0.03 was a "death sentence" for the word AI. 0.08 allows it back in.
-# Expanded stop words list
-custom_stop_words = list(ENGLISH_STOP_WORDS) + ["um", "uh", "like", "just", "so", "actually", "basically", "http", "https", "www", "com"]
+# We'll compute stop words as any token that appears more than 0.1%
+# of the total token count in the corpus using `clean_text` from
+# `backend.scripts.common_words`. This list will be passed directly
+# to CountVectorizer. `max_df` is set to 1.0 because we're handling
+# high-frequency removal via the explicit stop-word list.
+THRESHOLD_PROP = 0.001  # 0.1%
+
+# Build word frequency counts from the cleaned chunk content
+word_counter = Counter()
+total_words = 0
+for idx, txt in enumerate(df['clean_chunk_content'].fillna("")):
+    if not txt or not isinstance(txt, str):
+        continue
+    words = clean_text(txt)
+    word_counter.update(words)
+
+total_words = sum(word_counter.values())
+
+# Determine stop words: words whose share > THRESHOLD_PROP
+stop_words = [w for w, c in word_counter.items() if total_words > 0 and (c / total_words) > THRESHOLD_PROP]
+
+print(f"🔕 Computed {len(stop_words)} high-frequency stop words (>{THRESHOLD_PROP*100:.3f}% of tokens)")
 
 vectorizer_model = CountVectorizer(
-    max_df=0.08, 
-    min_df=2, 
-    stop_words=custom_stop_words
+    max_df=1.0,
+    min_df=1,
+    stop_words=stop_words
 )
 
 # 2. Automated c-TF-IDF Reduction
