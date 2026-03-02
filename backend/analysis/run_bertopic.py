@@ -86,9 +86,9 @@ def clean_note_content(text):
     text = html.unescape(text)
     # Remove URLs entirely (this handles the https/www noise)
     text = re.sub(r'http\S+', '', text) 
-    text = re.sub(r'data:image\/[a-zA-Z]+;base64,[^\s"\'\)]+', '[IMAGE_REMOVED]', text)
-    text = re.sub(r'!\[.*?\]\([^\)]{100,}\)', '[IMAGE_REMOVED]', text)
-    text = re.sub(r'\S{100,}', '[LONG_DATA_REMOVED]', text)
+    text = re.sub(r'data:image\/[a-zA-Z]+;base64,[^\s"\'\)]+', '', text)
+    text = re.sub(r'!\[.*?\]\([^\)]{100,}\)', '', text)
+    text = re.sub(r'\S{100,}', '', text)
     return text
 
 def backup_lancedb_table(db, table_name, verbose=True):
@@ -151,10 +151,20 @@ stop_words = [w for w, c in word_counter.items() if total_words > 0 and (c / tot
 
 print(f"🔕 Computed {len(stop_words)} high-frequency stop words (>{THRESHOLD_PROP*100:.3f}% of tokens)")
 
+# Remove stop words directly from the content
+stop_words_set = set(stop_words)
+def remove_stop_words(text):
+    if not isinstance(text, str): return ""
+    words = text.split()
+    return " ".join([w for w in words if w.lower() not in stop_words_set])
+
+df['clean_chunk_content'] = df['clean_chunk_content'].apply(remove_stop_words)
+docs = df['clean_chunk_content'].fillna("").tolist()
+
 vectorizer_model = CountVectorizer(
     max_df=1.0,
     min_df=1,
-    stop_words=stop_words
+    stop_words=[] # Stop words already removed
 )
 
 # 2. Automated c-TF-IDF Reduction
