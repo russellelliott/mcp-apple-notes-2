@@ -169,9 +169,26 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
 
             keywords = _get_keywords_for_topic(model, topic)
 
+            # Try to get label/summary from DB first (Ground Truth)
+            db_label = None
+            db_summary = None
+            if notes_df is not None and 'cluster_id' in notes_df.columns:
+                 # Find any row with this cluster_id (it's string in DB, usually)
+                 mask = notes_df['cluster_id'].astype(str) == str(topic)
+                 if mask.any():
+                     first_match = notes_df.loc[mask].iloc[0]
+                     if 'cluster_label' in first_match and pd.notna(first_match['cluster_label']):
+                         db_label = str(first_match['cluster_label'])
+                     if 'cluster_summary' in first_match and pd.notna(first_match['cluster_summary']):
+                         db_summary = str(first_match['cluster_summary'])
+
+            # Fallback to model info if DB lookup fails
+            model_label = str(row['Label']) if 'Label' in topic_info.columns and row.get('Label') is not None else (str(row['Name']) if 'Name' in topic_info.columns and row.get('Name') is not None else None)
+            model_summary = str(row['Summary']) if 'Summary' in topic_info.columns and row.get('Summary') is not None else None
+
             topic_obj = {
-                'label': str(row['Label']) if 'Label' in topic_info.columns and row.get('Label') is not None else (str(row['Name']) if 'Name' in topic_info.columns and row.get('Name') is not None else None),
-                'summary': str(row['Summary']) if 'Summary' in topic_info.columns and row.get('Summary') is not None else None,
+                'label': db_label if db_label is not None else model_label,
+                'summary': db_summary if db_summary is not None else model_summary,
                 'keywords': keywords,
                 'representative_docs': [str(d) for d in docs],
                 'representative_docs_meta': rep_docs_meta if rep_docs_meta else [],
