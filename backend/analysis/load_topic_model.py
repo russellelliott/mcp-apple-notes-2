@@ -35,7 +35,7 @@ def load_notes_df() -> Optional[pd.DataFrame]:
 
 
 def _find_metadata_for_doc(doc_text: str, notes_df: Optional[pd.DataFrame]) -> Dict[str, str]:
-    default = {"title": "-", "creation_date": "-", "modification_date": "-", "cluster_id": None, "cluster_confidence": None}
+    default = {"title": "-", "creation_date": "-", "modification_date": "-", "cluster_id": None, "cluster_confidence": None, "chunk_index": None}
     if notes_df is None:
         return default
 
@@ -61,6 +61,7 @@ def _find_metadata_for_doc(doc_text: str, notes_df: Optional[pd.DataFrame]) -> D
                 "modification_date": str(row.get('modification_date', '-')) if row.get('modification_date') is not None else '-',
                 "cluster_id": str(row.get('cluster_id')) if row.get('cluster_id') is not None else None,
                 "cluster_confidence": (float(row.get('cluster_confidence')) if row.get('cluster_confidence') is not None and _is_number(row.get('cluster_confidence')) else None),
+                "chunk_index": (int(row.get('chunk_index')) if row.get('chunk_index') is not None and _is_number(row.get('chunk_index')) else None),
             }
     except Exception:
         return default
@@ -148,6 +149,7 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
                                     'creation_date': str(r.get('creation_date','-')) if r.get('creation_date') is not None else '-',
                                     'modification_date': str(r.get('modification_date','-')) if r.get('modification_date') is not None else '-',
                                     'cluster_id': str(r.get('cluster_id')) if r.get('cluster_id') is not None else None,
+                                    'chunk_index': (int(r.get('chunk_index')) if r.get('chunk_index') is not None and _is_number(r.get('chunk_index')) else None),
                                     'cluster_confidence': (float(r.get('cluster_confidence')) if r.get('cluster_confidence') is not None and _is_number(r.get('cluster_confidence')) else None),
                                 })
                         else:
@@ -301,13 +303,18 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
                 rep_metas[i]['probability'] = float(prob) if prob is not None else None
             else:
                 # ensure we still store metadata mapping
-                topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None)})
+                topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None), "chunk_index": None})
 
 
 
 def print_topics_console(topics: Dict[int, Dict[str, Any]]):
     for topic, obj in topics.items():
-        header = f"--- Topic {topic} ({len(obj['representative_docs'])} docs) ---"
+        header = f"--- Topic {topic} ("
+        if 'representative_docs' in obj:
+             header += f"{len(obj['representative_docs'])} docs) ---"
+        else:
+             header += "0 docs) ---"
+             
         if obj.get('label'):
             header += f"  Label: {obj['label']}"
         if obj.get('summary'):
@@ -315,8 +322,11 @@ def print_topics_console(topics: Dict[int, Dict[str, Any]]):
         if obj.get('keywords'):
             header += f"  Keywords: {', '.join(obj['keywords'][:5])}"
         print(header)
-        for i, meta in enumerate(obj['representative_docs_meta'], 1):
-            print(f"{i}. Title: {meta.get('title','-')}  Created: {meta.get('creation_date','-')}  Modified: {meta.get('modification_date','-')}")
+        if 'representative_docs_meta' in obj:
+            for i, meta in enumerate(obj['representative_docs_meta'], 1):
+                chunk_idx = meta.get('chunk_index')
+                chunk_str = f"  Chunk Index: {chunk_idx}" if chunk_idx is not None else ""
+                print(f"{i}. Title: {meta.get('title','-')}  Created: {meta.get('creation_date','-')}  Modified: {meta.get('modification_date','-')}{chunk_str}")
         print()
 
 
