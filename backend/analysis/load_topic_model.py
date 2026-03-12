@@ -142,14 +142,28 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
                                 pass
                         content_col = 'clean_chunk_content' if 'clean_chunk_content' in rows.columns else ('chunk_content' if 'chunk_content' in rows.columns else None)
                         if content_col is not None:
-                            docs = rows[content_col].fillna("").astype(str).tolist()
+                            docs = []
+                            seen_fingerprints = set()
                             for _, r in rows.iterrows():
+                                title_val = str(r.get('title','-')) if r.get('title') is not None else '-'
+                                c_date = str(r.get('creation_date','-')) if r.get('creation_date') is not None else '-'
+                                m_date = str(r.get('modification_date','-')) if r.get('modification_date') is not None else '-'
+                                ch_idx = (int(r.get('chunk_index')) if r.get('chunk_index') is not None and _is_number(r.get('chunk_index')) else None)
+                                
+                                fingerprint = (title_val, c_date, m_date, ch_idx)
+                                if fingerprint in seen_fingerprints:
+                                    continue
+                                seen_fingerprints.add(fingerprint)
+                                
+                                doc_content = str(r[content_col]) if pd.notna(r[content_col]) else ""
+                                docs.append(doc_content)
+                                
                                 rep_docs_meta.append({
-                                    'title': str(r.get('title','-')) if r.get('title') is not None else '-',
-                                    'creation_date': str(r.get('creation_date','-')) if r.get('creation_date') is not None else '-',
-                                    'modification_date': str(r.get('modification_date','-')) if r.get('modification_date') is not None else '-',
+                                    'title': title_val,
+                                    'creation_date': c_date,
+                                    'modification_date': m_date,
                                     'cluster_id': str(r.get('cluster_id')) if r.get('cluster_id') is not None else None,
-                                    'chunk_index': (int(r.get('chunk_index')) if r.get('chunk_index') is not None and _is_number(r.get('chunk_index')) else None),
+                                    'chunk_index': ch_idx,
                                     'cluster_confidence': (float(r.get('cluster_confidence')) if r.get('cluster_confidence') is not None and _is_number(r.get('cluster_confidence')) else None),
                                 })
                         else:
@@ -276,14 +290,26 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
         doc_prob_map = {}
         for doc_idx, prob_val in doc_probs:
             doc_text = docs[doc_idx]
-            doc_prob_map[str(doc_text)] = float(prob_val)
+            if str(doc_text) not in doc_prob_map: 
+                 doc_prob_map[str(doc_text)] = float(prob_val)
 
-        for doc_idx, prob_val in doc_probs[:prob_top_n]:
+        seen_fingerprints = set()
+        count = 0
+        for doc_idx, prob_val in doc_probs:
+            if count >= prob_top_n:
+                break
             doc_text = docs[doc_idx]
             meta = _find_metadata_for_doc(doc_text, notes_df)
+            
+            fingerprint = (meta.get('title'), meta.get('creation_date'), meta.get('chunk_index'))
+            if fingerprint in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fingerprint)
+
             meta_entry = {"probability": float(prob_val), "doc_text_snippet": (doc_text[:200] if doc_text else '')}
             meta_entry.update(meta)
             top_docs.append(meta_entry)
+            count += 1
 
         topics[t]['top_probability_docs'] = top_docs
 
