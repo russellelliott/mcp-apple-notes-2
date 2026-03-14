@@ -23,7 +23,7 @@ trap cleanup EXIT INT TERM
 # Wait for the backend to report healthy before starting the frontend
 echo "Waiting for backend to become healthy..."
 BACKEND_URL="http://127.0.0.1:8000/health"
-MAX_RETRIES=60
+MAX_RETRIES=120
 RETRY_INTERVAL=1
 retry=0
 
