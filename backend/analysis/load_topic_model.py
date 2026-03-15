@@ -12,6 +12,9 @@ from pathlib import Path
 import argparse
 import json
 import ast
+import time
+import concurrent.futures
+import requests
 from typing import Optional, Dict, Any
 
 import lancedb
@@ -331,6 +334,55 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
                 # ensure we still store metadata mapping
                 topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None), "chunk_index": None})
 
+def _generate_label_task(topic_id: int, obj: Dict[str, Any]) -> tuple:
+    old_label = str(obj.get('label', ''))
+    keywords = obj.get('keywords', [])
+    docs = obj.get('representative_docs', [])[:5] 
+    
+    prompt = (
+        f"<label>{old_label}</label>\n"
+        f"<keywords>{', '.join(keywords)}</keywords>\n"
+        "<representative_docs>\n"
+    )
+    for d in docs:
+        d_text = str(d) # No modification
+        prompt += f"<doc>{d_text}</doc>\n"
+    prompt += "</representative_docs>\n"
+    
+    prompt += "Based on the above information, generate a concise, descriptive name for this cluster (4-8 words). Return ONLY the name."
+
+    try:
+        resp = requests.post('http://localhost:11434/api/generate', json={
+            "model": "phi3:3.8b-mini-128k-instruct-q4_K_M",
+            "prompt": prompt,
+            "stream": False
+        }, timeout=120)
+        if resp.status_code == 200:
+            new_label = resp.json().get('response', '').strip()
+            # Clean up quotes and newlines
+            new_label = new_label.strip('"').strip("'").split('\n')[0]
+            if len(new_label) > 100: # sanity check
+                 new_label = new_label[:100]
+            return (topic_id, old_label, new_label)
+    except Exception:
+        pass
+    return (topic_id, old_label, old_label)
+
+def enhance_topic_labels(topics: Dict[int, Dict[str, Any]], max_workers: int = 4):
+    print("Generating enhanced topic labels with Ollama...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for topic, obj in topics.items():
+            # Skip outlier topic usually
+            if topic == -1:
+                continue
+            futures.append(executor.submit(_generate_label_task, topic, obj))
+        
+        for future in concurrent.futures.as_completed(futures):
+            topic_id, old_label, new_label = future.result()
+            if new_label and new_label != old_label:
+                topics[topic_id]['label'] = new_label
+                print(f"Topic {topic_id}: {old_label} -> {new_label}")
 
 
 def print_topics_console(topics: Dict[int, Dict[str, Any]]):
@@ -357,6 +409,7 @@ def print_topics_console(topics: Dict[int, Dict[str, Any]]):
 
 
 def main():
+    start_time = time.time()
     p = argparse.ArgumentParser(description='Load BERTopic model and export topics')
     p.add_argument('model_dir', nargs='?', default=str(Path.home() / '.mcp-apple-notes' / 'bertopic_model'))
     p.add_argument('--topic', type=int, help='Specific topic id to fetch')
@@ -379,6 +432,8 @@ def main():
     if args.topic is not None:
         topics = {args.topic: topics.get(args.topic, {'representative_docs': [], 'representative_docs_meta': []})}
 
+    enhance_topic_labels(topics, max_workers=4)
+
     print_topics_console(topics)
 
     if args.output_file:
@@ -388,6 +443,9 @@ def main():
         with out_path.open('w', encoding='utf-8') as f:
             json.dump(serializable, f, ensure_ascii=False, indent=2)
         print(f"Wrote representative docs to {out_path}")
+
+    elapsed = time.time() - start_time
+    print(f"Total execution time: {elapsed:.2f} seconds")
 
 
 if __name__ == '__main__':
