@@ -13,6 +13,8 @@ import argparse
 import json
 import ast
 import time
+import shutil
+import datetime
 import concurrent.futures
 import requests
 from typing import Optional, Dict, Any
@@ -384,6 +386,51 @@ def enhance_topic_labels(topics: Dict[int, Dict[str, Any]], max_workers: int = 4
                 topics[topic_id]['label'] = new_label
                 print(f"Topic {topic_id}: {old_label} -> {new_label}")
 
+def update_db_labels(topics: Dict[int, Dict[str, Any]]):
+    print("Updating database with new topic labels...")
+    try:
+        DATA_DIR = Path.home() / ".mcp-apple-notes"
+        DB_PATH = DATA_DIR / "data"
+        db = lancedb.connect(DB_PATH)
+        table = db.open_table("notes")
+        
+        for topic_id, obj in topics.items():
+            if topic_id == -1: continue 
+            new_label = obj.get('label')
+            if new_label:
+                table.update(
+                    where=f"cluster_id = '{topic_id}'",
+                    values={"cluster_label": new_label}
+                )
+        print("Database update complete.")
+    except Exception as e:
+        print(f"Failed to update database: {e}")
+
+
+def backup_database():
+    """Create a backup of the 'notes' table."""
+    try:
+        DATA_DIR = Path.home() / ".mcp-apple-notes"
+        DB_PATH = DATA_DIR / "data"
+        db = lancedb.connect(DB_PATH)
+        
+        table_name = "notes"
+        if table_name not in db.table_names():
+            return
+
+        timestamp = int(time.time())
+        backup_table_name = f"{table_name}_backup_{timestamp}"
+        
+        print(f"Backing up table '{table_name}' to '{backup_table_name}'...")
+        
+        tbl = db.open_table(table_name)
+        df = tbl.to_pandas()
+        db.create_table(backup_table_name, df)
+        
+        print("Backup created successfully.")
+    except Exception as e:
+        print(f"Failed to create database backup: {e}")
+
 
 def print_topics_console(topics: Dict[int, Dict[str, Any]]):
     for topic, obj in topics.items():
@@ -413,10 +460,16 @@ def main():
     p = argparse.ArgumentParser(description='Load BERTopic model and export topics')
     p.add_argument('model_dir', nargs='?', default=str(Path.home() / '.mcp-apple-notes' / 'bertopic_model'))
     p.add_argument('--topic', type=int, help='Specific topic id to fetch')
+
     p.add_argument('--top-n', type=int, default=None, help='Number of representative docs to include per topic')
     p.add_argument('--output-file', help='Optional JSON file to write representative docs mapping')
     p.add_argument('--prob-top-n', type=int, default=None, help='Include top-N docs by model probability for each topic')
+    p.add_argument('--verbose', action='store_true', help='Print detailed topic info to console')
+    p.add_argument('--no-update-db', action='store_true', help='Do not update the LanceDB database with new labels')
     args = p.parse_args()
+
+    if not args.no_update_db:
+        backup_database()
 
     model_dir = Path(args.model_dir)
     if not model_dir.exists():
@@ -433,8 +486,12 @@ def main():
         topics = {args.topic: topics.get(args.topic, {'representative_docs': [], 'representative_docs_meta': []})}
 
     enhance_topic_labels(topics, max_workers=4)
+    
+    if not args.no_update_db:
+        update_db_labels(topics)
 
-    print_topics_console(topics)
+    if args.verbose:
+        print_topics_console(topics)
 
     if args.output_file:
         out_path = Path(args.output_file)
