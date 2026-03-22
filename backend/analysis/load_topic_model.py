@@ -10,6 +10,7 @@ Behavior:
 """
 from pathlib import Path
 import argparse
+import re
 import json
 import ast
 import time
@@ -337,7 +338,10 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
                 topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None), "chunk_index": None})
 
 def _generate_label_task(topic_id: int, obj: Dict[str, Any]) -> tuple:
-    old_label = str(obj.get('label', ''))
+    old_label = str(obj.get('label') or '')
+    # Remove topic prefix (e.g. "15_word" -> "word")
+    old_label = re.sub(r'^\d+_', '', old_label)
+
     keywords = obj.get('keywords', [])
     docs = obj.get('representative_docs', [])[:5] 
     
