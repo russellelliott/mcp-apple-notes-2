@@ -6,6 +6,7 @@ interface NotePoint {
   unique_key: string;
   title: string;
   chunk_index: number;
+  total_chunks?: number;
   cluster_label: string;
   umap_x: number;
   umap_y: number;
@@ -16,6 +17,7 @@ interface SearchResult {
   unique_key: string;
   title: string;
   chunk_index: number;
+  total_chunks?: number;
   distance: number;
   cluster_label: string;
   preview: string;
@@ -101,7 +103,7 @@ export default function NoteClusters() {
     return map;
   }, [searchResults]);
 
-  const { clusterGroups, clusterColors } = useMemo(() => {
+  const { clusterGroups, clusterColors, clusterTints } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
     const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[] } } = {};
     let globalSumX = 0;
@@ -118,39 +120,42 @@ export default function NoteClusters() {
           processingGroups[label].y.push(point.umap_y);
           processingGroups[label].z.push(point.umap_z);
           processingGroups[label].ids.push(point.unique_key);
-          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index}<br>Cluster: ${label}`);
-          
+          const total = point.total_chunks || '?';
+          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index} of ${total}<br>Cluster: ${label}`);
+
           globalSumX += point.umap_x;
           globalSumY += point.umap_y;
           count++;
       });
     }
-    
+
     const centerX = count > 0 ? globalSumX / count : 0;
     const centerY = count > 0 ? globalSumY / count : 0;
 
     const processingColors: { [key: string]: string } = {};
-    
+    const processingTints: { [key: string]: string } = {};
+
     Object.keys(processingGroups).forEach(label => {
         const points = processingGroups[label];
         const cx = points.x.reduce((a, b) => a + b, 0) / points.x.length;
         const cy = points.y.reduce((a, b) => a + b, 0) / points.y.length;
-        
+
         const dx = cx - centerX;
         const dy = cy - centerY;
         let angle = (Math.atan2(dy, dx) * 180 / Math.PI);
         if (angle < 0) angle += 360;
-        
+
         processingColors[label] = `hsl(${Math.round(angle)}, 75%, 45%)`;
+        processingTints[label] = `hsla(${Math.round(angle)}, 75%, 45%, 0.25)`;
     });
 
-    return { clusterGroups: processingGroups, clusterColors: processingColors };
+    return { clusterGroups: processingGroups, clusterColors: processingColors, clusterTints: processingTints };
   }, [data]);
 
   const plotData: any[] = useMemo(() => {
     return Object.keys(clusterGroups).map(label => {
       const group = clusterGroups[label];
-      
+
       const markerSizes: number[] = [];
       const markerOpacities: number[] = [];
       const lineWidths: number[] = [];
@@ -159,18 +164,18 @@ export default function NoteClusters() {
       group.ids.forEach(id => {
           const score = searchScoreMap.get(id);
           const isHovered = id === hoveredId;
-          
+
           let size = 8;
           let opacity = 0.6;
           let lw = 0;
           // Default line color to transparent so no outline is visible
-          let lc = 'rgba(0,0,0,0)'; 
+          let lc = 'rgba(0,0,0,0)';
 
           if (score !== undefined) {
-             size = 15 + (score * 20); 
+             size = 15 + (score * 20);
              opacity = 0.9;
              // Highlight search results slightly if desired, or keep no outline
-             // lw = 1; lc = 'white'; 
+             // lw = 1; lc = 'white';
           } else if (searchResults.length > 0) {
              opacity = 0.1;
              size = 5;
@@ -184,7 +189,7 @@ export default function NoteClusters() {
               // Add a dark outline on hover for contrast
               lc = '#333';
           }
-          
+
           markerSizes.push(size);
           markerOpacities.push(opacity);
           lineWidths.push(lw);
@@ -200,7 +205,7 @@ export default function NoteClusters() {
         mode: 'markers',
         type: 'scatter3d',
         name: label,
-        marker: { 
+        marker: {
             size: markerSizes,
             opacity: markerOpacities,
             color: clusterColors[label],
@@ -223,21 +228,21 @@ export default function NoteClusters() {
       ) : (
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
             {/* Sidebar */}
-            <div style={{ 
-                width: '350px', 
-                display: 'flex', 
-                flexDirection: 'column', 
+            <div style={{
+                width: '350px',
+                display: 'flex',
+                flexDirection: 'column',
                 borderRight: '1px solid #e0e0e0',
                 backgroundColor: '#f9f9f9',
                 padding: '10px',
                 boxSizing: 'border-box',
-                zIndex: 10 
+                zIndex: 10
             }}>
                 <div style={{ marginBottom: '15px' }}>
                     <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
-                    <input 
-                        type="text" 
-                        placeholder="Search..." 
+                    <input
+                        type="text"
+                        placeholder="Search..."
                         value={searchQuery}
                         onChange={handleSearch}
                         style={{
@@ -250,13 +255,13 @@ export default function NoteClusters() {
                         }}
                     />
                 </div>
-                
+
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {searchResults.length === 0 && searchQuery && (
                         <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
                     )}
                     {searchResults.map((result) => (
-                        <div 
+                        <div
                             key={result.unique_key}
                             onMouseEnter={() => setHoveredId(result.unique_key)}
                             onMouseLeave={() => setHoveredId(null)}
@@ -264,7 +269,7 @@ export default function NoteClusters() {
                                 padding: '12px',
                                 marginBottom: '8px',
                                 borderRadius: '6px',
-                                backgroundColor: (hoveredId === result.unique_key) ? '#e6f7ff' : 'white',
+                                backgroundColor: (hoveredId === result.unique_key) ? '#e6f7ff' : (clusterTints[result.cluster_label] || 'white'),
                                 border: '1px solid #eee',
                                 cursor: 'pointer',
                                 transition: 'all 0.2s',
@@ -273,11 +278,14 @@ export default function NoteClusters() {
                                 wordBreak: 'break-word'
                             }}
                         >
-                             <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#007bff' }}>
+                             <div style={{ fontWeight: 'bold', marginBottom: '4px', color: 'black' }}>
                                 {result.title}
-                                <span style={{ fontWeight: 'normal', color: '#999', fontSize: '0.85em', marginLeft: '6px' }}>
-                                    (Chunk {result.chunk_index})
+                                <span style={{ fontWeight: 'normal', color: '#555', fontSize: '0.85em', marginLeft: '6px' }}>
+                                    (Chunk {result.chunk_index} of {result.total_chunks || '?'})
                                 </span>
+                             </div>
+                             <div style={{ fontSize: '0.8em', color: '#444', marginBottom: '6px', fontStyle: 'italic' }}>
+                                Cluster: {result.cluster_label}
                              </div>
                              <div style={{ fontSize: '0.9em', color: '#555', lineHeight: '1.4' }}>
                                 {result.preview}

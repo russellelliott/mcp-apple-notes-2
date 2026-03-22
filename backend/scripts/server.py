@@ -87,6 +87,13 @@ def load_and_process_data():
         df['chunk_index'] = df['chunk_index'].fillna(0).astype(int)
         df['unique_key'] = df['title'].astype(str) + "_" + df['chunk_index'].astype(str)
         
+        # Ensure total_chunks
+        if 'total_chunks' not in df.columns:
+             print("ℹ️ Computing total_chunks...")
+             df['total_chunks'] = df.groupby('title')['chunk_index'].transform('count')
+        else:
+             df['total_chunks'] = df['total_chunks'].fillna(1).astype(int)
+             
         # Fill optional fields
         if 'cluster_label' not in df.columns:
             df['cluster_label'] = 'Unclustered'
@@ -125,6 +132,7 @@ class NotePoint(BaseModel):
     unique_key: str
     title: str
     chunk_index: int
+    total_chunks: Optional[int] = None
     cluster_label: str
     umap_x: float
     umap_y: float
@@ -137,6 +145,7 @@ class SearchResult(BaseModel):
     unique_key: str
     title: str
     chunk_index: int
+    total_chunks: Optional[int] = None
     distance: float
     cluster_label: str
     preview: Optional[str] = None
@@ -164,7 +173,7 @@ async def get_points():
     valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
     
     records = valid_df[[
-        'unique_key', 'title', 'chunk_index', 'cluster_label', 
+        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_label', 
         'umap_x', 'umap_y', 'umap_z', 'creation_date', 'modification_date'
     ]].to_dict(orient='records')
     
@@ -206,6 +215,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
     for r in results:
         title = r.get('title', '')
         idx = r.get('_chunk_index', r.get('chunk_index', 0))
+        total = r.get('_total_chunks', r.get('total_chunks'))
         score = r.get('_relevance_score', 0)
         preview = r.get('_matching_chunk_preview', '') or r.get('chunk_content', '')[:200]
         
@@ -218,6 +228,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
             unique_key=unique_key,
             title=title,
             chunk_index=idx,
+            total_chunks=total,
             distance=score,
             cluster_label=cluster,
             preview=preview
