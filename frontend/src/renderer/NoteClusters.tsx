@@ -107,7 +107,7 @@ export default function NoteClusters() {
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
-    const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[] } } = {};
+    const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[]; clusterId?: string } } = {};
     let globalSumX = 0;
     let globalSumY = 0;
     let count = 0;
@@ -125,6 +125,9 @@ export default function NoteClusters() {
           const total = point.total_chunks || '?';
           // Use cluster_id if available for shorter display, but fallback to label for unclustered
           const cid = (point.cluster_id && point.cluster_id !== '-1') ? point.cluster_id : label;
+          if (!processingGroups[label].clusterId) {
+             processingGroups[label].clusterId = cid;
+          }
           processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index + 1} of ${total}<br>Cluster: ${cid}`);
 
           globalSumX += point.umap_x;
@@ -159,7 +162,47 @@ export default function NoteClusters() {
   }, [data]);
 
   const plotData: any[] = useMemo(() => {
-    return Object.keys(clusterGroups).map(label => {
+    let sortedLabels = Object.keys(clusterGroups);
+
+    if (searchResults.length > 0) {
+        // Sort by relevance (closest distance first)
+        sortedLabels.sort((a, b) => {
+            const groupA = clusterGroups[a];
+            const groupB = clusterGroups[b];
+
+            // Find best (minimum) distance in each group
+            let minDistA = Infinity;
+            groupA.ids.forEach(id => {
+                const s = searchScoreMap.get(id);
+                if (s !== undefined && s < minDistA) minDistA = s;
+            });
+
+            let minDistB = Infinity;
+            groupB.ids.forEach(id => {
+                const s = searchScoreMap.get(id);
+                if (s !== undefined && s < minDistB) minDistB = s;
+            });
+
+            if (minDistA === Infinity && minDistB === Infinity) return 0;
+            if (minDistA === Infinity) return 1;
+            if (minDistB === Infinity) return -1;
+
+            return minDistA - minDistB;
+        });
+    } else {
+         sortedLabels.sort((a, b) => {
+             const idA = clusterGroups[a].clusterId || a;
+             const idB = clusterGroups[b].clusterId || b;
+             const numA = parseInt(idA);
+             const numB = parseInt(idB);
+             if (!isNaN(numA) && !isNaN(numB)) {
+                 return numA - numB;
+             }
+             return String(idA).localeCompare(String(idB));
+        });
+    }
+
+    return sortedLabels.map(label => {
       const group = clusterGroups[label];
 
       const markerSizes: number[] = [];
@@ -167,8 +210,11 @@ export default function NoteClusters() {
       const lineWidths: number[] = [];
       const lineColors: string[] = [];
 
+      let hasHits = false;
+
       group.ids.forEach(id => {
           const score = searchScoreMap.get(id);
+          if (score !== undefined) hasHits = true;
           const isHovered = id === hoveredId;
 
           let size = 8;
@@ -202,6 +248,19 @@ export default function NoteClusters() {
           lineColors.push(lc);
       });
 
+      const cid = group.clusterId || label;
+      let displayName = label;
+      if (cid && cid !== '-1' && cid !== label) {
+          displayName = `Cluster ${cid}: ${label}`;
+      } else if (cid && cid !== '-1' && cid === label) {
+           // If label is "1" and cid is "1"
+           displayName = `Cluster ${cid}`;
+      }
+
+      if (hasHits && searchResults.length > 0) {
+          displayName = `<b>${displayName}</b>`;
+      }
+
       return {
         x: group.x,
         y: group.y,
@@ -210,7 +269,7 @@ export default function NoteClusters() {
         customdata: group.ids,
         mode: 'markers',
         type: 'scatter3d',
-        name: label,
+        name: displayName,
         marker: {
             size: markerSizes,
             opacity: markerOpacities,
