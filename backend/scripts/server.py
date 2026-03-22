@@ -99,6 +99,11 @@ def load_and_process_data():
             df['cluster_label'] = 'Unclustered'
         else:
             df['cluster_label'] = df['cluster_label'].fillna('Unclustered')
+
+        if 'cluster_id' not in df.columns:
+            df['cluster_id'] = '-1'
+        else:
+            df['cluster_id'] = df['cluster_id'].astype(str).fillna('-1')
             
         state.df_viz = df
         print("✨ Data processing complete.")
@@ -133,6 +138,7 @@ class NotePoint(BaseModel):
     title: str
     chunk_index: int
     total_chunks: Optional[int] = None
+    cluster_id: Optional[str] = None
     cluster_label: str
     umap_x: float
     umap_y: float
@@ -147,6 +153,7 @@ class SearchResult(BaseModel):
     chunk_index: int
     total_chunks: Optional[int] = None
     distance: float
+    cluster_id: Optional[str] = None
     cluster_label: str
     preview: Optional[str] = None
     
@@ -173,7 +180,7 @@ async def get_points():
     valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
     
     records = valid_df[[
-        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_label', 
+        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'cluster_label', 
         'umap_x', 'umap_y', 'umap_z', 'creation_date', 'modification_date'
     ]].to_dict(orient='records')
     
@@ -208,9 +215,11 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
     # We need to look up cluster labels from our cached dataframe since search results might comes raw from DB
     # We can create a lookup map
     cluster_map = {}
+    cluster_id_map = {}
     if not state.df_viz.empty:
         # unique_key -> cluster_label
         cluster_map = state.df_viz.set_index('unique_key')['cluster_label'].to_dict()
+        cluster_id_map = state.df_viz.set_index('unique_key')['cluster_id'].to_dict()
 
     for r in results:
         title = r.get('title', '')
@@ -223,6 +232,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
         
         # Lookup cluster
         cluster = cluster_map.get(unique_key, "Unknown")
+        cluster_id = cluster_id_map.get(unique_key, "-1")
         
         res_obj = SearchResult(
             unique_key=unique_key,
@@ -230,6 +240,7 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
             chunk_index=idx,
             total_chunks=total,
             distance=score,
+            cluster_id=cluster_id,
             cluster_label=cluster,
             preview=preview
         )

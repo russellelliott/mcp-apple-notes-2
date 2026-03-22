@@ -7,6 +7,7 @@ interface NotePoint {
   title: string;
   chunk_index: number;
   total_chunks?: number;
+  cluster_id?: string;
   cluster_label: string;
   umap_x: number;
   umap_y: number;
@@ -19,6 +20,7 @@ interface SearchResult {
   chunk_index: number;
   total_chunks?: number;
   distance: number;
+  cluster_id?: string;
   cluster_label: string;
   preview: string;
 }
@@ -121,7 +123,9 @@ export default function NoteClusters() {
           processingGroups[label].z.push(point.umap_z);
           processingGroups[label].ids.push(point.unique_key);
           const total = point.total_chunks || '?';
-          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index} of ${total}<br>Cluster: ${label}`);
+          // Use cluster_id if available for shorter display, but fallback to label for unclustered
+          const cid = (point.cluster_id && point.cluster_id !== '-1') ? point.cluster_id : label;
+          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index} of ${total}<br>Cluster: ${cid}`);
 
           globalSumX += point.umap_x;
           globalSumY += point.umap_y;
@@ -285,7 +289,7 @@ export default function NoteClusters() {
                                 </span>
                              </div>
                              <div style={{ fontSize: '0.8em', color: '#444', marginBottom: '6px', fontStyle: 'italic' }}>
-                                Cluster: {result.cluster_label}
+                                Cluster: {(result.cluster_id && result.cluster_id !== '-1') ? result.cluster_id : result.cluster_label}
                              </div>
                              <div style={{ fontSize: '0.9em', color: '#555', lineHeight: '1.4' }}>
                                 {result.preview}
