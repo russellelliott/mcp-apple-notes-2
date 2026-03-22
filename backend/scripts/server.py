@@ -249,6 +249,12 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
         
     unique_titles_found = set(r.title for r in formatted_results)
     
+    # Print top results to console for debugging
+    print(f"✅ Found {len(formatted_results)} matching chunks across {len(unique_titles_found)} notes.")
+    for i, res in enumerate(formatted_results):
+        cid = res.cluster_id if res.cluster_id and res.cluster_id != '-1' else res.cluster_label
+        print(f"   {i+1}. {res.title} (Chunk {res.chunk_index + 1} of {res.total_chunks or '?'}) [Score: {res.distance:.3f}, Cluster: {cid}]")
+
     return SearchResponse(
         results=formatted_results,
         match_ids=match_ids,

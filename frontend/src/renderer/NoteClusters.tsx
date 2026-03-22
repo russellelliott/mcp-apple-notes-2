@@ -125,7 +125,7 @@ export default function NoteClusters() {
           const total = point.total_chunks || '?';
           // Use cluster_id if available for shorter display, but fallback to label for unclustered
           const cid = (point.cluster_id && point.cluster_id !== '-1') ? point.cluster_id : label;
-          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index} of ${total}<br>Cluster: ${cid}`);
+          processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index + 1} of ${total}<br>Cluster: ${cid}`);
 
           globalSumX += point.umap_x;
           globalSumY += point.umap_y;
@@ -285,7 +285,7 @@ export default function NoteClusters() {
                              <div style={{ fontWeight: 'bold', marginBottom: '4px', color: 'black' }}>
                                 {result.title}
                                 <span style={{ fontWeight: 'normal', color: '#555', fontSize: '0.85em', marginLeft: '6px' }}>
-                                    (Chunk {result.chunk_index} of {result.total_chunks || '?'})
+                                    (Chunk {result.chunk_index + 1} of {result.total_chunks || '?'})
                                 </span>
                              </div>
                              <div style={{ fontSize: '0.8em', color: '#444', marginBottom: '6px', fontStyle: 'italic' }}>
