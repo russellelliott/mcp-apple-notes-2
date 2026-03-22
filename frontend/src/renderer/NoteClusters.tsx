@@ -105,7 +105,7 @@ export default function NoteClusters() {
     return map;
   }, [searchResults]);
 
-  const { clusterGroups, clusterColors, clusterTints } = useMemo(() => {
+  const { clusterGroups, clusterColors, clusterTints, clusterHoverTints } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
     const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[] } } = {};
     let globalSumX = 0;
@@ -138,6 +138,7 @@ export default function NoteClusters() {
 
     const processingColors: { [key: string]: string } = {};
     const processingTints: { [key: string]: string } = {};
+    const processingHoverTints: { [key: string]: string } = {};
 
     Object.keys(processingGroups).forEach(label => {
         const points = processingGroups[label];
@@ -151,9 +152,10 @@ export default function NoteClusters() {
 
         processingColors[label] = `hsl(${Math.round(angle)}, 75%, 45%)`;
         processingTints[label] = `hsla(${Math.round(angle)}, 75%, 45%, 0.25)`;
+        processingHoverTints[label] = `hsla(${Math.round(angle)}, 75%, 45%, 0.45)`;
     });
 
-    return { clusterGroups: processingGroups, clusterColors: processingColors, clusterTints: processingTints };
+    return { clusterGroups: processingGroups, clusterColors: processingColors, clusterTints: processingTints, clusterHoverTints: processingHoverTints };
   }, [data]);
 
   const plotData: any[] = useMemo(() => {
@@ -273,7 +275,7 @@ export default function NoteClusters() {
                                 padding: '12px',
                                 marginBottom: '8px',
                                 borderRadius: '6px',
-                                backgroundColor: (hoveredId === result.unique_key) ? '#e6f7ff' : (clusterTints[result.cluster_label] || 'white'),
+                                backgroundColor: (hoveredId === result.unique_key) ? (clusterHoverTints[result.cluster_label] || '#e6f7ff') : (clusterTints[result.cluster_label] || 'white'),
                                 border: '1px solid #eee',
                                 cursor: 'pointer',
                                 transition: 'all 0.2s',
@@ -289,7 +291,7 @@ export default function NoteClusters() {
                                 </span>
                              </div>
                              <div style={{ fontSize: '0.8em', color: '#444', marginBottom: '6px', fontStyle: 'italic' }}>
-                                Cluster: {(result.cluster_id && result.cluster_id !== '-1') ? result.cluster_id : result.cluster_label}
+                                Cluster {(result.cluster_id && result.cluster_id !== '-1') ? result.cluster_id : '?'}: {result.cluster_label}
                              </div>
                              <div style={{ fontSize: '0.9em', color: '#555', lineHeight: '1.4' }}>
                                 {result.preview}
