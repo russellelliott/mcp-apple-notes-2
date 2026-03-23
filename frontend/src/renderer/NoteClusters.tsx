@@ -239,12 +239,12 @@ export default function NoteClusters() {
     return { clusterGroups: processingGroups, clusterColors: processingColors, clusterTints: processingTints, clusterHoverTints: processingHoverTints, clusterOpaqueTints: processingOpaqueTints };
   }, [data]);
 
-  const plotData: any[] = useMemo(() => {
-    let sortedLabels = Object.keys(clusterGroups);
+  const sortedLabels = useMemo(() => {
+    let sorted = Object.keys(clusterGroups);
 
     if (searchResults.length > 0) {
         // Sort by relevance (closest distance first)
-        sortedLabels.sort((a, b) => {
+        sorted.sort((a, b) => {
             const groupA = clusterGroups[a];
             const groupB = clusterGroups[b];
 
@@ -268,7 +268,7 @@ export default function NoteClusters() {
             return minDistA - minDistB;
         });
     } else {
-         sortedLabels.sort((a, b) => {
+         sorted.sort((a, b) => {
              const idA = clusterGroups[a].clusterId || a;
              const idB = clusterGroups[b].clusterId || b;
              const numA = parseInt(idA);
@@ -279,7 +279,10 @@ export default function NoteClusters() {
              return String(idA).localeCompare(String(idB));
         });
     }
+    return sorted;
+  }, [clusterGroups, searchScoreMap, searchResults.length]);
 
+  const plotData: any[] = useMemo(() => {
     return sortedLabels.map(label => {
       const group = clusterGroups[label];
 
@@ -487,7 +490,7 @@ export default function NoteClusters() {
                         title: 'Notes Landscape (3D)',
                         autosize: true,
                         hovermode: 'closest',
-                        showlegend: true,
+                        showlegend: false,
                         paper_bgcolor: 'white',
                         scene: {
                             xaxis: { title: 'X', showgrid: false, zeroline: false, showticklabels: false },
@@ -499,22 +502,91 @@ export default function NoteClusters() {
                             }
                         },
                         margin: { t: 40, r: 20, b: 20, l: 20 },
-                        legend: {
-                            orientation: 'v',
-                            y: 1,
-                            x: 1,
-                            xanchor: 'left',
-                            yanchor: 'top',
-                            bgcolor: 'rgba(255,255,255,0.8)',
-                            font: {
-                                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-                                size: 12
-                            }
-                        }
+                        // legend: { ... } - hidden
                     }}
                     useResizeHandler={true}
                     style={{ width: '100%', height: '100%' }}
                 />
+            </div>
+            {/* Custom Legend Column */}
+            <div style={{
+                width: '180px',
+                display: 'flex',
+                flexDirection: 'column',
+                borderLeft: '1px solid #e0e0e0',
+                backgroundColor: '#f9f9f9',
+                padding: '10px',
+                boxSizing: 'border-box',
+                zIndex: 10,
+                fontSize: '11px',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+            }}>
+                <style>{`
+                    @keyframes marquee-scroll {
+                        0% { transform: translateX(0); }
+                        100% { transform: translateX(-100%); }
+                    }
+                    .cluster-label-container {
+                        overflow: hidden;
+                        white-space: nowrap;
+                        text-overflow: ellipsis;
+                        flex: 1;
+                        padding-left: 5px;
+                    }
+                    .cluster-label-content {
+                        display: inline-block;
+                    }
+                    .cluster-label-container:hover {
+                         text-overflow: clip;
+                    }
+                    .cluster-label-container:hover .cluster-label-content {
+                        animation: marquee-scroll 5s linear infinite;
+                        padding-right: 20px;
+                    }
+                    .cluster-row {
+                        display: flex;
+                        align-items: center;
+                        margin-bottom: 4px;
+                        cursor: default;
+                        padding: 2px 0;
+                    }
+                    .cluster-id {
+                        width: 30px;
+                        text-align: right;
+                        margin-right: 5px;
+                        font-weight: bold;
+                        color: #555;
+                        flex-shrink: 0;
+                    }
+                    .cluster-dot {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                        margin-right: 5px;
+                        flex-shrink: 0;
+                    }
+                `}</style>
+                <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
+                <div style={{ flex: 1, overflowY: 'auto' }}>
+                    {sortedLabels.map(label => {
+                        const group = clusterGroups[label];
+                        const cid = group.clusterId || label;
+                        const hasHits = group.customdata.some(d => searchScoreMap.has(d.unique_key));
+                        const color = clusterColors[label];
+
+                        return (
+                            <div key={label} className="cluster-row">
+                                <div className="cluster-dot" style={{ backgroundColor: color }}></div>
+                                <div className="cluster-id">#{cid}</div>
+                                <div className="cluster-label-container" title={label}>
+                                     <span className="cluster-label-content" style={{ fontWeight: hasHits ? 'bold' : 'normal' }}>
+                                         {label}
+                                     </span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
         </div>
       )}
