@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import Plot from 'react-plotly.js';
 import axios from 'axios';
 
@@ -34,6 +34,41 @@ interface NoteContent {
   cluster_id?: string;
   cluster_label?: string;
 }
+
+const ClusterLabel = ({ label, hasHits }: { label: string, hasHits: boolean }) => {
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLSpanElement>(null);
+
+    const checkOverflow = () => {
+        if (containerRef.current && contentRef.current) {
+            setIsOverflowing(contentRef.current.scrollWidth > containerRef.current.clientWidth);
+        }
+    };
+
+    useEffect(() => {
+        checkOverflow();
+        window.addEventListener('resize', checkOverflow);
+        return () => window.removeEventListener('resize', checkOverflow);
+    }, [label]);
+
+    return (
+        <div
+            className={`cluster-label-container ${isOverflowing ? 'overflowing' : ''}`}
+            title={label}
+            ref={containerRef}
+            onMouseEnter={checkOverflow}
+        >
+             <span
+                className="cluster-label-content"
+                style={{ fontWeight: hasHits ? 'bold' : 'normal' }}
+                ref={contentRef}
+             >
+                 {label}
+             </span>
+        </div>
+    );
+};
 
 export default function NoteClusters() {
   const [data, setData] = useState<NotePoint[]>([]);
@@ -376,7 +411,8 @@ export default function NoteClusters() {
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
             {/* Sidebar */}
             <div style={{
-                width: '350px',
+                width: '400px',
+                flexShrink: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 borderRight: '1px solid #e0e0e0',
@@ -444,7 +480,7 @@ export default function NoteClusters() {
             </div>
 
             {/* Plot Area */}
-            <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+            <div style={{ flex: 1, position: 'relative', height: '100%', minWidth: 0 }}>
                 {selectedNode && (
                   <div style={{
                       position: 'absolute',
@@ -510,7 +546,8 @@ export default function NoteClusters() {
             </div>
             {/* Custom Legend Column */}
             <div style={{
-                width: '180px',
+                width: '450px',
+                flexShrink: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 borderLeft: '1px solid #e0e0e0',
@@ -536,10 +573,10 @@ export default function NoteClusters() {
                     .cluster-label-content {
                         display: inline-block;
                     }
-                    .cluster-label-container:hover {
+                    .cluster-label-container.overflowing:hover {
                          text-overflow: clip;
                     }
-                    .cluster-label-container:hover .cluster-label-content {
+                    .cluster-label-container.overflowing:hover .cluster-label-content {
                         animation: marquee-scroll 5s linear infinite;
                         padding-right: 20px;
                     }
@@ -578,11 +615,7 @@ export default function NoteClusters() {
                             <div key={label} className="cluster-row">
                                 <div className="cluster-dot" style={{ backgroundColor: color }}></div>
                                 <div className="cluster-id">#{cid}</div>
-                                <div className="cluster-label-container" title={label}>
-                                     <span className="cluster-label-content" style={{ fontWeight: hasHits ? 'bold' : 'normal' }}>
-                                         {label}
-                                     </span>
-                                </div>
+                                <ClusterLabel label={label} hasHits={hasHits} />
                             </div>
                         );
                     })}
