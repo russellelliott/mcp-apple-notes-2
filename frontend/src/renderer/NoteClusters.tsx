@@ -505,7 +505,11 @@ export default function NoteClusters() {
                             x: 1,
                             xanchor: 'left',
                             yanchor: 'top',
-                            bgcolor: 'rgba(255,255,255,0.8)'
+                            bgcolor: 'rgba(255,255,255,0.8)',
+                            font: {
+                                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+                                size: 12
+                            }
                         }
                     }}
                     useResizeHandler={true}
