@@ -401,6 +401,7 @@ export default function NoteClusters() {
                             key={result.unique_key}
                             onMouseEnter={() => setHoveredId(result.unique_key)}
                             onMouseLeave={() => setHoveredId(null)}
+                            onClick={() => fetchNoteContent(result.title, result.chunk_index, result.cluster_id, result.cluster_label)}
                             style={{
                                 padding: '12px',
                                 marginBottom: '8px',
