@@ -74,14 +74,12 @@ export default function NoteClusters() {
 
   const handlePlotClick = (event: any) => {
     const point = event.points[0];
-    const unique_key = point.customdata;
-    const nodeData = data.find(d => d.unique_key === unique_key);
-    if (!nodeData) return;
+    const { title, chunk_index, cluster_id, cluster_label } = point.customdata;
 
     // Set hoveredId to null to avoid confusing interactions
     setHoveredId(null);
 
-    fetchNoteContent(nodeData.title, nodeData.chunk_index, nodeData.cluster_id, nodeData.cluster_label);
+    fetchNoteContent(title, chunk_index, cluster_id, cluster_label);
   };
 
   const handleNextChunk = () => {
@@ -174,7 +172,7 @@ export default function NoteClusters() {
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
-    const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; ids: string[]; text: string[]; clusterId?: string } } = {};
+    const processingGroups: { [key: string]: { x: number[]; y: number[]; z: number[]; customdata: any[]; text: string[]; clusterId?: string } } = {};
     let globalSumX = 0;
     let globalSumY = 0;
     let count = 0;
@@ -183,12 +181,12 @@ export default function NoteClusters() {
       data.forEach(point => {
           const label = point.cluster_label || 'Unclustered';
           if (!processingGroups[label]) {
-              processingGroups[label] = { x: [], y: [], z: [], ids: [], text: [] };
+              processingGroups[label] = { x: [], y: [], z: [], customdata: [], text: [] };
           }
           processingGroups[label].x.push(point.umap_x);
           processingGroups[label].y.push(point.umap_y);
           processingGroups[label].z.push(point.umap_z);
-          processingGroups[label].ids.push(point.unique_key);
+
           const total = point.total_chunks || '?';
           // Use cluster_id if available for shorter display, but fallback to label for unclustered
           const cid = (point.cluster_id && point.cluster_id !== '-1') ? point.cluster_id : label;
@@ -196,6 +194,15 @@ export default function NoteClusters() {
              processingGroups[label].clusterId = cid;
           }
           processingGroups[label].text.push(`<b>${point.title}</b><br>Chunk ${point.chunk_index + 1} of ${total}<br>Cluster: ${cid}`);
+
+          // Store full context in customdata for click handling
+          processingGroups[label].customdata.push({
+              unique_key: point.unique_key,
+              title: point.title,
+              chunk_index: point.chunk_index,
+              cluster_id: cid,
+              cluster_label: label
+          });
 
           globalSumX += point.umap_x;
           globalSumY += point.umap_y;
@@ -243,14 +250,14 @@ export default function NoteClusters() {
 
             // Find best (minimum) distance in each group
             let minDistA = Infinity;
-            groupA.ids.forEach(id => {
-                const s = searchScoreMap.get(id);
+            groupA.customdata.forEach(data => {
+                const s = searchScoreMap.get(data.unique_key);
                 if (s !== undefined && s < minDistA) minDistA = s;
             });
 
             let minDistB = Infinity;
-            groupB.ids.forEach(id => {
-                const s = searchScoreMap.get(id);
+            groupB.customdata.forEach(data => {
+                const s = searchScoreMap.get(data.unique_key);
                 if (s !== undefined && s < minDistB) minDistB = s;
             });
 
@@ -283,7 +290,8 @@ export default function NoteClusters() {
 
       let hasHits = false;
 
-      group.ids.forEach(id => {
+      group.customdata.forEach(data => {
+          const id = data.unique_key;
           const score = searchScoreMap.get(id);
           if (score !== undefined) hasHits = true;
           const isHovered = id === hoveredId;
@@ -337,7 +345,7 @@ export default function NoteClusters() {
         y: group.y,
         z: group.z,
         text: group.text,
-        customdata: group.ids,
+        customdata: group.customdata,
         mode: 'markers',
         type: 'scatter3d',
         name: displayName,

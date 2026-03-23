@@ -367,8 +367,8 @@ def _generate_label_task(topic_id: int, obj: Dict[str, Any]) -> tuple:
             new_label = resp.json().get('response', '').strip()
             # Clean up quotes and newlines
             new_label = new_label.strip('"').strip("'").split('\n')[0]
-            if len(new_label) > 100: # sanity check
-                 new_label = new_label[:100]
+            # if len(new_label) > 100: # sanity check
+            #      new_label = new_label[:100]
             return (topic_id, old_label, new_label)
     except Exception:
         pass
