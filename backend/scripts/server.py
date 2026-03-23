@@ -166,7 +166,46 @@ class SearchResponse(BaseModel):
     match_ids: List[str] # List of unique_keys that matched
     stats: SearchStats
 
+class NoteContent(BaseModel):
+    title: str
+    chunk_index: int
+    content: str
+    total_chunks: int
+
 # --- Endpoints ---
+
+@app.get("/note_content", response_model=NoteContent)
+async def get_note_content(title: str, chunk_index: int):
+    """Get full content for a specific chunk"""
+    if state.df_viz.empty:
+        raise HTTPException(status_code=503, detail="Data not loaded")
+    
+    try:
+        # Filter for the specific chunk
+        # Using string comparison for title to be safe, equality for chunk_index
+        mask = (state.df_viz['title'] == title) & (state.df_viz['chunk_index'] == chunk_index)
+        row = state.df_viz[mask]
+        
+        if row.empty:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+            
+        # Get content
+        content = row.iloc[0].get('chunk_content', '')
+        if pd.isna(content) or content == '':
+             content = row.iloc[0].get('text', '')
+             if pd.isna(content): content = ""
+        
+        total = row.iloc[0].get('total_chunks', 1)
+        
+        return NoteContent(
+            title=title,
+            chunk_index=chunk_index,
+            content=str(content),
+            total_chunks=int(total)
+        )
+    except Exception as e:
+        print(f"Error fetching content: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/points", response_model=List[NotePoint])
 async def get_points():
