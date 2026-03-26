@@ -35,7 +35,17 @@ interface NoteContent {
   cluster_label?: string;
 }
 
-const ClusterLabel = ({ label, hasHits }: { label: string, hasHits: boolean }) => {
+const ClusterLabel = ({
+  label,
+  hasHits,
+  isSelected,
+  isDimmed,
+}: {
+  label: string;
+  hasHits: boolean;
+  isSelected: boolean;
+  isDimmed: boolean;
+}) => {
     const [isOverflowing, setIsOverflowing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLSpanElement>(null);
@@ -61,7 +71,10 @@ const ClusterLabel = ({ label, hasHits }: { label: string, hasHits: boolean }) =
         >
              <span
                 className="cluster-label-content"
-                style={{ fontWeight: hasHits ? 'bold' : 'normal' }}
+              style={{
+                fontWeight: isSelected ? 700 : (hasHits ? 600 : 400),
+                color: isDimmed ? '#8c8c8c' : '#222'
+              }}
                 ref={contentRef}
              >
                  {label}
@@ -79,6 +92,10 @@ export default function NoteClusters() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
+  const [searchSelectedClusters, setSearchSelectedClusters] = useState<Set<string>>(new Set());
+
+  const isSearchMode = searchQuery.trim() !== '';
 
   const fetchNoteContent = async (title: string, chunk_index: number, initial_cluster_id?: string, initial_cluster_label?: string) => {
       setIsLoadingContent(true);
@@ -199,11 +216,40 @@ export default function NoteClusters() {
     };
   }, [debouncedQuery]);
 
+  useEffect(() => {
+    // Search-mode cluster filtering is temporary and should not persist
+    // once the query is cleared.
+    if (!isSearchMode) {
+      setSearchSelectedClusters(new Set());
+    }
+  }, [isSearchMode]);
+
   const searchScoreMap = useMemo(() => {
     const map = new Map<string, number>();
     searchResults.forEach(r => map.set(r.unique_key, r.distance));
     return map;
   }, [searchResults]);
+
+  const toggleClusterSelection = (label: string) => {
+    const setter = isSearchMode ? setSearchSelectedClusters : setSelectedClusters;
+    setter(prev => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else {
+        next.add(label);
+      }
+      return next;
+    });
+  };
+
+  const clearActiveClusterFilter = () => {
+    if (isSearchMode) {
+      setSearchSelectedClusters(new Set());
+    } else {
+      setSelectedClusters(new Set());
+    }
+  };
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     // Logic calculation - always run it, but safely handle empty data
@@ -274,10 +320,23 @@ export default function NoteClusters() {
     return { clusterGroups: processingGroups, clusterColors: processingColors, clusterTints: processingTints, clusterHoverTints: processingHoverTints, clusterOpaqueTints: processingOpaqueTints };
   }, [data]);
 
+  const clusterCentroids = useMemo(() => {
+    const centroids = new Map<string, { x: number; y: number; z: number }>();
+    Object.keys(clusterGroups).forEach(label => {
+      const group = clusterGroups[label];
+      if (!group || group.x.length === 0) return;
+      const x = group.x.reduce((sum, value) => sum + value, 0) / group.x.length;
+      const y = group.y.reduce((sum, value) => sum + value, 0) / group.y.length;
+      const z = group.z.reduce((sum, value) => sum + value, 0) / group.z.length;
+      centroids.set(label, { x, y, z });
+    });
+    return centroids;
+  }, [clusterGroups]);
+
   const sortedLabels = useMemo(() => {
     let sorted = Object.keys(clusterGroups);
 
-    if (searchResults.length > 0) {
+    if (isSearchMode && searchResults.length > 0) {
         // Sort by relevance (closest distance first)
         sorted.sort((a, b) => {
             const groupA = clusterGroups[a];
@@ -302,6 +361,50 @@ export default function NoteClusters() {
 
             return minDistA - minDistB;
         });
+    } else if (!isSearchMode && selectedClusters.size > 0) {
+        // Selected clusters first, then remaining clusters by nearest centroid
+        // distance to any selected cluster.
+        const selectedLabels = Array.from(selectedClusters).filter(label => clusterCentroids.has(label));
+
+        const minDistanceToSelection = (label: string) => {
+          if (selectedClusters.has(label)) return -1;
+          const current = clusterCentroids.get(label);
+          if (!current || selectedLabels.length === 0) return Number.POSITIVE_INFINITY;
+
+          let minDistance = Number.POSITIVE_INFINITY;
+          selectedLabels.forEach(selectedLabel => {
+            const selectedCentroid = clusterCentroids.get(selectedLabel);
+            if (!selectedCentroid) return;
+            const dx = current.x - selectedCentroid.x;
+            const dy = current.y - selectedCentroid.y;
+            const dz = current.z - selectedCentroid.z;
+            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance < minDistance) minDistance = distance;
+          });
+          return minDistance;
+        };
+
+        sorted.sort((a, b) => {
+          const aSelected = selectedClusters.has(a);
+          const bSelected = selectedClusters.has(b);
+
+          if (aSelected && !bSelected) return -1;
+          if (!aSelected && bSelected) return 1;
+
+          if (aSelected && bSelected) {
+            const idA = clusterGroups[a].clusterId || a;
+            const idB = clusterGroups[b].clusterId || b;
+            return String(idA).localeCompare(String(idB), undefined, { numeric: true });
+          }
+
+          const distA = minDistanceToSelection(a);
+          const distB = minDistanceToSelection(b);
+          if (distA !== distB) return distA - distB;
+
+          const idA = clusterGroups[a].clusterId || a;
+          const idB = clusterGroups[b].clusterId || b;
+          return String(idA).localeCompare(String(idB), undefined, { numeric: true });
+        });
     } else {
          sorted.sort((a, b) => {
              const idA = clusterGroups[a].clusterId || a;
@@ -315,10 +418,16 @@ export default function NoteClusters() {
         });
     }
     return sorted;
-  }, [clusterGroups, searchScoreMap, searchResults.length]);
+  }, [clusterCentroids, clusterGroups, isSearchMode, searchScoreMap, searchResults.length, selectedClusters]);
+
+  const activeSelectedClusters = isSearchMode ? searchSelectedClusters : selectedClusters;
+  const hasActiveClusterFilter = activeSelectedClusters.size > 0;
+  const visibleLabels = hasActiveClusterFilter
+    ? sortedLabels.filter(label => activeSelectedClusters.has(label))
+    : sortedLabels;
 
   const plotData: any[] = useMemo(() => {
-    return sortedLabels.map(label => {
+    return visibleLabels.map(label => {
       const group = clusterGroups[label];
 
       const markerSizes: number[] = [];
@@ -399,7 +508,7 @@ export default function NoteClusters() {
         hoverinfo: 'text'
       };
     });
-  }, [clusterGroups, clusterColors, searchScoreMap, hoveredId, searchResults.length]);
+  }, [clusterGroups, clusterColors, hoveredId, searchResults.length, searchScoreMap, visibleLabels]);
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -604,18 +713,56 @@ export default function NoteClusters() {
                     }
                 `}</style>
                 <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                  <button
+                    onClick={clearActiveClusterFilter}
+                    disabled={!hasActiveClusterFilter}
+                    style={{
+                      padding: '6px 10px',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      cursor: hasActiveClusterFilter ? 'pointer' : 'not-allowed',
+                      backgroundColor: hasActiveClusterFilter ? '#fff' : '#f2f2f2',
+                      color: hasActiveClusterFilter ? '#333' : '#999',
+                      boxShadow: 'none',
+                      opacity: 1,
+                      transform: 'none'
+                    }}
+                  >
+                    Reset Full View
+                  </button>
+                  {hasActiveClusterFilter && (
+                    <span style={{ color: '#666', fontSize: '11px' }}>
+                      Showing {activeSelectedClusters.size} cluster{activeSelectedClusters.size === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </div>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {sortedLabels.map(label => {
                         const group = clusterGroups[label];
                         const cid = group.clusterId || label;
                         const hasHits = group.customdata.some(d => searchScoreMap.has(d.unique_key));
                         const color = clusterColors[label];
+                    const isSelected = activeSelectedClusters.has(label);
+                    const isDimmed = hasActiveClusterFilter && !isSelected;
 
                         return (
-                            <div key={label} className="cluster-row">
-                                <div className="cluster-dot" style={{ backgroundColor: color }}></div>
-                                <div className="cluster-id">#{cid}</div>
-                                <ClusterLabel label={label} hasHits={hasHits} />
+                      <div
+                        key={label}
+                        className="cluster-row"
+                        onClick={() => toggleClusterSelection(label)}
+                        style={{
+                          opacity: isDimmed ? 0.45 : 1,
+                          cursor: 'pointer',
+                          backgroundColor: isSelected ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
+                          borderRadius: '4px',
+                          transition: 'opacity 0.15s ease, background-color 0.15s ease'
+                        }}
+                      >
+                        <div className="cluster-dot" style={{ backgroundColor: color, opacity: isDimmed ? 0.5 : 1 }}></div>
+                        <div className="cluster-id" style={{ color: isDimmed ? '#9a9a9a' : '#555', fontWeight: isSelected ? 700 : 600 }}>#{cid}</div>
+                        <ClusterLabel label={label} hasHits={hasHits} isSelected={isSelected} isDimmed={isDimmed} />
                             </div>
                         );
                     })}
