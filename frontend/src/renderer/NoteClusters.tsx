@@ -724,12 +724,13 @@ export default function NoteClusters() {
                     }
                 `}</style>
                 <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', minHeight: '30px' }}>
                     {hasActiveClusterFilter ? (
                         <button
                             onClick={clearActiveClusterFilter}
                             style={{
                                 padding: '6px 10px',
+                        height: '30px',
                                 border: '1px solid #ccc',
                                 borderRadius: '4px',
                                 fontSize: '11px',
@@ -744,7 +745,7 @@ export default function NoteClusters() {
                             Reset Full View
                         </button>
                     ) : (
-                        <div style={{ width: '112px', flexShrink: 0 }} />
+                        <div style={{ width: '112px', height: '30px', flexShrink: 0 }} />
                     )}
                     <span style={{ color: '#666', fontSize: '11px' }}>
                         Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
