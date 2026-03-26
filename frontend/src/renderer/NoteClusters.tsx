@@ -693,8 +693,19 @@ export default function NoteClusters() {
                         display: flex;
                         align-items: center;
                         margin-bottom: 4px;
-                        cursor: default;
+                      cursor: pointer;
                         padding: 2px 0;
+                      border-radius: 4px;
+                      transition: opacity 0.15s ease, background-color 0.15s ease;
+                    }
+                    .cluster-row:hover {
+                      background-color: rgba(0, 0, 0, 0.08);
+                    }
+                    .cluster-row.cluster-row-selected {
+                      background-color: rgba(0, 0, 0, 0.04);
+                    }
+                    .cluster-row.cluster-row-selected:hover {
+                      background-color: rgba(0, 0, 0, 0.1);
                     }
                     .cluster-id {
                         width: 30px;
@@ -714,29 +725,30 @@ export default function NoteClusters() {
                 `}</style>
                 <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                  <button
-                    onClick={clearActiveClusterFilter}
-                    disabled={!hasActiveClusterFilter}
-                    style={{
-                      padding: '6px 10px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      cursor: hasActiveClusterFilter ? 'pointer' : 'not-allowed',
-                      backgroundColor: hasActiveClusterFilter ? '#fff' : '#f2f2f2',
-                      color: hasActiveClusterFilter ? '#333' : '#999',
-                      boxShadow: 'none',
-                      opacity: 1,
-                      transform: 'none'
-                    }}
-                  >
-                    Reset Full View
-                  </button>
-                  {hasActiveClusterFilter && (
+                    {hasActiveClusterFilter ? (
+                        <button
+                            onClick={clearActiveClusterFilter}
+                            style={{
+                                padding: '6px 10px',
+                                border: '1px solid #ccc',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                cursor: 'pointer',
+                                backgroundColor: '#fff',
+                                color: '#333',
+                                boxShadow: 'none',
+                                opacity: 1,
+                                transform: 'none'
+                            }}
+                        >
+                            Reset Full View
+                        </button>
+                    ) : (
+                        <div style={{ width: '112px', flexShrink: 0 }} />
+                    )}
                     <span style={{ color: '#666', fontSize: '11px' }}>
-                      Showing {activeSelectedClusters.size} cluster{activeSelectedClusters.size === 1 ? '' : 's'}
+                        Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
                     </span>
-                  )}
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {sortedLabels.map(label => {
@@ -750,14 +762,11 @@ export default function NoteClusters() {
                         return (
                       <div
                         key={label}
-                        className="cluster-row"
+                        className={`cluster-row ${isSelected ? 'cluster-row-selected' : ''}`}
                         onClick={() => toggleClusterSelection(label)}
                         style={{
                           opacity: isDimmed ? 0.45 : 1,
-                          cursor: 'pointer',
-                          backgroundColor: isSelected ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
-                          borderRadius: '4px',
-                          transition: 'opacity 0.15s ease, background-color 0.15s ease'
+                          cursor: 'pointer'
                         }}
                       >
                         <div className="cluster-dot" style={{ backgroundColor: color, opacity: isDimmed ? 0.5 : 1 }}></div>
