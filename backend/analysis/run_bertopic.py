@@ -7,6 +7,7 @@ import sys
 from collections import Counter
 import torch
 import html
+import time
 from pathlib import Path
 # Ensure repo root is on sys.path so backend.* imports work when running
 # this script directly (not as an installed package).
@@ -108,15 +109,19 @@ def backup_lancedb_table(db, table_name, verbose=True):
         print(f"   ❌ Failed to create backup: {e}")
         return None
 
-# --- 2. DATA LOADING & BACKUP ---
+# --- Execution timing start ---
+start_time = time.time()
+
 db = lancedb.connect(DB_PATH)
+table = db.open_table(TABLE_NAME)
+df = table.to_pandas()
+df['clean_chunk_content'] = df['chunk_content'].apply(clean_note_content)
+docs = df['clean_chunk_content'].fillna("").tolist()
+
 print(f"📥 Connecting to LanceDB at {DB_PATH}...")
 
 # Create backup before any operations
 backup_lancedb_table(db, TABLE_NAME)
-
-table = db.open_table(TABLE_NAME)
-df = table.to_pandas()
 
 print(f"🧹 Cleaning {len(df)} chunks of binary data...")
 df['clean_chunk_content'] = df['chunk_content'].apply(clean_note_content)
@@ -360,6 +365,10 @@ try:
     print(f"💾 Saving BERTopic model to {MODEL_DIR} (safetensors)...")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     topic_model.save(MODEL_DIR, serialization="safetensors", save_ctfidf=True)
-    print("✅ BERTopic model saved.")
+    print(f"✅ BERTopic model saved.")
 except Exception as e:
     print(f"⚠️ Failed to save BERTopic model: {e}")
+
+# --- Print total execution time ---
+elapsed = time.time() - start_time
+print(f"Total execution time: {elapsed:.2f} seconds")
