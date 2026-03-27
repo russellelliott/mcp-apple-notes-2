@@ -720,6 +720,7 @@ export default function NoteClusters() {
 
     if (shouldPositionLeft) {
       return {
+        positionLeft: true,
         left: 'auto',
         right: containerWidth - tooltipPosition.x + OFFSET,
         top: tooltipPosition.y + OFFSET,
@@ -727,6 +728,7 @@ export default function NoteClusters() {
     }
 
     return {
+      positionLeft: false,
       left: tooltipPosition.x + OFFSET,
       right: 'auto',
       top: tooltipPosition.y + OFFSET,
@@ -734,10 +736,9 @@ export default function NoteClusters() {
   }, [tooltipPosition]);
 
   const modalStyle = useMemo(() => {
-    const MODAL_WIDTH = 400;
     const OFFSET = 20;
     const plotWidth = plotAreaRef.current?.getBoundingClientRect().width || window.innerWidth;
-    const shouldPositionLeft = plotWidth - OFFSET < MODAL_WIDTH;
+    const shouldPositionLeft = tooltipPosition.x > plotWidth * 0.5;
 
     const baseStyle: React.CSSProperties = {
       position: 'absolute',
@@ -1008,6 +1009,7 @@ export default function NoteClusters() {
                   color: '#222',
                   fontSize: '12px',
                   lineHeight: 1.4,
+                  textAlign: tooltipStyle.positionLeft ? 'right' : 'left',
                   overflowWrap: 'anywhere',
                 }}
               >
