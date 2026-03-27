@@ -186,7 +186,7 @@ export default function NoteClusters() {
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoverSource, setHoverSource] = useState<'canvas' | 'list' | null>(null);
-  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
+  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, containerWidth: 0 });
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
@@ -649,6 +649,7 @@ export default function NoteClusters() {
     setTooltipPosition({
       x: nativeEvent.clientX - rect.left,
       y: nativeEvent.clientY - rect.top,
+      containerWidth: rect.width,
     });
   }, []);
 
@@ -711,6 +712,69 @@ export default function NoteClusters() {
     },
     [data],
   );
+
+  const tooltipStyle = useMemo(() => {
+    const OFFSET = 12;
+    const containerWidth = tooltipPosition.containerWidth || 0;
+    const shouldPositionLeft = tooltipPosition.x > containerWidth * 0.5;
+
+    if (shouldPositionLeft) {
+      return {
+        left: 'auto',
+        right: containerWidth - tooltipPosition.x + OFFSET,
+        top: tooltipPosition.y + OFFSET,
+      };
+    }
+
+    return {
+      left: tooltipPosition.x + OFFSET,
+      right: 'auto',
+      top: tooltipPosition.y + OFFSET,
+    };
+  }, [tooltipPosition]);
+
+  const modalStyle = useMemo(() => {
+    const MODAL_WIDTH = 400;
+    const OFFSET = 20;
+    const plotWidth = plotAreaRef.current?.getBoundingClientRect().width || window.innerWidth;
+    const shouldPositionLeft = plotWidth - OFFSET < MODAL_WIDTH;
+
+    const baseStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: '20px',
+      width: '400px',
+      maxHeight: '80vh',
+      border: '1px solid #ccc',
+      borderRadius: '8px',
+      paddingTop: '20px',
+      paddingBottom: '20px',
+      paddingLeft: shouldPositionLeft ? '10px' : '10px',
+      paddingRight: shouldPositionLeft ? '20px' : '20px',
+      boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+      zIndex: 100,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      textAlign: shouldPositionLeft ? 'right' : 'left',
+      ...(shouldPositionLeft
+        ? { right: Math.max(0, plotWidth - tooltipPosition.x + OFFSET) }
+        : { right: '20px' }),
+    };
+
+    const headerStyle: React.CSSProperties = {
+      display: 'flex',
+      justifyContent: shouldPositionLeft ? 'flex-end' : 'flex-start',
+      alignItems: 'flex-start',
+      marginBottom: '10px',
+      flexDirection: shouldPositionLeft ? 'row-reverse' : 'row',
+    };
+
+    return {
+      positionLeft: shouldPositionLeft,
+      base: baseStyle,
+      header: headerStyle,
+    };
+  }, [tooltipPosition]);
 
   const cameraPosition = useMemo(() => {
     const { center, radius } = sceneBounds;
@@ -836,31 +900,12 @@ export default function NoteClusters() {
             {selectedNode && (
               <div
                 style={{
-                  position: 'absolute',
-                  top: '20px',
-                  right: '20px',
-                  width: '400px',
-                  maxHeight: '80vh',
+                  ...modalStyle.base,
                   backgroundColor: selectedNodeColor,
-                  border: '1px solid #ccc',
-                  borderRadius: '8px',
-                  padding: '20px',
-                  boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
-                  zIndex: 100,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
                 }}
               >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-start',
-                    marginBottom: '10px',
-                  }}
-                >
-                  <h3 style={{ margin: 0, fontSize: '1.1em', wordBreak: 'break-word', color: '#333' }}>
+                <div style={modalStyle.header}>
+                  <h3 style={{ margin: 0, fontSize: '1.1em', wordBreak: 'break-word', color: '#333', textAlign: modalStyle.positionLeft ? 'right' : 'left', flex: 1 }}>
                     {selectedNode.title}
                   </h3>
                   <button
@@ -879,7 +924,7 @@ export default function NoteClusters() {
                   </button>
                 </div>
 
-                <div style={{ fontSize: '0.9em', color: '#555', marginBottom: '10px' }}>
+                <div style={{ fontSize: '0.9em', color: '#555', marginBottom: '10px', textAlign: modalStyle.positionLeft ? 'right' : 'left' }}>
                   Cluster {selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?'}:{' '}
                   {selectedNode.cluster_label}
                 </div>
@@ -896,6 +941,7 @@ export default function NoteClusters() {
                     backgroundColor: 'rgba(255,255,255,0.5)',
                     borderRadius: '4px',
                     border: '1px solid rgba(0,0,0,0.05)',
+                    textAlign: modalStyle.positionLeft ? 'right' : 'left',
                   }}
                 >
                   {isLoadingContent ? 'Loading content...' : selectedNode.content}
@@ -904,9 +950,11 @@ export default function NoteClusters() {
                 <div
                   style={{
                     display: 'flex',
-                    justifyContent: 'space-between',
+                    justifyContent: modalStyle.positionLeft ? 'flex-end' : 'flex-start',
                     alignItems: 'center',
                     marginTop: 'auto',
+                    gap: '10px',
+                    flexDirection: modalStyle.positionLeft ? 'row-reverse' : 'row',
                   }}
                 >
                   <button
@@ -922,7 +970,7 @@ export default function NoteClusters() {
                   >
                     &lt; Prev
                   </button>
-                  <span style={{ fontSize: '0.9em', color: '#444' }}>
+                  <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap' }}>
                     Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}
                   </span>
                   <button
@@ -946,8 +994,9 @@ export default function NoteClusters() {
               <div
                 style={{
                   position: 'absolute',
-                  left: tooltipPosition.x + 12,
-                  top: tooltipPosition.y + 12,
+                  left: tooltipStyle.left,
+                  right: tooltipStyle.right,
+                  top: tooltipStyle.top,
                   pointerEvents: 'none',
                   zIndex: 120,
                   backgroundColor: hoveredClusterColor,
