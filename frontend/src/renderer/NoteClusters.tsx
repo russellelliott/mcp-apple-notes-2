@@ -101,10 +101,12 @@ const DotInstances = ({
   onClick: (event: ThreeEvent<MouseEvent>) => void;
 }) => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const glowMeshRef = useRef<THREE.InstancedMesh>(null);
 
   useLayoutEffect(() => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    const glowMesh = glowMeshRef.current;
+    if (!mesh || !glowMesh) return;
 
     const temp = new THREE.Object3D();
     bucket.points.forEach((point, index) => {
@@ -112,24 +114,43 @@ const DotInstances = ({
       temp.scale.setScalar(sphereRadius);
       temp.updateMatrix();
       mesh.setMatrixAt(index, temp.matrix);
+
+      temp.scale.setScalar(sphereRadius * 2.4);
+      temp.updateMatrix();
+      glowMesh.setMatrixAt(index, temp.matrix);
     });
 
     mesh.instanceMatrix.needsUpdate = true;
+    glowMesh.instanceMatrix.needsUpdate = true;
   }, [bucket.points, sphereRadius]);
 
   return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, bucket.points.length]}
-      userData={{ points: bucket.points }}
-      onPointerOver={onPointerOver}
-      onPointerMove={onPointerMove}
-      onPointerOut={onPointerOut}
-      onClick={onClick}
-    >
-      <sphereGeometry args={[1, 12, 12]} />
-      <meshBasicMaterial color={bucket.color} toneMapped={false} />
-    </instancedMesh>
+    <>
+      <instancedMesh ref={glowMeshRef} args={[undefined, undefined, bucket.points.length]}>
+        <sphereGeometry args={[1, 10, 10]} />
+        <meshBasicMaterial
+          color={bucket.color}
+          transparent
+          opacity={0.2}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </instancedMesh>
+
+      <instancedMesh
+        ref={meshRef}
+        args={[undefined, undefined, bucket.points.length]}
+        userData={{ points: bucket.points }}
+        onPointerOver={onPointerOver}
+        onPointerMove={onPointerMove}
+        onPointerOut={onPointerOut}
+        onClick={onClick}
+      >
+        <sphereGeometry args={[1, 12, 12]} />
+        <meshBasicMaterial color={bucket.color} toneMapped={false} />
+      </instancedMesh>
+    </>
   );
 };
 
@@ -1043,7 +1064,7 @@ export default function NoteClusters() {
                 setHoveredId(null);
                 setHoverSource(null);
               }}
-              style={{ width: '100%', height: '100%', background: 'white' }}
+              style={{ width: '100%', height: '100%', background: '#000000' }}
             >
               <ambientLight intensity={0.9} />
               <OrbitControls
