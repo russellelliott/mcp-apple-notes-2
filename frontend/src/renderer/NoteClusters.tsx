@@ -83,6 +83,8 @@ const mixColorWithWhite = (baseColor: string, whiteMix: number) => {
 
 const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35);
 
+const DOT_RADIUS_BASE = 0.016;
+
 const DotInstances = ({
   bucket,
   sphereRadius,
@@ -1053,7 +1055,7 @@ export default function NoteClusters() {
               />
 
               {buckets.map((bucket) => {
-                const sphereRadius = (bucket.sizeMetric / 0.02) * Math.max(sceneBounds.radius * 0.006, 0.04);
+                const sphereRadius = (bucket.sizeMetric / 0.02) * DOT_RADIUS_BASE;
                 return (
                   <DotInstances
                     key={`bucket-${bucket.key}-${bucket.points.length}`}
