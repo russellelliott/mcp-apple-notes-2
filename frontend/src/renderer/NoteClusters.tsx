@@ -66,6 +66,7 @@ interface PointBucket {
   key: string;
   sizeMetric: number;
   color: string;
+  glowOpacity: number;
   points: VisualPoint[];
 }
 
@@ -106,7 +107,7 @@ const DotInstances = ({
   useLayoutEffect(() => {
     const mesh = meshRef.current;
     const glowMesh = glowMeshRef.current;
-    if (!mesh || !glowMesh) return;
+    if (!mesh) return;
 
     const temp = new THREE.Object3D();
     bucket.points.forEach((point, index) => {
@@ -115,28 +116,34 @@ const DotInstances = ({
       temp.updateMatrix();
       mesh.setMatrixAt(index, temp.matrix);
 
-      temp.scale.setScalar(sphereRadius * 2.4);
-      temp.updateMatrix();
-      glowMesh.setMatrixAt(index, temp.matrix);
+      if (glowMesh) {
+        temp.scale.setScalar(sphereRadius * 2.4);
+        temp.updateMatrix();
+        glowMesh.setMatrixAt(index, temp.matrix);
+      }
     });
 
     mesh.instanceMatrix.needsUpdate = true;
-    glowMesh.instanceMatrix.needsUpdate = true;
+    if (glowMesh) {
+      glowMesh.instanceMatrix.needsUpdate = true;
+    }
   }, [bucket.points, sphereRadius]);
 
   return (
     <>
-      <instancedMesh ref={glowMeshRef} args={[undefined, undefined, bucket.points.length]}>
-        <sphereGeometry args={[1, 10, 10]} />
-        <meshBasicMaterial
-          color={bucket.color}
-          transparent
-          opacity={0.2}
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          toneMapped={false}
-        />
-      </instancedMesh>
+      {bucket.glowOpacity > 0 && (
+        <instancedMesh ref={glowMeshRef} args={[undefined, undefined, bucket.points.length]}>
+          <sphereGeometry args={[1, 10, 10]} />
+          <meshBasicMaterial
+            color={bucket.color}
+            transparent
+            opacity={bucket.glowOpacity}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+            toneMapped={false}
+          />
+        </instancedMesh>
+      )}
 
       <instancedMesh
         ref={meshRef}
@@ -591,7 +598,7 @@ export default function NoteClusters() {
 
         const color = baseColor.clone();
         if (hasSearchHits && !isHit) {
-          color.lerp(new THREE.Color('#c4c4c4'), 0.65);
+          color.lerp(new THREE.Color('#4b5563'), 0.85);
         }
         map.set(meta.unique_key, color.getStyle());
       });
@@ -626,13 +633,15 @@ export default function NoteClusters() {
         }
 
         const dotColor = pointRenderColorMap.get(meta.unique_key) || (clusterColors[label] || '#4b5563');
+        const glowOpacity = hasSearchHits ? (isHit ? 0.24 : 0) : 0.2;
         const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
-        const bucketKey = `${quantizedSize}|${dotColor}`;
+        const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
         if (!bucketMap.has(bucketKey)) {
           bucketMap.set(bucketKey, {
             key: bucketKey,
             sizeMetric: quantizedSize,
             color: dotColor,
+            glowOpacity,
             points: [],
           });
         }
