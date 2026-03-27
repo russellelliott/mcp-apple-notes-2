@@ -756,7 +756,7 @@ export default function NoteClusters() {
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
-      textAlign: shouldPositionLeft ? 'right' : 'left',
+      textAlign: 'left',
       ...(shouldPositionLeft
         ? { right: Math.max(0, plotWidth - tooltipPosition.x + OFFSET) }
         : { right: '20px' }),
@@ -764,10 +764,10 @@ export default function NoteClusters() {
 
     const headerStyle: React.CSSProperties = {
       display: 'flex',
-      justifyContent: shouldPositionLeft ? 'flex-end' : 'flex-start',
+      justifyContent: 'flex-start',
       alignItems: 'flex-start',
       marginBottom: '10px',
-      flexDirection: shouldPositionLeft ? 'row-reverse' : 'row',
+      flexDirection: 'row',
     };
 
     return {
@@ -906,7 +906,7 @@ export default function NoteClusters() {
                 }}
               >
                 <div style={modalStyle.header}>
-                  <h3 style={{ margin: 0, fontSize: '1.1em', wordBreak: 'break-word', color: '#333', textAlign: modalStyle.positionLeft ? 'right' : 'left', flex: 1 }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1em', wordBreak: 'break-word', color: '#333', textAlign: 'left', flex: 1 }}>
                     {selectedNode.title}
                   </h3>
                   <button
@@ -925,7 +925,7 @@ export default function NoteClusters() {
                   </button>
                 </div>
 
-                <div style={{ fontSize: '0.9em', color: '#555', marginBottom: '10px', textAlign: modalStyle.positionLeft ? 'right' : 'left' }}>
+                <div style={{ fontSize: '0.9em', color: '#555', marginBottom: '10px', textAlign: 'left' }}>
                   Cluster {selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?'}:{' '}
                   {selectedNode.cluster_label}
                 </div>
@@ -942,7 +942,7 @@ export default function NoteClusters() {
                     backgroundColor: 'rgba(255,255,255,0.5)',
                     borderRadius: '4px',
                     border: '1px solid rgba(0,0,0,0.05)',
-                    textAlign: modalStyle.positionLeft ? 'right' : 'left',
+                    textAlign: 'left',
                   }}
                 >
                   {isLoadingContent ? 'Loading content...' : selectedNode.content}
@@ -951,11 +951,11 @@ export default function NoteClusters() {
                 <div
                   style={{
                     display: 'flex',
-                    justifyContent: modalStyle.positionLeft ? 'flex-end' : 'flex-start',
+                    justifyContent: 'flex-start',
                     alignItems: 'center',
                     marginTop: 'auto',
                     gap: '10px',
-                    flexDirection: modalStyle.positionLeft ? 'row-reverse' : 'row',
+                    flexDirection: 'row',
                   }}
                 >
                   <button
