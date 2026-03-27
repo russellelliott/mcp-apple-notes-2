@@ -41,6 +41,7 @@ interface ClusterPointMeta {
   unique_key: string;
   title: string;
   chunk_index: number;
+  total_chunks?: number;
   cluster_id: string;
   cluster_label: string;
 }
@@ -369,6 +370,7 @@ export default function NoteClusters() {
           unique_key: point.unique_key,
           title: point.title,
           chunk_index: point.chunk_index,
+          total_chunks: point.total_chunks,
           cluster_id: cid,
           cluster_label: label,
         });
@@ -1014,10 +1016,12 @@ export default function NoteClusters() {
                 }}
               >
                 <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
-                <div style={{ color: '#333' }}>Chunk {hoveredPoint.chunk_index + 1}</div>
                 <div style={{ color: '#333' }}>
                   Cluster {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}:{' '}
                   {hoveredPoint.cluster_label}
+                </div>
+                <div style={{ color: '#333' }}>
+                  Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
                 </div>
               </div>
             )}
