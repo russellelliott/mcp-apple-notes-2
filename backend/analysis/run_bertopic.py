@@ -270,10 +270,10 @@ print(f"    ✓ Reassigned {outliers_before - outliers_after_p1} outliers ({outl
 
 topic_model.update_topics(docs, topics=new_topics)
 
-# === MEGA-CLUSTER SPLITTING (>=10% of corpus) ===
+# === MEGA-CLUSTER SPLITTING (>=4% of corpus) ===
 print("🧩 Evaluating mega-clusters for sub-splitting...")
 total_chunks = len(docs)
-mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.10)))
+mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.04)))
 topic_sizes = pd.Series(new_topics).value_counts().to_dict()
 mega_clusters = [
     int(topic_id)
