@@ -280,6 +280,7 @@ mega_clusters = [
     for topic_id, size in topic_sizes.items()
     if int(topic_id) >= 0 and int(size) >= mega_cluster_threshold
 ]
+mega_cluster_set = set(mega_clusters)
 
 subcluster_lookup = {}
 submodel_manifest = {}
@@ -348,8 +349,6 @@ if mega_clusters:
         if sub_topic_info is not None and not sub_topic_info.empty:
             for _, row in sub_topic_info.iterrows():
                 topic_id = int(row.get("Topic", -1))
-                if topic_id < 0:
-                    continue
                 if "Label" in sub_topic_info.columns:
                     sub_label_map[topic_id] = _extract_topic_name(row.get("Label"), f"Subtopic {topic_id}")
                 elif "Name" in sub_topic_info.columns:
@@ -357,11 +356,11 @@ if mega_clusters:
                 else:
                     sub_label_map[topic_id] = f"Subtopic {topic_id}"
 
-        # Normalize child ids for display. BERTopic can emit -1 for outliers;
-        # we fold these into child 0 so every chunk has a parent.child id.
+        # Preserve BERTopic child outliers as parent.-1 so they remain
+        # explicitly tied to the mega-cluster in downstream views.
         child_distribution = Counter()
         for local_idx, child_topic in enumerate(sub_topics):
-            normalized_child = int(child_topic) if int(child_topic) >= 0 else 0
+            normalized_child = int(child_topic)
             global_idx = int(parent_indices[local_idx])
             subcluster_lookup[global_idx] = {
                 "base_topic_id": str(parent_topic),
@@ -473,14 +472,21 @@ confidences = [str(round(np.max(p), 3)) if np.max(p) > 0 else "0.0" for p in pro
 base_topic_ids = [str(int(t)) for t in new_topics]
 display_topic_ids = []
 is_split_children = []
+subcluster_labels = []
 for idx, base_topic in enumerate(base_topic_ids):
     mapped = subcluster_lookup.get(idx)
-    if mapped:
+    if mapped and mapped.get('base_topic_id') == base_topic:
         display_topic_ids.append(mapped['display_topic_id'])
         is_split_children.append(True)
+        subcluster_labels.append(mapped.get('subcluster_label'))
+    elif int(base_topic) in mega_cluster_set:
+        display_topic_ids.append(f"{base_topic}.-1")
+        is_split_children.append(True)
+        subcluster_labels.append("Subcluster Outlier")
     else:
         display_topic_ids.append(base_topic)
         is_split_children.append(False)
+        subcluster_labels.append(None)
 
 # Keep retrieval on base topic id, but expose display topic id for UI.
 df['base_topic_id'] = base_topic_ids
@@ -491,15 +497,11 @@ df['cluster_id'] = df['base_topic_id']
 df['cluster_label'] = df['base_topic_id'].astype(int).map(label_map)
 df['base_cluster_label'] = df['cluster_label']
 df['cluster_summary'] = df['base_topic_id'].astype(int).map(summary_map)
+df['subcluster_label'] = subcluster_labels
 
 split_mask = df['is_split_child']
 if split_mask.any():
-    split_indices = df.index[split_mask]
-    split_labels = []
-    for row_idx in split_indices:
-        mapped = subcluster_lookup.get(int(row_idx), {})
-        split_labels.append(mapped.get('subcluster_label'))
-    df.loc[split_indices, 'cluster_label'] = split_labels
+    df.loc[split_mask, 'cluster_label'] = df.loc[split_mask, 'subcluster_label']
 
 df['cluster_label'] = df['cluster_label'].fillna(df['base_cluster_label']).fillna('Unknown')
 df['base_cluster_label'] = df['base_cluster_label'].fillna(df['cluster_label']).fillna('Unknown')

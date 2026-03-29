@@ -96,6 +96,9 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 subcluster["percent_of_total_chunks"] = round(
                     _safe_percentage(subcluster["chunk_count"], total_chunks), 2
                 )
+                subcluster["percent_of_parent_cluster"] = round(
+                    _safe_percentage(subcluster["chunk_count"], cluster["chunk_count"]), 2
+                )
             cluster["subclusters"] = sorted_subclusters
 
     return {
@@ -133,8 +136,12 @@ def print_cluster_stats(report: Dict[str, Any]) -> None:
                 subcluster_name = f"{subcluster_name[:37]}..."
             subcluster_count = subcluster["chunk_count"]
             subcluster_percent = subcluster["percent_of_total_chunks"]
+            subcluster_parent_percent = subcluster.get("percent_of_parent_cluster", 0.0)
             print(
                 f"{'':<12} {('-> ' + subcluster_id + ' | ' + subcluster_name):<40} {subcluster_count:>10} {subcluster_percent:>11.2f}%"
+            )
+            print(
+                f"{'':<12} {('   rate within parent: ' + str(subcluster_parent_percent) + '%'):<40} {'':>10} {'':>12}"
             )
 
 
