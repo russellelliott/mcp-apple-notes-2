@@ -91,6 +91,7 @@ class NotesDatabase:
             pa.field("is_split_child", pa.bool_()),
             pa.field("cluster_id", pa.string()),
             pa.field("cluster_label", pa.string()),
+            pa.field("base_cluster_label", pa.string()),
             pa.field("cluster_confidence", pa.string()),
             pa.field("cluster_summary", pa.string()),
             pa.field("last_clustered", pa.string()),

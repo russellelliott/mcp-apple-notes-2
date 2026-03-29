@@ -285,6 +285,15 @@ subcluster_lookup = {}
 submodel_manifest = {}
 submodel_root = MODEL_DIR / "submodels"
 
+
+def _extract_topic_name(raw_value, fallback: str) -> str:
+    """Normalize BERTopic Label/Name values to a single display string."""
+    if raw_value is None:
+        return fallback
+    if isinstance(raw_value, (list, tuple)) and len(raw_value) > 0:
+        return str(raw_value[0])
+    return str(raw_value)
+
 if mega_clusters:
     print(
         f"  🎯 Found {len(mega_clusters)} mega-cluster(s) with threshold >= {mega_cluster_threshold}/{total_chunks} chunks"
@@ -334,6 +343,20 @@ if mega_clusters:
             print(f"      ⚠️ Failed to split Topic {parent_topic}: {e}")
             continue
 
+        sub_topic_info = sub_topic_model.get_topic_info()
+        sub_label_map = {}
+        if sub_topic_info is not None and not sub_topic_info.empty:
+            for _, row in sub_topic_info.iterrows():
+                topic_id = int(row.get("Topic", -1))
+                if topic_id < 0:
+                    continue
+                if "Label" in sub_topic_info.columns:
+                    sub_label_map[topic_id] = _extract_topic_name(row.get("Label"), f"Subtopic {topic_id}")
+                elif "Name" in sub_topic_info.columns:
+                    sub_label_map[topic_id] = _extract_topic_name(row.get("Name"), f"Subtopic {topic_id}")
+                else:
+                    sub_label_map[topic_id] = f"Subtopic {topic_id}"
+
         # Normalize child ids for display. BERTopic can emit -1 for outliers;
         # we fold these into child 0 so every chunk has a parent.child id.
         child_distribution = Counter()
@@ -343,6 +366,7 @@ if mega_clusters:
             subcluster_lookup[global_idx] = {
                 "base_topic_id": str(parent_topic),
                 "display_topic_id": f"{parent_topic}.{normalized_child}",
+                "subcluster_label": sub_label_map.get(normalized_child, f"Subtopic {normalized_child}"),
                 "is_split_child": True,
             }
             child_distribution[str(normalized_child)] += 1
@@ -465,15 +489,20 @@ df['is_split_child'] = is_split_children
 
 df['cluster_id'] = df['base_topic_id']
 df['cluster_label'] = df['base_topic_id'].astype(int).map(label_map)
+df['base_cluster_label'] = df['cluster_label']
 df['cluster_summary'] = df['base_topic_id'].astype(int).map(summary_map)
 
 split_mask = df['is_split_child']
-df.loc[split_mask, 'cluster_label'] = (
-    df.loc[split_mask, 'cluster_label'].fillna('Split Cluster')
-    + ' ['
-    + df.loc[split_mask, 'display_topic_id']
-    + ']'
-)
+if split_mask.any():
+    split_indices = df.index[split_mask]
+    split_labels = []
+    for row_idx in split_indices:
+        mapped = subcluster_lookup.get(int(row_idx), {})
+        split_labels.append(mapped.get('subcluster_label'))
+    df.loc[split_indices, 'cluster_label'] = split_labels
+
+df['cluster_label'] = df['cluster_label'].fillna(df['base_cluster_label']).fillna('Unknown')
+df['base_cluster_label'] = df['base_cluster_label'].fillna(df['cluster_label']).fillna('Unknown')
 
 df['cluster_confidence'] = confidences
 df['last_clustered'] = datetime.now().isoformat()
@@ -482,7 +511,7 @@ df['last_clustered'] = datetime.now().isoformat()
 schema_columns = ['title', 'content', 'creation_date', 'modification_date', 'chunk_index',
        'total_chunks', 'chunk_content', 'clean_chunk_content', 'vector',
        'base_topic_id', 'display_topic_id', 'is_split_child', 'cluster_id',
-       'cluster_label', 'cluster_confidence', 'cluster_summary',
+    'cluster_label', 'base_cluster_label', 'cluster_confidence', 'cluster_summary',
        'last_clustered']
 df = df[schema_columns]
 

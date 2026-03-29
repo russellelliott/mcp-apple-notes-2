@@ -52,13 +52,14 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     for record in records:
         cluster_id = str(record.get("cluster_id", "-1"))
         cluster_label = record.get("cluster_label") or "Unknown"
+        base_cluster_label = record.get("base_cluster_label") or cluster_label or "Unknown"
         base_topic_id = str(record.get("base_topic_id", cluster_id))
         display_topic_id = str(record.get("display_topic_id", cluster_id))
 
         if cluster_id not in clusters:
             clusters[cluster_id] = {
                 "cluster_id": cluster_id,
-                "cluster_name": cluster_label,
+                "cluster_name": str(base_cluster_label),
                 "chunk_count": 0,
                 "subclusters": [],
             }
@@ -72,6 +73,7 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             if display_topic_id not in subclusters_by_base[cluster_id]:
                 subclusters_by_base[cluster_id][display_topic_id] = {
                     "display_topic_id": display_topic_id,
+                    "subcluster_name": str(cluster_label),
                     "chunk_count": 0,
                 }
             subclusters_by_base[cluster_id][display_topic_id]["chunk_count"] += 1
@@ -126,10 +128,13 @@ def print_cluster_stats(report: Dict[str, Any]) -> None:
         subclusters = cluster.get("subclusters", [])
         for subcluster in subclusters:
             subcluster_id = subcluster["display_topic_id"]
+            subcluster_name = str(subcluster.get("subcluster_name", "Unknown")).replace("\n", " ").strip()
+            if len(subcluster_name) > 40:
+                subcluster_name = f"{subcluster_name[:37]}..."
             subcluster_count = subcluster["chunk_count"]
             subcluster_percent = subcluster["percent_of_total_chunks"]
             print(
-                f"{'':<12} {'-> ' + subcluster_id:<40} {subcluster_count:>10} {subcluster_percent:>11.2f}%"
+                f"{'':<12} {('-> ' + subcluster_id + ' | ' + subcluster_name):<40} {subcluster_count:>10} {subcluster_percent:>11.2f}%"
             )
 
 
