@@ -285,6 +285,7 @@ mega_cluster_set = set(mega_clusters)
 subcluster_lookup = {}
 submodel_manifest = {}
 submodel_root = MODEL_DIR / "submodels"
+mega_child_label_map = {}
 
 
 def _extract_topic_name(raw_value, fallback: str) -> str:
@@ -344,6 +345,8 @@ if mega_clusters:
             print(f"      ⚠️ Failed to split Topic {parent_topic}: {e}")
             continue
 
+        sub_topics = np.array(sub_topics, dtype=int)
+
         sub_topic_info = sub_topic_model.get_topic_info()
         sub_label_map = {}
         if sub_topic_info is not None and not sub_topic_info.empty:
@@ -356,8 +359,45 @@ if mega_clusters:
                 else:
                     sub_label_map[topic_id] = f"Subtopic {topic_id}"
 
-        # Preserve BERTopic child outliers as parent.-1 so they remain
-        # explicitly tied to the mega-cluster in downstream views.
+        # Reassign local submodel outliers (-1) into the closest non-outlier
+        # child subcluster so mega-cluster chunks always resolve to parent.child.
+        unique_children = sorted(set(sub_topics.tolist()))
+        valid_children = [child for child in unique_children if child >= 0]
+
+        if not valid_children:
+            sub_topics = np.zeros(len(sub_topics), dtype=int)
+            valid_children = [0]
+            if 0 not in sub_label_map:
+                sub_label_map[0] = "Subtopic 0"
+        else:
+            outlier_positions = np.where(sub_topics < 0)[0]
+            if len(outlier_positions) > 0:
+                child_centroids = []
+                centroid_child_ids = []
+                for child_id in valid_children:
+                    child_positions = np.where(sub_topics == child_id)[0]
+                    if len(child_positions) == 0:
+                        continue
+                    centroid = parent_embeddings[child_positions].mean(axis=0)
+                    child_centroids.append(centroid)
+                    centroid_child_ids.append(child_id)
+
+                if child_centroids:
+                    centroid_matrix = np.vstack(child_centroids)
+                    centroid_norms = np.linalg.norm(centroid_matrix, axis=1, keepdims=True)
+                    centroid_norms[centroid_norms == 0] = 1.0
+                    centroid_matrix = centroid_matrix / centroid_norms
+
+                    for pos in outlier_positions:
+                        vec = parent_embeddings[pos]
+                        vec_norm = np.linalg.norm(vec)
+                        if vec_norm == 0:
+                            assigned_child = centroid_child_ids[0]
+                        else:
+                            sims = centroid_matrix @ (vec / vec_norm)
+                            assigned_child = centroid_child_ids[int(np.argmax(sims))]
+                        sub_topics[pos] = assigned_child
+
         child_distribution = Counter()
         for local_idx, child_topic in enumerate(sub_topics):
             normalized_child = int(child_topic)
@@ -368,6 +408,10 @@ if mega_clusters:
                 "subcluster_label": sub_label_map.get(normalized_child, f"Subtopic {normalized_child}"),
                 "is_split_child": True,
             }
+            mega_child_label_map[(str(parent_topic), normalized_child)] = sub_label_map.get(
+                normalized_child,
+                f"Subtopic {normalized_child}",
+            )
             child_distribution[str(normalized_child)] += 1
 
         topic_submodel_dir = submodel_root / f"topic_{parent_topic}"
@@ -480,9 +524,17 @@ for idx, base_topic in enumerate(base_topic_ids):
         is_split_children.append(True)
         subcluster_labels.append(mapped.get('subcluster_label'))
     elif int(base_topic) in mega_cluster_set:
-        display_topic_ids.append(f"{base_topic}.-1")
+        existing_children = [
+            int(m['display_topic_id'].split('.', 1)[1])
+            for m in subcluster_lookup.values()
+            if m.get('base_topic_id') == base_topic and '.' in str(m.get('display_topic_id'))
+        ]
+        fallback_child = Counter(existing_children).most_common(1)[0][0] if existing_children else 0
+        display_topic_ids.append(f"{base_topic}.{fallback_child}")
         is_split_children.append(True)
-        subcluster_labels.append("Subcluster Outlier")
+        subcluster_labels.append(
+            mega_child_label_map.get((base_topic, fallback_child), f"Subtopic {fallback_child}")
+        )
     else:
         display_topic_ids.append(base_topic)
         is_split_children.append(False)
