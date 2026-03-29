@@ -104,6 +104,16 @@ def load_and_process_data():
             df['cluster_id'] = '-1'
         else:
             df['cluster_id'] = df['cluster_id'].astype(str).fillna('-1')
+
+        if 'base_topic_id' not in df.columns:
+            df['base_topic_id'] = df['cluster_id'].astype(str)
+        else:
+            df['base_topic_id'] = df['base_topic_id'].astype(str).fillna(df['cluster_id'])
+
+        if 'display_topic_id' not in df.columns:
+            df['display_topic_id'] = df['base_topic_id'].astype(str)
+        else:
+            df['display_topic_id'] = df['display_topic_id'].astype(str).fillna(df['base_topic_id'])
             
         state.df_viz = df
         print("✨ Data processing complete.")
@@ -139,6 +149,8 @@ class NotePoint(BaseModel):
     chunk_index: int
     total_chunks: Optional[int] = None
     cluster_id: Optional[str] = None
+    base_topic_id: Optional[str] = None
+    display_topic_id: Optional[str] = None
     cluster_label: str
     umap_x: float
     umap_y: float
@@ -154,6 +166,8 @@ class SearchResult(BaseModel):
     total_chunks: Optional[int] = None
     distance: float
     cluster_id: Optional[str] = None
+    base_topic_id: Optional[str] = None
+    display_topic_id: Optional[str] = None
     cluster_label: str
     preview: Optional[str] = None
     
@@ -171,6 +185,8 @@ class NoteContent(BaseModel):
     chunk_index: int
     content: str
     total_chunks: int
+    base_topic_id: Optional[str] = None
+    display_topic_id: Optional[str] = None
 
 # --- Endpoints ---
 
@@ -201,7 +217,9 @@ async def get_note_content(title: str, chunk_index: int):
             title=title,
             chunk_index=chunk_index,
             content=str(content),
-            total_chunks=int(total)
+            total_chunks=int(total),
+            base_topic_id=(str(row.iloc[0].get('base_topic_id')) if row.iloc[0].get('base_topic_id') is not None else None),
+            display_topic_id=(str(row.iloc[0].get('display_topic_id')) if row.iloc[0].get('display_topic_id') is not None else None),
         )
     except Exception as e:
         print(f"Error fetching content: {e}")
@@ -217,10 +235,14 @@ async def get_points():
     # We replicate the cleaning logic from the model definition
     # Replace NaNs to avoid JSON errors
     valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
-    
-    records = valid_df[[
-        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'cluster_label', 
-        'umap_x', 'umap_y', 'umap_z', 'creation_date', 'modification_date'
+
+    points_df = valid_df.copy()
+    points_df['cluster_id'] = points_df['display_topic_id']
+
+    records = points_df[[
+        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
+        'display_topic_id', 'cluster_label', 'umap_x', 'umap_y', 'umap_z', 'creation_date',
+        'modification_date'
     ]].to_dict(orient='records')
     
     return records
@@ -255,10 +277,16 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
     # We can create a lookup map
     cluster_map = {}
     cluster_id_map = {}
+    base_topic_id_map = {}
+    display_topic_id_map = {}
     if not state.df_viz.empty:
         # unique_key -> cluster_label
         cluster_map = state.df_viz.set_index('unique_key')['cluster_label'].to_dict()
         cluster_id_map = state.df_viz.set_index('unique_key')['cluster_id'].to_dict()
+        if 'base_topic_id' in state.df_viz.columns:
+            base_topic_id_map = state.df_viz.set_index('unique_key')['base_topic_id'].to_dict()
+        if 'display_topic_id' in state.df_viz.columns:
+            display_topic_id_map = state.df_viz.set_index('unique_key')['display_topic_id'].to_dict()
 
     for r in results:
         title = r.get('title', '')
@@ -271,7 +299,8 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
         
         # Lookup cluster
         cluster = cluster_map.get(unique_key, "Unknown")
-        cluster_id = cluster_id_map.get(unique_key, "-1")
+        base_topic_id = str(base_topic_id_map.get(unique_key, cluster_id_map.get(unique_key, "-1")))
+        display_topic_id = str(display_topic_id_map.get(unique_key, base_topic_id))
         
         res_obj = SearchResult(
             unique_key=unique_key,
@@ -279,7 +308,9 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
             chunk_index=idx,
             total_chunks=total,
             distance=score,
-            cluster_id=cluster_id,
+            cluster_id=display_topic_id,
+            base_topic_id=base_topic_id,
+            display_topic_id=display_topic_id,
             cluster_label=cluster,
             preview=preview
         )

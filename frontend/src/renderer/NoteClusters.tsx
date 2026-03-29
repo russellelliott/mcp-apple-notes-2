@@ -10,6 +10,8 @@ interface NotePoint {
   chunk_index: number;
   total_chunks?: number;
   cluster_id?: string;
+  base_topic_id?: string;
+  display_topic_id?: string;
   cluster_label: string;
   umap_x: number;
   umap_y: number;
@@ -23,6 +25,8 @@ interface SearchResult {
   total_chunks?: number;
   distance: number;
   cluster_id?: string;
+  base_topic_id?: string;
+  display_topic_id?: string;
   cluster_label: string;
   preview: string;
 }
@@ -34,6 +38,8 @@ interface NoteContent {
   total_chunks: number;
   unique_key: string;
   cluster_id?: string;
+  base_topic_id?: string;
+  display_topic_id?: string;
   cluster_label?: string;
 }
 
@@ -43,6 +49,8 @@ interface ClusterPointMeta {
   chunk_index: number;
   total_chunks?: number;
   cluster_id: string;
+  base_topic_id?: string;
+  display_topic_id?: string;
   cluster_label: string;
 }
 
@@ -53,6 +61,7 @@ interface ClusterGroup {
   customdata: ClusterPointMeta[];
   text: string[];
   clusterId?: string;
+  clusterLabel?: string;
 }
 
 interface VisualPoint extends ClusterPointMeta {
@@ -85,6 +94,26 @@ const mixColorWithWhite = (baseColor: string, whiteMix: number) => {
 const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35);
 
 const DOT_RADIUS_BASE = 0.016;
+
+const compareTopicIds = (a: string, b: string) => {
+  const aParts = String(a).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
+  const bParts = String(b).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
+  const maxLen = Math.max(aParts.length, bParts.length);
+
+  for (let i = 0; i < maxLen; i += 1) {
+    const aVal = aParts[i];
+    const bVal = bParts[i];
+    if (aVal === undefined) return -1;
+    if (bVal === undefined) return 1;
+    if (typeof aVal === 'number' && typeof bVal === 'number' && aVal !== bVal) {
+      return aVal - bVal;
+    }
+    if (String(aVal) !== String(bVal)) {
+      return String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+    }
+  }
+  return 0;
+};
 
 const DotInstances = ({
   bucket,
@@ -231,6 +260,8 @@ export default function NoteClusters() {
     chunk_index: number,
     initial_cluster_id?: string,
     initial_cluster_label?: string,
+    initial_display_topic_id?: string,
+    initial_base_topic_id?: string,
   ) => {
     setIsLoadingContent(true);
     try {
@@ -243,10 +274,14 @@ export default function NoteClusters() {
 
       const cluster_id = existingNode ? existingNode.cluster_id : initial_cluster_id;
       const cluster_label = existingNode ? existingNode.cluster_label : initial_cluster_label;
+      const display_topic_id = existingNode ? existingNode.display_topic_id : initial_display_topic_id;
+      const base_topic_id = existingNode ? existingNode.base_topic_id : initial_base_topic_id;
 
       setSelectedNode({
         ...response.data,
         cluster_id,
+        display_topic_id,
+        base_topic_id,
         cluster_label,
         unique_key: newUniqueKey,
       });
@@ -261,14 +296,28 @@ export default function NoteClusters() {
     if (!selectedNode) return;
     let nextIndex = selectedNode.chunk_index + 1;
     if (nextIndex >= selectedNode.total_chunks) nextIndex = 0;
-    fetchNoteContent(selectedNode.title, nextIndex, selectedNode.cluster_id, selectedNode.cluster_label);
+    fetchNoteContent(
+      selectedNode.title,
+      nextIndex,
+      selectedNode.cluster_id,
+      selectedNode.cluster_label,
+      selectedNode.display_topic_id,
+      selectedNode.base_topic_id,
+    );
   };
 
   const handlePrevChunk = () => {
     if (!selectedNode) return;
     let prevIndex = selectedNode.chunk_index - 1;
     if (prevIndex < 0) prevIndex = selectedNode.total_chunks - 1;
-    fetchNoteContent(selectedNode.title, prevIndex, selectedNode.cluster_id, selectedNode.cluster_label);
+    fetchNoteContent(
+      selectedNode.title,
+      prevIndex,
+      selectedNode.cluster_id,
+      selectedNode.cluster_label,
+      selectedNode.display_topic_id,
+      selectedNode.base_topic_id,
+    );
   };
 
   const closePopup = () => setSelectedNode(null);
@@ -378,31 +427,40 @@ export default function NoteClusters() {
 
     if (data.length > 0) {
       data.forEach((point) => {
-        const label = point.cluster_label || 'Unclustered';
-        if (!processingGroups[label]) {
-          processingGroups[label] = { x: [], y: [], z: [], customdata: [], text: [] };
+        const clusterKey = point.display_topic_id || point.cluster_id || '-1';
+        const clusterLabel = point.cluster_label || `Cluster ${clusterKey}`;
+        if (!processingGroups[clusterKey]) {
+          processingGroups[clusterKey] = {
+            x: [],
+            y: [],
+            z: [],
+            customdata: [],
+            text: [],
+            clusterId: clusterKey,
+            clusterLabel,
+          };
         }
-        processingGroups[label].x.push(point.umap_x);
-        processingGroups[label].y.push(point.umap_y);
-        processingGroups[label].z.push(point.umap_z);
+        processingGroups[clusterKey].x.push(point.umap_x);
+        processingGroups[clusterKey].y.push(point.umap_y);
+        processingGroups[clusterKey].z.push(point.umap_z);
 
         const total = point.total_chunks || '?';
-        const cid = point.cluster_id && point.cluster_id !== '-1' ? point.cluster_id : label;
-        if (!processingGroups[label].clusterId) {
-          processingGroups[label].clusterId = cid;
-        }
+        const cid = clusterKey;
+        processingGroups[clusterKey].clusterLabel = clusterLabel;
 
-        processingGroups[label].text.push(
-          `<b>${point.title}</b><br>Chunk ${point.chunk_index + 1} of ${total}<br>Cluster: ${cid}`,
+        processingGroups[clusterKey].text.push(
+          `<b>${point.title}</b><br>Chunk ${point.chunk_index + 1} of ${total}<br>Cluster: ${cid} (${clusterLabel})`,
         );
 
-        processingGroups[label].customdata.push({
+        processingGroups[clusterKey].customdata.push({
           unique_key: point.unique_key,
           title: point.title,
           chunk_index: point.chunk_index,
           total_chunks: point.total_chunks,
           cluster_id: cid,
-          cluster_label: label,
+          base_topic_id: point.base_topic_id,
+          display_topic_id: point.display_topic_id,
+          cluster_label: clusterLabel,
         });
 
         globalSumX += point.umap_x;
@@ -519,7 +577,7 @@ export default function NoteClusters() {
         if (aSelected && bSelected) {
           const idA = clusterGroups[a].clusterId || a;
           const idB = clusterGroups[b].clusterId || b;
-          return String(idA).localeCompare(String(idB), undefined, { numeric: true });
+          return compareTopicIds(String(idA), String(idB));
         }
 
         const distA = minDistanceToSelection(a);
@@ -528,18 +586,13 @@ export default function NoteClusters() {
 
         const idA = clusterGroups[a].clusterId || a;
         const idB = clusterGroups[b].clusterId || b;
-        return String(idA).localeCompare(String(idB), undefined, { numeric: true });
+        return compareTopicIds(String(idA), String(idB));
       });
     } else {
       sorted.sort((a, b) => {
         const idA = clusterGroups[a].clusterId || a;
         const idB = clusterGroups[b].clusterId || b;
-        const numA = parseInt(idA, 10);
-        const numB = parseInt(idB, 10);
-        if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-          return numA - numB;
-        }
-        return String(idA).localeCompare(String(idB));
+        return compareTopicIds(String(idA), String(idB));
       });
     }
     return sorted;
@@ -671,8 +724,9 @@ export default function NoteClusters() {
 
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
+    const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
     const dotColor = pointRenderColorMap.get(selectedNode.unique_key)
-      || clusterColors[selectedNode.cluster_label || '']
+      || clusterColors[selectedClusterKey]
       || '#ffffff';
     return getDotSurfaceTint(dotColor);
   }, [clusterColors, pointRenderColorMap, selectedNode]);
@@ -871,7 +925,9 @@ export default function NoteClusters() {
               {searchResults.length === 0 && searchQuery && (
                 <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
               )}
-              {searchResults.map((result) => (
+              {searchResults.map((result) => {
+                const resultClusterKey = result.display_topic_id || result.cluster_id || '-1';
+                return (
                 <div
                   key={result.unique_key}
                   onMouseEnter={() => {
@@ -883,7 +939,14 @@ export default function NoteClusters() {
                     setHoverSource(null);
                   }}
                   onClick={() =>
-                    fetchNoteContent(result.title, result.chunk_index, result.cluster_id, result.cluster_label)
+                    fetchNoteContent(
+                      result.title,
+                      result.chunk_index,
+                      result.cluster_id,
+                      result.cluster_label,
+                      result.display_topic_id,
+                      result.base_topic_id,
+                    )
                   }
                   style={{
                     padding: '12px',
@@ -891,8 +954,8 @@ export default function NoteClusters() {
                     borderRadius: '6px',
                     backgroundColor:
                       hoveredId === result.unique_key
-                        ? clusterHoverTints[result.cluster_label] || '#e6f7ff'
-                        : clusterTints[result.cluster_label] || 'white',
+                        ? clusterHoverTints[resultClusterKey] || '#e6f7ff'
+                        : clusterTints[resultClusterKey] || 'white',
                     border: '1px solid #eee',
                     cursor: 'pointer',
                     transition: 'all 0.2s',
@@ -927,7 +990,8 @@ export default function NoteClusters() {
                   </div>
                   <div style={{ fontSize: '0.9em', color: '#555', lineHeight: '1.4' }}>{result.preview}</div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -1236,6 +1300,7 @@ export default function NoteClusters() {
               {sortedLabels.map((label) => {
                 const group = clusterGroups[label];
                 const cid = group.clusterId || label;
+                const displayLabel = group.clusterLabel || label;
                 const hasHits = group.customdata.some((pointData) =>
                   searchScoreMap.has(pointData.unique_key),
                 );
@@ -1264,7 +1329,7 @@ export default function NoteClusters() {
                       #{cid}
                     </div>
                     <ClusterLabel
-                      label={label}
+                      label={displayLabel}
                       hasHits={hasHits}
                       isSelected={isSelected}
                       isDimmed={isDimmed}

@@ -28,23 +28,53 @@ def _safe_percentage(count: int, total: int) -> float:
     return (count / total) * 100.0
 
 
+def _display_topic_sort_key(display_topic_id: str) -> Tuple[int, ...]:
+    """Sort display topic IDs like 12.0, 12.1, 13 numerically by parts."""
+    parts = str(display_topic_id).split(".")
+    key: List[int] = []
+    for part in parts:
+        try:
+            key.append(int(part))
+        except ValueError:
+            # Keep deterministic ordering for non-numeric fragments.
+            key.append(10**9)
+    return tuple(key)
+
+
 def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_chunks = len(records)
 
-    # Aggregate at chunk level, not note level.
+    # Aggregate at base-cluster level (main BERTopic retrieval cluster).
     clusters: Dict[str, Dict[str, Any]] = {}
+    # Track child display clusters for mega-cluster splits.
+    subclusters_by_base: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
     for record in records:
         cluster_id = str(record.get("cluster_id", "-1"))
         cluster_label = record.get("cluster_label") or "Unknown"
+        base_topic_id = str(record.get("base_topic_id", cluster_id))
+        display_topic_id = str(record.get("display_topic_id", cluster_id))
 
         if cluster_id not in clusters:
             clusters[cluster_id] = {
                 "cluster_id": cluster_id,
                 "cluster_name": cluster_label,
                 "chunk_count": 0,
+                "subclusters": [],
             }
 
         clusters[cluster_id]["chunk_count"] += 1
+
+        # A subcluster is recognized as parent.child (e.g. 12.0) that maps to a base topic.
+        if "." in display_topic_id and base_topic_id == cluster_id:
+            if cluster_id not in subclusters_by_base:
+                subclusters_by_base[cluster_id] = {}
+            if display_topic_id not in subclusters_by_base[cluster_id]:
+                subclusters_by_base[cluster_id][display_topic_id] = {
+                    "display_topic_id": display_topic_id,
+                    "chunk_count": 0,
+                }
+            subclusters_by_base[cluster_id][display_topic_id]["chunk_count"] += 1
 
     cluster_list = sorted(clusters.values(), key=lambda c: _cluster_sort_key(c["cluster_id"]))
 
@@ -52,6 +82,19 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         percent = _safe_percentage(cluster["chunk_count"], total_chunks)
         # Keep 2 decimal places in the output for readability and stable JSON.
         cluster["percent_of_total_chunks"] = round(percent, 2)
+
+        base_cluster_id = cluster["cluster_id"]
+        subcluster_map = subclusters_by_base.get(base_cluster_id, {})
+        if subcluster_map:
+            sorted_subclusters = sorted(
+                subcluster_map.values(),
+                key=lambda s: _display_topic_sort_key(s["display_topic_id"]),
+            )
+            for subcluster in sorted_subclusters:
+                subcluster["percent_of_total_chunks"] = round(
+                    _safe_percentage(subcluster["chunk_count"], total_chunks), 2
+                )
+            cluster["subclusters"] = sorted_subclusters
 
     return {
         "total_chunks": total_chunks,
@@ -79,6 +122,15 @@ def print_cluster_stats(report: Dict[str, Any]) -> None:
         chunk_count = cluster["chunk_count"]
         percent = cluster["percent_of_total_chunks"]
         print(f"{cluster_id:<12} {cluster_name:<40} {chunk_count:>10} {percent:>11.2f}%")
+
+        subclusters = cluster.get("subclusters", [])
+        for subcluster in subclusters:
+            subcluster_id = subcluster["display_topic_id"]
+            subcluster_count = subcluster["chunk_count"]
+            subcluster_percent = subcluster["percent_of_total_chunks"]
+            print(
+                f"{'':<12} {'-> ' + subcluster_id:<40} {subcluster_count:>10} {subcluster_percent:>11.2f}%"
+            )
 
 
 def main() -> None:

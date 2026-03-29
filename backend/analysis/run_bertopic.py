@@ -4,6 +4,7 @@ import numpy as np
 import pyarrow as pa
 import re
 import sys
+import json
 from collections import Counter
 import torch
 import html
@@ -79,6 +80,7 @@ class Ollama(BaseRepresentation):
 DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 TABLE_NAME = "notes"
+MODEL_DIR = Path.home() / ".mcp-apple-notes" / "bertopic_model"
 
 def clean_note_content(text):
     """Sanitizes raw note text by removing non-textual data."""
@@ -268,6 +270,109 @@ print(f"    ✓ Reassigned {outliers_before - outliers_after_p1} outliers ({outl
 
 topic_model.update_topics(docs, topics=new_topics)
 
+# === MEGA-CLUSTER SPLITTING (>=10% of corpus) ===
+print("🧩 Evaluating mega-clusters for sub-splitting...")
+total_chunks = len(docs)
+mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.10)))
+topic_sizes = pd.Series(new_topics).value_counts().to_dict()
+mega_clusters = [
+    int(topic_id)
+    for topic_id, size in topic_sizes.items()
+    if int(topic_id) >= 0 and int(size) >= mega_cluster_threshold
+]
+
+subcluster_lookup = {}
+submodel_manifest = {}
+submodel_root = MODEL_DIR / "submodels"
+
+if mega_clusters:
+    print(
+        f"  🎯 Found {len(mega_clusters)} mega-cluster(s) with threshold >= {mega_cluster_threshold}/{total_chunks} chunks"
+    )
+    submodel_root.mkdir(parents=True, exist_ok=True)
+
+    for parent_topic in sorted(mega_clusters):
+        parent_indices = np.where(np.array(new_topics) == parent_topic)[0]
+        if len(parent_indices) < 2:
+            continue
+
+        parent_docs = [docs[i] for i in parent_indices]
+        parent_embeddings = vectors[parent_indices]
+        print(f"    🔬 Splitting Topic {parent_topic} ({len(parent_docs)} chunks)...")
+
+        if len(parent_docs) < 3:
+            print(f"      ⚠️ Skipping Topic {parent_topic}: not enough chunks for stable sub-clustering")
+            continue
+
+        local_neighbors = min(30, max(2, len(parent_docs) - 1))
+        local_min_cluster_size = max(5, min(20, len(parent_docs) // 20))
+        local_min_cluster_size = min(local_min_cluster_size, len(parent_docs))
+
+        sub_topic_model = BERTopic(
+            embedding_model=embedding_model,
+            umap_model=UMAP(
+                n_neighbors=local_neighbors,
+                n_components=5,
+                min_dist=0.0,
+                metric='cosine'
+            ),
+            hdbscan_model=HDBSCAN(
+                min_cluster_size=max(2, local_min_cluster_size),
+                min_samples=2,
+                cluster_selection_method='eom',
+                prediction_data=True,
+            ),
+            vectorizer_model=vectorizer_model,
+            ctfidf_model=ctfidf_model,
+            representation_model=representation_model,
+            calculate_probabilities=True,
+        )
+
+        try:
+            sub_topics, _ = sub_topic_model.fit_transform(parent_docs, embeddings=parent_embeddings)
+        except Exception as e:
+            print(f"      ⚠️ Failed to split Topic {parent_topic}: {e}")
+            continue
+
+        # Normalize child ids for display. BERTopic can emit -1 for outliers;
+        # we fold these into child 0 so every chunk has a parent.child id.
+        child_distribution = Counter()
+        for local_idx, child_topic in enumerate(sub_topics):
+            normalized_child = int(child_topic) if int(child_topic) >= 0 else 0
+            global_idx = int(parent_indices[local_idx])
+            subcluster_lookup[global_idx] = {
+                "base_topic_id": str(parent_topic),
+                "display_topic_id": f"{parent_topic}.{normalized_child}",
+                "is_split_child": True,
+            }
+            child_distribution[str(normalized_child)] += 1
+
+        topic_submodel_dir = submodel_root / f"topic_{parent_topic}"
+        topic_submodel_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            sub_topic_model.save(topic_submodel_dir, serialization="safetensors", save_ctfidf=True)
+            submodel_manifest[str(parent_topic)] = {
+                "parent_topic": parent_topic,
+                "threshold": mega_cluster_threshold,
+                "chunk_count": int(len(parent_docs)),
+                "submodel_path": str(topic_submodel_dir),
+                "child_distribution": dict(child_distribution),
+            }
+            print(f"      ✅ Saved submodel: {topic_submodel_dir}")
+        except Exception as e:
+            print(f"      ⚠️ Failed to save submodel for Topic {parent_topic}: {e}")
+
+    if submodel_manifest:
+        manifest_path = submodel_root / "manifest.json"
+        try:
+            with manifest_path.open("w", encoding="utf-8") as mf:
+                json.dump(submodel_manifest, mf, indent=2)
+            print(f"  🗂️ Wrote submodel manifest: {manifest_path}")
+        except Exception as e:
+            print(f"  ⚠️ Failed to write submodel manifest: {e}")
+else:
+    print("  ℹ️ No mega-clusters met the 10% threshold.")
+
 # Pass 2: Topic representation similarity (c-TF-IDF based)
 print("  📊 Pass 2: c-TF-IDF similarity reassignment...")
 new_topics = topic_model.reduce_outliers(
@@ -340,16 +445,43 @@ else:
 # Calculate Confidence Scores
 confidences = [str(round(np.max(p), 3)) if np.max(p) > 0 else "0.0" for p in probs]
 
-# Sync with your PyArrow Schema
-df['cluster_id'] = [str(t) for t in new_topics]
-df['cluster_label'] = df['cluster_id'].astype(int).map(label_map)
-df['cluster_summary'] = df['cluster_id'].astype(int).map(summary_map)
+# Build base/display cluster mapping.
+base_topic_ids = [str(int(t)) for t in new_topics]
+display_topic_ids = []
+is_split_children = []
+for idx, base_topic in enumerate(base_topic_ids):
+    mapped = subcluster_lookup.get(idx)
+    if mapped:
+        display_topic_ids.append(mapped['display_topic_id'])
+        is_split_children.append(True)
+    else:
+        display_topic_ids.append(base_topic)
+        is_split_children.append(False)
+
+# Keep retrieval on base topic id, but expose display topic id for UI.
+df['base_topic_id'] = base_topic_ids
+df['display_topic_id'] = display_topic_ids
+df['is_split_child'] = is_split_children
+
+df['cluster_id'] = df['base_topic_id']
+df['cluster_label'] = df['base_topic_id'].astype(int).map(label_map)
+df['cluster_summary'] = df['base_topic_id'].astype(int).map(summary_map)
+
+split_mask = df['is_split_child']
+df.loc[split_mask, 'cluster_label'] = (
+    df.loc[split_mask, 'cluster_label'].fillna('Split Cluster')
+    + ' ['
+    + df.loc[split_mask, 'display_topic_id']
+    + ']'
+)
+
 df['cluster_confidence'] = confidences
 df['last_clustered'] = datetime.now().isoformat()
 
 # Ensure we only write back the columns that exist in the schema
 schema_columns = ['title', 'content', 'creation_date', 'modification_date', 'chunk_index',
-       'total_chunks', 'chunk_content', 'clean_chunk_content', 'vector', 'cluster_id',
+       'total_chunks', 'chunk_content', 'clean_chunk_content', 'vector',
+       'base_topic_id', 'display_topic_id', 'is_split_child', 'cluster_id',
        'cluster_label', 'cluster_confidence', 'cluster_summary',
        'last_clustered']
 df = df[schema_columns]
@@ -360,7 +492,6 @@ db.create_table(TABLE_NAME, data=df, mode="overwrite")
 print(f"✨ Success! Identified {len(topic_info)-1} semantically distinct clusters.")
 
 # --- 6. SAVE TOPIC MODEL (safetensors) ---
-MODEL_DIR = Path.home() / ".mcp-apple-notes" / "bertopic_model"
 try:
     print(f"💾 Saving BERTopic model to {MODEL_DIR} (safetensors)...")
     MODEL_DIR.mkdir(parents=True, exist_ok=True)

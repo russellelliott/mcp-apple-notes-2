@@ -29,6 +29,23 @@ def load_model(model_dir: Path) -> BERTopic:
     return BERTopic.load(model_dir)
 
 
+def load_submodels(model_dir: Path) -> Dict[str, BERTopic]:
+    submodels: Dict[str, BERTopic] = {}
+    submodels_dir = model_dir / "submodels"
+    if not submodels_dir.exists():
+        return submodels
+
+    for topic_dir in sorted(submodels_dir.glob("topic_*")):
+        if not topic_dir.is_dir():
+            continue
+        parent_topic = topic_dir.name.replace("topic_", "")
+        try:
+            submodels[parent_topic] = BERTopic.load(topic_dir)
+        except Exception as e:
+            print(f"⚠️ Failed loading submodel {topic_dir}: {e}")
+    return submodels
+
+
 def load_notes_df() -> Optional[pd.DataFrame]:
     try:
         DATA_DIR = Path.home() / ".mcp-apple-notes"
@@ -107,9 +124,115 @@ def _get_keywords_for_topic(model: BERTopic, topic: int) -> list:
         return []
 
 
-def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: bool = True, include_prob_top_n: Optional[int] = None) -> Dict[int, Dict[str, Any]]:
+def _topic_sort_key(value: str):
+    parts = str(value).split('.')
+    key = []
+    for part in parts:
+        if part.lstrip('-').isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part))
+    return tuple(key)
+
+
+def gather_topics(
+    model: BERTopic,
+    model_dir: Path,
+    top_n: Optional[int] = None,
+    skip_negative: bool = True,
+    include_prob_top_n: Optional[int] = None,
+) -> Dict[str, Dict[str, Any]]:
     notes_df = load_notes_df()
-    out: Dict[int, Dict[str, Any]] = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    submodels = load_submodels(model_dir)
+
+    # If display_topic_id exists, treat it as first-class topic key for UI/topic naming.
+    if notes_df is not None and 'display_topic_id' in notes_df.columns:
+        working_df = notes_df.copy()
+        working_df['display_topic_id'] = working_df['display_topic_id'].astype(str)
+        if 'base_topic_id' in working_df.columns:
+            working_df['base_topic_id'] = working_df['base_topic_id'].astype(str)
+        else:
+            if 'cluster_id' in working_df.columns:
+                working_df['base_topic_id'] = working_df['cluster_id'].astype(str)
+            else:
+                working_df['base_topic_id'] = '-1'
+
+        display_ids = sorted(working_df['display_topic_id'].dropna().unique().tolist(), key=_topic_sort_key)
+        content_col = 'clean_chunk_content' if 'clean_chunk_content' in working_df.columns else ('chunk_content' if 'chunk_content' in working_df.columns else None)
+
+        for display_id in display_ids:
+            display_id = str(display_id)
+            if skip_negative and display_id == '-1':
+                continue
+
+            rows = working_df[working_df['display_topic_id'] == display_id]
+            if rows.empty:
+                continue
+
+            if 'cluster_confidence' in rows.columns:
+                try:
+                    rows = rows.copy()
+                    rows['__conf__'] = pd.to_numeric(rows['cluster_confidence'], errors='coerce').fillna(0.0)
+                    rows = rows.sort_values('__conf__', ascending=False)
+                except Exception:
+                    pass
+
+            representative_docs = []
+            representative_docs_meta = []
+            if content_col is not None:
+                seen_fingerprints = set()
+                for _, r in rows.iterrows():
+                    title_val = str(r.get('title', '-')) if r.get('title') is not None else '-'
+                    c_date = str(r.get('creation_date', '-')) if r.get('creation_date') is not None else '-'
+                    m_date = str(r.get('modification_date', '-')) if r.get('modification_date') is not None else '-'
+                    ch_idx = (int(r.get('chunk_index')) if r.get('chunk_index') is not None and _is_number(r.get('chunk_index')) else None)
+                    fingerprint = (title_val, c_date, m_date, ch_idx)
+                    if fingerprint in seen_fingerprints:
+                        continue
+                    seen_fingerprints.add(fingerprint)
+
+                    representative_docs.append(str(r.get(content_col) or ''))
+                    representative_docs_meta.append({
+                        'title': title_val,
+                        'creation_date': c_date,
+                        'modification_date': m_date,
+                        'cluster_id': str(r.get('cluster_id')) if r.get('cluster_id') is not None else None,
+                        'display_topic_id': display_id,
+                        'chunk_index': ch_idx,
+                        'cluster_confidence': (float(r.get('cluster_confidence')) if r.get('cluster_confidence') is not None and _is_number(r.get('cluster_confidence')) else None),
+                    })
+
+            if top_n is not None:
+                representative_docs = representative_docs[:top_n]
+                representative_docs_meta = representative_docs_meta[:top_n]
+
+            first_row = rows.iloc[0]
+            db_label = str(first_row['cluster_label']) if 'cluster_label' in first_row and pd.notna(first_row['cluster_label']) else None
+            db_summary = str(first_row['cluster_summary']) if 'cluster_summary' in first_row and pd.notna(first_row['cluster_summary']) else None
+
+            keywords = []
+            if '.' in display_id:
+                parent_topic, child_topic = display_id.split('.', 1)
+                submodel = submodels.get(parent_topic)
+                if submodel is not None and child_topic.lstrip('-').isdigit():
+                    keywords = _get_keywords_for_topic(submodel, int(child_topic))
+
+            if not keywords:
+                base_topic_str = str(first_row.get('base_topic_id', first_row.get('cluster_id', '-1')))
+                if base_topic_str.lstrip('-').isdigit():
+                    keywords = _get_keywords_for_topic(model, int(base_topic_str))
+
+            out[display_id] = {
+                'label': db_label,
+                'summary': db_summary,
+                'keywords': keywords,
+                'representative_docs': [str(d) for d in representative_docs],
+                'representative_docs_meta': representative_docs_meta,
+            }
+
+        if out:
+            return out
 
     try:
         topic_info = model.get_topic_info()
@@ -221,7 +344,7 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
                 for d in topic_obj['representative_docs']:
                     topic_obj['representative_docs_meta'].append(_find_metadata_for_doc(d, notes_df))
 
-            out[topic] = topic_obj
+            out[str(topic)] = topic_obj
 
         return out
 
@@ -246,12 +369,12 @@ def gather_topics(model: BERTopic, top_n: Optional[int] = None, skip_negative: b
         }
         for d in topic_obj['representative_docs']:
             topic_obj['representative_docs_meta'].append(_find_metadata_for_doc(d, notes_df))
-        out[topic] = topic_obj
+        out[str(topic)] = topic_obj
 
     return out
 
 
-def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]], notes_df: Optional[pd.DataFrame], prob_top_n: int = 5):
+def _add_probability_rankings(model: BERTopic, topics: Dict[str, Dict[str, Any]], notes_df: Optional[pd.DataFrame], prob_top_n: int = 5):
     """Compute document-topic probabilities by re-transforming all notes and
     attach top-N highest-probability docs per topic under key `top_probability_docs`
     (with metadata).
@@ -268,6 +391,10 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
         return
 
     # Map probs columns to topic ids using topic_info ordering
+    if any(not str(t).lstrip('-').isdigit() for t in topics.keys()):
+        print("ℹ️ Skipping probability ranking for display_topic_id entries (sub-clusters).")
+        return
+
     try:
         topic_info = model.get_topic_info()
         topic_order = list(topic_info['Topic'])
@@ -277,10 +404,11 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
 
     # For each topic, collect (doc_index, prob) pairs
     for t in list(topics.keys()):
-        if t not in topic_order:
+        topic_int = int(t)
+        if topic_int not in topic_order:
             # topic may be missing in order; skip
             continue
-        idx = topic_order.index(t)
+        idx = topic_order.index(topic_int)
         doc_probs = []
         for i, p_row in enumerate(probs):
             try:
@@ -337,7 +465,7 @@ def _add_probability_rankings(model: BERTopic, topics: Dict[int, Dict[str, Any]]
                 # ensure we still store metadata mapping
                 topics[t].setdefault('representative_docs_meta', []).append({"title": "-", "creation_date": "-", "modification_date": "-", "probability": (float(prob) if prob is not None else None), "chunk_index": None})
 
-def _generate_label_task(topic_id: int, obj: Dict[str, Any]) -> tuple:
+def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
     old_label = str(obj.get('label') or '')
     # Remove topic prefix (e.g. "15_word" -> "word")
     old_label = re.sub(r'^\d+_', '', old_label)
@@ -374,13 +502,13 @@ def _generate_label_task(topic_id: int, obj: Dict[str, Any]) -> tuple:
         pass
     return (topic_id, old_label, old_label)
 
-def enhance_topic_labels(topics: Dict[int, Dict[str, Any]], max_workers: int = 4):
+def enhance_topic_labels(topics: Dict[str, Dict[str, Any]], max_workers: int = 4):
     print("Generating enhanced topic labels with Ollama...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for topic, obj in topics.items():
             # Skip outlier topic usually
-            if topic == -1:
+            if str(topic) == '-1':
                 continue
             futures.append(executor.submit(_generate_label_task, topic, obj))
         
@@ -390,22 +518,31 @@ def enhance_topic_labels(topics: Dict[int, Dict[str, Any]], max_workers: int = 4
                 topics[topic_id]['label'] = new_label
                 print(f"Topic {topic_id}: {old_label} -> {new_label}")
 
-def update_db_labels(topics: Dict[int, Dict[str, Any]]):
+def update_db_labels(topics: Dict[str, Dict[str, Any]]):
     print("Updating database with new topic labels...")
     try:
         DATA_DIR = Path.home() / ".mcp-apple-notes"
         DB_PATH = DATA_DIR / "data"
         db = lancedb.connect(DB_PATH)
         table = db.open_table("notes")
+        notes_df = table.to_pandas()
+        has_display_topic_id = 'display_topic_id' in notes_df.columns
+        has_base_topic_id = 'base_topic_id' in notes_df.columns
         
         for topic_id, obj in topics.items():
-            if topic_id == -1: continue 
+            if str(topic_id) == '-1':
+                continue
             new_label = obj.get('label')
             if new_label:
-                table.update(
-                    where=f"cluster_id = '{topic_id}'",
-                    values={"cluster_label": new_label}
-                )
+                where_clause = f"cluster_id = '{topic_id}'"
+                if '.' in str(topic_id):
+                    if has_display_topic_id:
+                        where_clause = f"display_topic_id = '{topic_id}'"
+                else:
+                    where_clause = (
+                        f"base_topic_id = '{topic_id}'" if has_base_topic_id else f"cluster_id = '{topic_id}'"
+                    )
+                table.update(where=where_clause, values={"cluster_label": new_label})
         print("Database update complete.")
     except Exception as e:
         print(f"Failed to update database: {e}")
@@ -436,7 +573,7 @@ def backup_database():
         print(f"Failed to create database backup: {e}")
 
 
-def print_topics_console(topics: Dict[int, Dict[str, Any]]):
+def print_topics_console(topics: Dict[str, Dict[str, Any]]):
     for topic, obj in topics.items():
         header = f"--- Topic {topic} ("
         if 'representative_docs' in obj:
@@ -463,7 +600,7 @@ def main():
     start_time = time.time()
     p = argparse.ArgumentParser(description='Load BERTopic model and export topics')
     p.add_argument('model_dir', nargs='?', default=str(Path.home() / '.mcp-apple-notes' / 'bertopic_model'))
-    p.add_argument('--topic', type=int, help='Specific topic id to fetch')
+    p.add_argument('--topic', type=str, help='Specific topic id to fetch (supports display ids like 12.0)')
 
     p.add_argument('--top-n', type=int, default=None, help='Number of representative docs to include per topic')
     p.add_argument('--output-file', help='Optional JSON file to write representative docs mapping')
@@ -482,12 +619,13 @@ def main():
 
     model = load_model(model_dir)
 
-    topics = gather_topics(model, top_n=args.top_n)
+    topics = gather_topics(model, model_dir=model_dir, top_n=args.top_n)
     notes_df = load_notes_df()
     if args.prob_top_n:
         _add_probability_rankings(model, topics, notes_df, prob_top_n=args.prob_top_n)
     if args.topic is not None:
-        topics = {args.topic: topics.get(args.topic, {'representative_docs': [], 'representative_docs_meta': []})}
+        topic_key = str(args.topic)
+        topics = {topic_key: topics.get(topic_key, {'representative_docs': [], 'representative_docs_meta': []})}
 
     enhance_topic_labels(topics, max_workers=4)
     

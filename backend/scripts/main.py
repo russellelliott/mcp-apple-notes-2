@@ -86,6 +86,9 @@ class NotesDatabase:
             pa.field("chunk_content", pa.string()),
             pa.field("vector", pa.list_(pa.float32(), EMBEDDING_DIM)),
             # Clustering fields
+            pa.field("base_topic_id", pa.string()),
+            pa.field("display_topic_id", pa.string()),
+            pa.field("is_split_child", pa.bool_()),
             pa.field("cluster_id", pa.string()),
             pa.field("cluster_label", pa.string()),
             pa.field("cluster_confidence", pa.string()),
