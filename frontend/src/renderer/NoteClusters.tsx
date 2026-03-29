@@ -524,6 +524,29 @@ export default function NoteClusters() {
     const sorted = Object.keys(clusterGroups);
 
     if (isSearchMode && searchResults.length > 0) {
+      const hitLabels = sorted.filter((label) => {
+        const group = clusterGroups[label];
+        return group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
+      });
+
+      const distanceToNearestHitCluster = (label: string) => {
+        const current = clusterCentroids.get(label);
+        if (!current || hitLabels.length === 0) return Number.POSITIVE_INFINITY;
+
+        let minDistance = Number.POSITIVE_INFINITY;
+        hitLabels.forEach((hitLabel) => {
+          const hitCentroid = clusterCentroids.get(hitLabel);
+          if (!hitCentroid) return;
+          const dx = current.x - hitCentroid.x;
+          const dy = current.y - hitCentroid.y;
+          const dz = current.z - hitCentroid.z;
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (distance < minDistance) minDistance = distance;
+        });
+
+        return minDistance;
+      };
+
       sorted.sort((a, b) => {
         const groupA = clusterGroups[a];
         const groupB = clusterGroups[b];
@@ -540,11 +563,23 @@ export default function NoteClusters() {
           if (score !== undefined && score < minDistB) minDistB = score;
         });
 
-        if (minDistA === Infinity && minDistB === Infinity) return 0;
+        if (minDistA === Infinity && minDistB === Infinity) {
+          const clusterDistA = distanceToNearestHitCluster(a);
+          const clusterDistB = distanceToNearestHitCluster(b);
+          if (clusterDistA !== clusterDistB) return clusterDistA - clusterDistB;
+
+          const idA = clusterGroups[a].clusterId || a;
+          const idB = clusterGroups[b].clusterId || b;
+          return compareTopicIds(String(idA), String(idB));
+        }
         if (minDistA === Infinity) return 1;
         if (minDistB === Infinity) return -1;
 
-        return minDistA - minDistB;
+        if (minDistA !== minDistB) return minDistA - minDistB;
+
+        const idA = clusterGroups[a].clusterId || a;
+        const idB = clusterGroups[b].clusterId || b;
+        return compareTopicIds(String(idA), String(idB));
       });
     } else if (!isSearchMode && selectedClusters.size > 0) {
       const selectedLabels = Array.from(selectedClusters).filter((label) => clusterCentroids.has(label));
@@ -1306,7 +1341,9 @@ export default function NoteClusters() {
                 );
                 const color = clusterColors[label];
                 const isSelected = activeSelectedClusters.has(label);
-                const isDimmed = hasActiveClusterFilter && !isSelected;
+                const isSearchDimmed = isSearchMode && searchResults.length > 0 && !hasHits;
+                const isFilterDimmed = hasActiveClusterFilter && !isSelected;
+                const isDimmed = isFilterDimmed || isSearchDimmed;
 
                 return (
                   <div
