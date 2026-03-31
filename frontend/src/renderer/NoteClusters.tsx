@@ -331,6 +331,7 @@ export default function NoteClusters() {
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSearchMode = sidebarMode === 'search';
+  const hasActiveSearchQuery = sidebarMode === 'search' && searchQuery.trim() !== '';
 
   const fetchNoteContent = async (
     title: string,
@@ -1761,42 +1762,44 @@ export default function NoteClusters() {
               }
             `}</style>
             <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
-            {sidebarMode === 'search' && (
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setSearchLegendOrderMode('results')}
-                  style={{
-                    flex: 1,
-                    padding: '5px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                    backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                  }}
-                >
-                  Results Order
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSearchLegendOrderMode('similarity')}
-                  style={{
-                    flex: 1,
-                    padding: '5px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                    backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                  }}
-                >
-                  Similarity Order
-                </button>
-              </div>
-            )}
+            <div style={{ minHeight: '30px', marginBottom: '8px' }}>
+              {hasActiveSearchQuery && (
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSearchLegendOrderMode('results')}
+                    style={{
+                      flex: 1,
+                      padding: '5px 8px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
+                      border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                      backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Results Order
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSearchLegendOrderMode('similarity')}
+                    style={{
+                      flex: 1,
+                      padding: '5px 8px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
+                      border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                      backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Similarity Order
+                  </button>
+                </div>
+              )}
+            </div>
             <div
               style={{
                 display: 'flex',
