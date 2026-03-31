@@ -65,6 +65,7 @@ interface SidebarNoteData {
 
 type SidebarMode = 'notes' | 'search';
 type ClusterOrderMode = 'spike' | 'momentum';
+type SearchLegendOrderMode = 'results' | 'similarity';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -312,6 +313,7 @@ export default function NoteClusters() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('notes');
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
+  const [searchLegendOrderMode, setSearchLegendOrderMode] = useState<SearchLegendOrderMode>('results');
   const [activeSidebarCluster, setActiveSidebarCluster] = useState<string | null>(null);
   const [sidebarNotes, setSidebarNotes] = useState<SidebarNoteData[]>([]);
   const [isLoadingSidebar, setIsLoadingSidebar] = useState(false);
@@ -634,26 +636,29 @@ export default function NoteClusters() {
   const sortedLabels = useMemo(() => {
     const sorted = Object.keys(clusterGroups);
 
-    if (isSearchMode && searchSelectedClusters.size > 0) {
+    const distanceToNearest = (label: string, anchors: string[]) => {
+      const current = clusterCentroids.get(label);
+      if (!current || anchors.length === 0) return Number.POSITIVE_INFINITY;
+
+      let minDistance = Number.POSITIVE_INFINITY;
+      anchors.forEach((anchorLabel) => {
+        const centroid = clusterCentroids.get(anchorLabel);
+        if (!centroid) return;
+        const dx = current.x - centroid.x;
+        const dy = current.y - centroid.y;
+        const dz = current.z - centroid.z;
+        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance < minDistance) minDistance = distance;
+      });
+      return minDistance;
+    };
+
+    if (isSearchMode && searchLegendOrderMode === 'similarity' && searchSelectedClusters.size > 0) {
       const selectedLabels = Array.from(searchSelectedClusters).filter((label) => clusterCentroids.has(label));
 
       const minDistanceToSelection = (label: string) => {
         if (searchSelectedClusters.has(label)) return -1;
-        const current = clusterCentroids.get(label);
-        if (!current || selectedLabels.length === 0) return Number.POSITIVE_INFINITY;
-
-        let minDistance = Number.POSITIVE_INFINITY;
-        selectedLabels.forEach((selectedLabel) => {
-          const selectedCentroid = clusterCentroids.get(selectedLabel);
-          if (!selectedCentroid) return;
-          const dx = current.x - selectedCentroid.x;
-          const dy = current.y - selectedCentroid.y;
-          const dz = current.z - selectedCentroid.z;
-          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (distance < minDistance) minDistance = distance;
-        });
-
-        return minDistance;
+        return distanceToNearest(label, selectedLabels);
       };
 
       sorted.sort((a, b) => {
@@ -677,28 +682,14 @@ export default function NoteClusters() {
         const idB = clusterGroups[b].clusterId || b;
         return compareTopicIds(String(idA), String(idB));
       });
-    } else if (isSearchMode && searchResults.length > 0) {
+    } else if (isSearchMode && searchLegendOrderMode === 'similarity' && searchResults.length > 0) {
       const hitLabels = sorted.filter((label) => {
         const group = clusterGroups[label];
         return group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
       });
 
       const distanceToNearestHitCluster = (label: string) => {
-        const current = clusterCentroids.get(label);
-        if (!current || hitLabels.length === 0) return Number.POSITIVE_INFINITY;
-
-        let minDistance = Number.POSITIVE_INFINITY;
-        hitLabels.forEach((hitLabel) => {
-          const hitCentroid = clusterCentroids.get(hitLabel);
-          if (!hitCentroid) return;
-          const dx = current.x - hitCentroid.x;
-          const dy = current.y - hitCentroid.y;
-          const dz = current.z - hitCentroid.z;
-          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (distance < minDistance) minDistance = distance;
-        });
-
-        return minDistance;
+        return distanceToNearest(label, hitLabels);
       };
 
       sorted.sort((a, b) => {
@@ -735,6 +726,33 @@ export default function NoteClusters() {
         const idB = clusterGroups[b].clusterId || b;
         return compareTopicIds(String(idA), String(idB));
       });
+    } else if (isSearchMode && searchLegendOrderMode === 'results' && searchResults.length > 0) {
+      const firstSeenRank = new Map<string, number>();
+      searchResults.forEach((result, idx) => {
+        const label = result.display_topic_id || result.cluster_id || '-1';
+        if (clusterGroups[label] && !firstSeenRank.has(label)) {
+          firstSeenRank.set(label, idx);
+        }
+      });
+
+      const hitLabels = Array.from(firstSeenRank.keys());
+
+      sorted.sort((a, b) => {
+        const rankA = firstSeenRank.get(a);
+        const rankB = firstSeenRank.get(b);
+
+        if (rankA !== undefined && rankB !== undefined) return rankA - rankB;
+        if (rankA !== undefined) return -1;
+        if (rankB !== undefined) return 1;
+
+        const distA = distanceToNearest(a, hitLabels);
+        const distB = distanceToNearest(b, hitLabels);
+        if (distA !== distB) return distA - distB;
+
+        const idA = clusterGroups[a].clusterId || a;
+        const idB = clusterGroups[b].clusterId || b;
+        return compareTopicIds(String(idA), String(idB));
+      });
     } else {
       sorted.sort((a, b) => {
         const scoreA = clusterOrderScores.get(a);
@@ -756,6 +774,7 @@ export default function NoteClusters() {
     clusterOrderMode,
     clusterOrderScores,
     isSearchMode,
+    searchLegendOrderMode,
     searchSelectedClusters,
     searchScoreMap,
     searchResults.length,
@@ -1742,6 +1761,42 @@ export default function NoteClusters() {
               }
             `}</style>
             <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
+            {sidebarMode === 'search' && (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setSearchLegendOrderMode('results')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                    backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  Results Order
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchLegendOrderMode('similarity')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                    backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  Similarity Order
+                </button>
+              </div>
+            )}
             <div
               style={{
                 display: 'flex',
@@ -1772,7 +1827,12 @@ export default function NoteClusters() {
                 const isSelected = sidebarMode === 'search' && activeSelectedClusters.has(label);
                 const isSearchDimmed = isSearchMode && searchResults.length > 0 && !hasHits;
                 const isFilterDimmed = sidebarMode === 'search' && hasActiveClusterFilter && !isSelected;
-                const isDimmed = isFilterDimmed || isSearchDimmed;
+                const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
+                const isSoftDimmed = isSearchDimmed && isSelected;
+                const isDimmed = isHardDimmed || isSoftDimmed;
+                const rowOpacity = isHardDimmed ? 0.5 : isSoftDimmed ? 0.76 : 1;
+                const dotOpacity = isHardDimmed ? 0.55 : isSoftDimmed ? 0.78 : 1;
+                const idColor = isHardDimmed ? '#8a8a8a' : isSoftDimmed ? '#666' : '#555';
 
                 return (
                   <div
@@ -1786,17 +1846,17 @@ export default function NoteClusters() {
                       }
                     }}
                     style={{
-                      opacity: isDimmed ? 0.45 : 1,
+                      opacity: rowOpacity,
                       cursor: 'pointer',
                     }}
                   >
                     <div
                       className="cluster-dot"
-                      style={{ backgroundColor: color, opacity: isDimmed ? 0.5 : 1 }}
+                      style={{ backgroundColor: color, opacity: dotOpacity }}
                     ></div>
                     <div
                       className="cluster-id"
-                      style={{ color: isDimmed ? '#9a9a9a' : '#555', fontWeight: isSelected ? 700 : 600 }}
+                      style={{ color: idColor, fontWeight: isSelected ? 700 : 600 }}
                     >
                       #{cid}
                     </div>
