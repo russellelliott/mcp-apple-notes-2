@@ -188,10 +188,36 @@ class NoteContent(BaseModel):
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
 
+
+class SidebarChunk(BaseModel):
+    chunk_index: int
+    cluster_id: str
+    cluster_name: str
+    in_cluster: bool
+    text: Optional[str] = None
+
+
+class SidebarNote(BaseModel):
+    note_key: str
+    title: str
+    creation_date: Optional[str] = None
+    modification_date: Optional[str] = None
+    chunks: List[SidebarChunk]
+
+
+class SidebarResponse(BaseModel):
+    active_cluster_id: str
+    notes: List[SidebarNote]
+
 # --- Endpoints ---
 
 @app.get("/note_content", response_model=NoteContent)
-async def get_note_content(title: str, chunk_index: int):
+async def get_note_content(
+    title: str,
+    chunk_index: int,
+    creation_date: Optional[str] = None,
+    modification_date: Optional[str] = None,
+):
     """Get full content for a specific chunk"""
     if state.df_viz.empty:
         raise HTTPException(status_code=503, detail="Data not loaded")
@@ -200,6 +226,10 @@ async def get_note_content(title: str, chunk_index: int):
         # Filter for the specific chunk
         # Using string comparison for title to be safe, equality for chunk_index
         mask = (state.df_viz['title'] == title) & (state.df_viz['chunk_index'] == chunk_index)
+        if creation_date is not None and 'creation_date' in state.df_viz.columns:
+            mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
+        if modification_date is not None and 'modification_date' in state.df_viz.columns:
+            mask = mask & (state.df_viz['modification_date'].astype(str) == str(modification_date))
         row = state.df_viz[mask]
         
         if row.empty:
@@ -223,6 +253,100 @@ async def get_note_content(title: str, chunk_index: int):
         )
     except Exception as e:
         print(f"Error fetching content: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/cluster_sidebar", response_model=SidebarResponse)
+async def get_cluster_sidebar(active_cluster_id: str):
+    """Return note cards for a cluster with full chunk rails and selective text payload."""
+    if state.df_viz.empty:
+        return SidebarResponse(active_cluster_id=active_cluster_id, notes=[])
+
+    try:
+        working_df = state.df_viz.copy()
+        cluster_col = 'display_topic_id' if 'display_topic_id' in working_df.columns else 'cluster_id'
+        if cluster_col not in working_df.columns:
+            raise HTTPException(status_code=500, detail="Cluster column missing")
+
+        working_df[cluster_col] = working_df[cluster_col].astype(str).fillna('-1')
+        working_df['title'] = working_df['title'].astype(str)
+        working_df['chunk_index'] = working_df['chunk_index'].fillna(0).astype(int)
+        if 'creation_date' not in working_df.columns:
+            working_df['creation_date'] = ''
+        if 'modification_date' not in working_df.columns:
+            working_df['modification_date'] = ''
+        if 'cluster_label' not in working_df.columns:
+            working_df['cluster_label'] = 'Unclustered'
+
+        working_df['creation_date'] = working_df['creation_date'].astype(str).fillna('')
+        working_df['modification_date'] = working_df['modification_date'].astype(str).fillna('')
+        working_df['cluster_label'] = working_df['cluster_label'].astype(str).fillna('Unclustered')
+
+        active_rows = working_df[working_df[cluster_col] == str(active_cluster_id)].copy()
+        if active_rows.empty:
+            return SidebarResponse(active_cluster_id=active_cluster_id, notes=[])
+
+        note_identity_cols = ['title', 'creation_date', 'modification_date']
+        note_keys_df = active_rows[note_identity_cols].drop_duplicates().copy()
+        note_keys_df['note_key'] = (
+            note_keys_df['title']
+            + '|||' + note_keys_df['creation_date']
+            + '|||' + note_keys_df['modification_date']
+        )
+
+        merged = working_df.merge(
+            note_keys_df,
+            on=note_identity_cols,
+            how='inner',
+        )
+
+        merged = merged.sort_values(['note_key', 'chunk_index'])
+
+        notes: List[SidebarNote] = []
+        for note_key, group in merged.groupby('note_key', sort=False):
+            title = str(group.iloc[0]['title'])
+            creation_date = str(group.iloc[0].get('creation_date', ''))
+            modification_date = str(group.iloc[0].get('modification_date', ''))
+
+            chunks: List[SidebarChunk] = []
+            for _, row in group.iterrows():
+                chunk_cluster_id = str(row.get(cluster_col, '-1'))
+                in_cluster = chunk_cluster_id == str(active_cluster_id)
+
+                chunk_text = None
+                if in_cluster:
+                    chunk_text = row.get('chunk_content', '')
+                    if pd.isna(chunk_text) or chunk_text == '':
+                        chunk_text = row.get('text', '')
+                    if pd.isna(chunk_text):
+                        chunk_text = ''
+                    chunk_text = str(chunk_text)
+
+                chunks.append(
+                    SidebarChunk(
+                        chunk_index=int(row.get('chunk_index', 0)),
+                        cluster_id=chunk_cluster_id,
+                        cluster_name=str(row.get('cluster_label', 'Unclustered')),
+                        in_cluster=in_cluster,
+                        text=chunk_text,
+                    )
+                )
+
+            notes.append(
+                SidebarNote(
+                    note_key=str(note_key),
+                    title=title,
+                    creation_date=creation_date,
+                    modification_date=modification_date,
+                    chunks=chunks,
+                )
+            )
+
+        return SidebarResponse(active_cluster_id=active_cluster_id, notes=notes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error building cluster sidebar: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/points", response_model=List[NotePoint])
