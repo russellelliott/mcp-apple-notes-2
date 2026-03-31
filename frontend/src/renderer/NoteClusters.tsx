@@ -311,6 +311,7 @@ export default function NoteClusters() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [hasSearchResponse, setHasSearchResponse] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('notes');
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [searchLegendOrderMode, setSearchLegendOrderMode] = useState<SearchLegendOrderMode>('results');
@@ -331,7 +332,8 @@ export default function NoteClusters() {
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSearchMode = sidebarMode === 'search';
-  const hasActiveSearchQuery = sidebarMode === 'search' && searchQuery.trim() !== '';
+  const showSearchLegendOrderButtons =
+    sidebarMode === 'search' && debouncedQuery.trim() !== '' && hasSearchResponse;
 
   const fetchNoteContent = async (
     title: string,
@@ -436,6 +438,7 @@ export default function NoteClusters() {
     if (val === '') {
       setDebouncedQuery('');
       setSearchResults([]);
+      setHasSearchResponse(false);
     }
   };
 
@@ -457,6 +460,7 @@ export default function NoteClusters() {
     const runSearch = async () => {
       if (!debouncedQuery.trim()) {
         if (active) setSearchResults([]);
+        if (active) setHasSearchResponse(false);
         return;
       }
 
@@ -466,9 +470,14 @@ export default function NoteClusters() {
         );
         if (active) {
           setSearchResults(response.data.results || []);
+          setHasSearchResponse(true);
         }
       } catch (error) {
         console.error('Error searching:', error);
+        if (active) {
+          setSearchResults([]);
+          setHasSearchResponse(false);
+        }
       }
     };
 
@@ -1763,7 +1772,7 @@ export default function NoteClusters() {
             `}</style>
             <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
             <div style={{ minHeight: '30px', marginBottom: '8px' }}>
-              {hasActiveSearchQuery && (
+              {showSearchLegendOrderButtons && (
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button
                     type="button"
