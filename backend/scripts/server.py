@@ -309,7 +309,13 @@ async def get_cluster_sidebar(active_cluster_id: str):
             modification_date = str(group.iloc[0].get('modification_date', ''))
 
             chunks: List[SidebarChunk] = []
+            seen_chunk_indexes = set()
             for _, row in group.iterrows():
+                chunk_index_val = int(row.get('chunk_index', 0))
+                if chunk_index_val in seen_chunk_indexes:
+                    continue
+                seen_chunk_indexes.add(chunk_index_val)
+
                 chunk_cluster_id = str(row.get(cluster_col, '-1'))
                 in_cluster = chunk_cluster_id == str(active_cluster_id)
 
@@ -324,7 +330,7 @@ async def get_cluster_sidebar(active_cluster_id: str):
 
                 chunks.append(
                     SidebarChunk(
-                        chunk_index=int(row.get('chunk_index', 0)),
+                        chunk_index=chunk_index_val,
                         cluster_id=chunk_cluster_id,
                         cluster_name=str(row.get('cluster_label', 'Unclustered')),
                         in_cluster=in_cluster,
