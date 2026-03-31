@@ -269,18 +269,29 @@ const ClusterLabel = ({
 const SegmentedRail = ({
   chunks,
   activeClusterId,
-  getClusterTint,
+  getClusterColor,
   onActiveDotClick,
   onInactiveDashClick,
 }: {
   chunks: SidebarChunkData[];
   activeClusterId: string;
-  getClusterTint: (clusterId: string) => string;
+  getClusterColor: (clusterId: string) => string;
   onActiveDotClick: (chunk: SidebarChunkData) => void;
   onInactiveDashClick: (chunk: SidebarChunkData) => void;
 }) => {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap', margin: '6px 0 8px 0' }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '3px',
+        flexWrap: 'wrap',
+        margin: '6px 0 8px 0',
+        backgroundColor: '#000000',
+        borderRadius: '6px',
+        padding: '4px 6px',
+      }}
+    >
       {chunks.map((chunk) => {
         const isActive = chunk.cluster_id === activeClusterId;
         const symbol = isActive ? '●' : '−';
@@ -294,7 +305,7 @@ const SegmentedRail = ({
               border: 'none',
               background: 'transparent',
               cursor: 'pointer',
-              color: isActive ? '#111111' : getClusterTint(chunk.cluster_id),
+              color: isActive ? '#ffffff' : getClusterColor(chunk.cluster_id),
               fontSize: isActive ? '15px' : '14px',
               lineHeight: 1,
               padding: 0,
@@ -324,7 +335,10 @@ export default function NoteClusters() {
   const [activeSidebarCluster, setActiveSidebarCluster] = useState<string | null>(null);
   const [sidebarNotes, setSidebarNotes] = useState<SidebarNoteData[]>([]);
   const [isLoadingSidebar, setIsLoadingSidebar] = useState(false);
+  const [loadedSidebarCluster, setLoadedSidebarCluster] = useState<string | null>(null);
   const [pendingScrollNoteKey, setPendingScrollNoteKey] = useState<string | null>(null);
+  const [pendingScrollNoteTitle, setPendingScrollNoteTitle] = useState<string | null>(null);
+  const [pendingScrollTargetCluster, setPendingScrollTargetCluster] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
@@ -820,7 +834,10 @@ export default function NoteClusters() {
 
     const fetchSidebar = async () => {
       if (sidebarMode !== 'notes' || !activeSidebarCluster) {
-        if (active) setSidebarNotes([]);
+        if (active) {
+          setSidebarNotes([]);
+          setLoadedSidebarCluster(null);
+        }
         return;
       }
 
@@ -831,10 +848,14 @@ export default function NoteClusters() {
         );
         if (active) {
           setSidebarNotes(Array.isArray(response.data?.notes) ? response.data.notes : []);
+          setLoadedSidebarCluster(activeSidebarCluster);
         }
       } catch (error) {
         console.error('Error loading sidebar notes:', error);
-        if (active) setSidebarNotes([]);
+        if (active) {
+          setSidebarNotes([]);
+          setLoadedSidebarCluster(null);
+        }
       } finally {
         if (active) setIsLoadingSidebar(false);
       }
@@ -849,11 +870,39 @@ export default function NoteClusters() {
 
   useEffect(() => {
     if (!pendingScrollNoteKey) return;
-    const element = sidebarCardRefs.current[pendingScrollNoteKey];
+    if (!pendingScrollTargetCluster) return;
+    if (sidebarMode !== 'notes') return;
+    if (isLoadingSidebar) return;
+    if (loadedSidebarCluster !== pendingScrollTargetCluster) return;
+
+    const byKey = sidebarNotes.find((note) => note.note_key === pendingScrollNoteKey);
+    const byTitle = pendingScrollNoteTitle
+      ? sidebarNotes.find((note) => note.title === pendingScrollNoteTitle)
+      : undefined;
+    const matched = byKey || byTitle;
+
+    if (!matched) {
+      setPendingScrollNoteKey(null);
+      setPendingScrollNoteTitle(null);
+      setPendingScrollTargetCluster(null);
+      return;
+    }
+
+    const element = sidebarCardRefs.current[matched.note_key];
     if (!element) return;
     element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     setPendingScrollNoteKey(null);
-  }, [pendingScrollNoteKey, sidebarNotes]);
+    setPendingScrollNoteTitle(null);
+    setPendingScrollTargetCluster(null);
+  }, [
+    isLoadingSidebar,
+    loadedSidebarCluster,
+    pendingScrollNoteKey,
+    pendingScrollNoteTitle,
+    pendingScrollTargetCluster,
+    sidebarNotes,
+    sidebarMode,
+  ]);
 
   const sceneBounds = useMemo(() => {
     if (data.length === 0) {
@@ -1180,12 +1229,13 @@ export default function NoteClusters() {
     setSidebarMode('notes');
     setActiveSidebarCluster(chunk.cluster_id);
     setPendingScrollNoteKey(note.note_key);
+    setPendingScrollNoteTitle(note.title);
+    setPendingScrollTargetCluster(chunk.cluster_id);
   }, []);
 
-  const getClusterTint = useCallback(
+  const getClusterColor = useCallback(
     (clusterId: string) => {
-      const base = clusterColors[clusterId] || '#6b7280';
-      return mixColorWithWhite(base, 0.2);
+      return clusterColors[clusterId] || '#6b7280';
     },
     [clusterColors],
   );
@@ -1422,7 +1472,7 @@ export default function NoteClusters() {
                       <SegmentedRail
                         chunks={note.chunks}
                         activeClusterId={activeSidebarCluster || ''}
-                        getClusterTint={getClusterTint}
+                        getClusterColor={getClusterColor}
                         onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
                         onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
                       />
