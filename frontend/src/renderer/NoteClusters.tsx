@@ -634,7 +634,50 @@ export default function NoteClusters() {
   const sortedLabels = useMemo(() => {
     const sorted = Object.keys(clusterGroups);
 
-    if (isSearchMode && searchResults.length > 0) {
+    if (isSearchMode && searchSelectedClusters.size > 0) {
+      const selectedLabels = Array.from(searchSelectedClusters).filter((label) => clusterCentroids.has(label));
+
+      const minDistanceToSelection = (label: string) => {
+        if (searchSelectedClusters.has(label)) return -1;
+        const current = clusterCentroids.get(label);
+        if (!current || selectedLabels.length === 0) return Number.POSITIVE_INFINITY;
+
+        let minDistance = Number.POSITIVE_INFINITY;
+        selectedLabels.forEach((selectedLabel) => {
+          const selectedCentroid = clusterCentroids.get(selectedLabel);
+          if (!selectedCentroid) return;
+          const dx = current.x - selectedCentroid.x;
+          const dy = current.y - selectedCentroid.y;
+          const dz = current.z - selectedCentroid.z;
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (distance < minDistance) minDistance = distance;
+        });
+
+        return minDistance;
+      };
+
+      sorted.sort((a, b) => {
+        const aSelected = searchSelectedClusters.has(a);
+        const bSelected = searchSelectedClusters.has(b);
+
+        if (aSelected && !bSelected) return -1;
+        if (!aSelected && bSelected) return 1;
+
+        if (aSelected && bSelected) {
+          const idA = clusterGroups[a].clusterId || a;
+          const idB = clusterGroups[b].clusterId || b;
+          return compareTopicIds(String(idA), String(idB));
+        }
+
+        const distA = minDistanceToSelection(a);
+        const distB = minDistanceToSelection(b);
+        if (distA !== distB) return distA - distB;
+
+        const idA = clusterGroups[a].clusterId || a;
+        const idB = clusterGroups[b].clusterId || b;
+        return compareTopicIds(String(idA), String(idB));
+      });
+    } else if (isSearchMode && searchResults.length > 0) {
       const hitLabels = sorted.filter((label) => {
         const group = clusterGroups[label];
         return group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
@@ -713,13 +756,16 @@ export default function NoteClusters() {
     clusterOrderMode,
     clusterOrderScores,
     isSearchMode,
+    searchSelectedClusters,
     searchScoreMap,
     searchResults.length,
   ]);
 
   const activeSelectedClusters = isSearchMode ? searchSelectedClusters : selectedClusters;
   const hasActiveClusterFilter = activeSelectedClusters.size > 0;
-  const visibleLabels = sortedLabels;
+  const visibleLabels = isSearchMode && hasActiveClusterFilter
+    ? sortedLabels.filter((label) => activeSelectedClusters.has(label))
+    : sortedLabels;
 
   useEffect(() => {
     if (sortedLabels.length === 0) {
@@ -1290,6 +1336,9 @@ export default function NoteClusters() {
                                     color: '#374151',
                                     fontSize: '12px',
                                     lineHeight: 1.35,
+                                    whiteSpace: 'normal',
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
                                   }}
                                   title={`Open chunk ${chunk.chunk_index + 1}`}
                                 >
