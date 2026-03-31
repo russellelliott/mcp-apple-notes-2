@@ -1235,7 +1235,8 @@ export default function NoteClusters() {
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
-      return clusterColors[clusterId] || '#6b7280';
+      const base = clusterColors[clusterId] || '#6b7280';
+      return mixColorWithWhite(base, 0.25);
     },
     [clusterColors],
   );
