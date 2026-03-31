@@ -1403,17 +1403,12 @@ export default function NoteClusters() {
                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                       }}
                     >
-                      <button
-                        type="button"
-                        onClick={() => openSidebarNote(note)}
+                      <div
                         style={{
-                          border: 'none',
-                          background: 'transparent',
                           padding: 0,
                           margin: 0,
                           fontWeight: 700,
                           color: '#111827',
-                          cursor: 'pointer',
                           textAlign: 'left',
                           width: '100%',
                           overflowWrap: 'anywhere',
@@ -1422,7 +1417,7 @@ export default function NoteClusters() {
                         title={note.title}
                       >
                         {note.title}
-                      </button>
+                      </div>
 
                       <SegmentedRail
                         chunks={note.chunks}
