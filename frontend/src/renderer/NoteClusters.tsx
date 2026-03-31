@@ -1277,6 +1277,52 @@ export default function NoteClusters() {
     return sorted;
   }, [notesSortDirection, notesSortMetric, sidebarNotes]);
 
+  const modalRailChunks = useMemo(() => {
+    if (!selectedNode) return [] as SidebarChunkData[];
+
+    const noteRows = data
+      .filter((row) => {
+        if (row.title !== selectedNode.title) return false;
+        if (selectedNode.creation_date && row.creation_date !== selectedNode.creation_date) return false;
+        if (selectedNode.modification_date && row.modification_date !== selectedNode.modification_date) return false;
+        return true;
+      })
+      .sort((a, b) => a.chunk_index - b.chunk_index);
+
+    const seen = new Set<number>();
+    const selectedClusterId = selectedNode.display_topic_id || selectedNode.cluster_id || '';
+    return noteRows
+      .filter((row) => {
+        if (seen.has(row.chunk_index)) return false;
+        seen.add(row.chunk_index);
+        return true;
+      })
+      .map((row) => ({
+        chunk_index: row.chunk_index,
+        cluster_id: row.display_topic_id || row.cluster_id || '-1',
+        cluster_name: row.cluster_label || 'Unclustered',
+        in_cluster: (row.display_topic_id || row.cluster_id || '') === selectedClusterId,
+        text: null,
+      }));
+  }, [data, selectedNode]);
+
+  const handleModalChunkJump = useCallback(
+    (chunkIndex: number) => {
+      if (!selectedNode) return;
+      fetchNoteContent(
+        selectedNode.title,
+        chunkIndex,
+        selectedNode.cluster_id,
+        selectedNode.cluster_label,
+        selectedNode.display_topic_id,
+        selectedNode.base_topic_id,
+        selectedNode.creation_date,
+        selectedNode.modification_date,
+      );
+    },
+    [selectedNode],
+  );
+
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
       {loading ? (
@@ -1469,13 +1515,15 @@ export default function NoteClusters() {
                         {note.title}
                       </div>
 
-                      <SegmentedRail
-                        chunks={note.chunks}
-                        activeClusterId={activeSidebarCluster || ''}
-                        getClusterColor={getClusterColor}
-                        onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
-                        onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
-                      />
+                      {note.chunks.length > 1 && (
+                        <SegmentedRail
+                          chunks={note.chunks}
+                          activeClusterId={activeSidebarCluster || ''}
+                          getClusterColor={getClusterColor}
+                          onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
+                          onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
+                        />
+                      )}
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         {(() => {
@@ -1706,60 +1754,107 @@ export default function NoteClusters() {
                   }}
                 >
                   {selectedNode.total_chunks > 1 ? (
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr auto 1fr',
-                        alignItems: 'center',
-                        width: '100%',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={handlePrevChunk}
-                        disabled={isLoadingContent}
+                    <div style={{ width: '100%' }}>
+                      <div
                         style={{
-                          justifySelf: 'start',
-                          width: '34px',
-                          height: '30px',
-                          cursor: 'pointer',
-                          borderRadius: '4px',
-                          border: '1px solid #ccc',
-                          backgroundColor: '#fff',
-                          fontSize: '18px',
-                          lineHeight: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          flexWrap: 'wrap',
+                          margin: '0 0 8px 0',
+                          backgroundColor: '#000000',
+                          borderRadius: '6px',
+                          padding: '4px 6px',
                         }}
-                        aria-label="Previous chunk"
                       >
-                        &#8592;
-                      </button>
-                      <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap', justifySelf: 'center' }}>
-                        Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleNextChunk}
-                        disabled={isLoadingContent}
+                        {modalRailChunks.map((chunk) => {
+                          const selectedClusterId = selectedNode.display_topic_id || selectedNode.cluster_id || '';
+                          const isDot = chunk.cluster_id === selectedClusterId;
+                          const symbol = isDot ? '●' : '−';
+                          const isCurrent = chunk.chunk_index === selectedNode.chunk_index;
+                          return (
+                            <button
+                              type="button"
+                              key={`modal-rail-${chunk.chunk_index}-${chunk.cluster_id}`}
+                              onClick={() => handleModalChunkJump(chunk.chunk_index)}
+                              title={`Chunk ${chunk.chunk_index + 1} | Cluster: ${chunk.cluster_name}`}
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                color: isDot ? '#ffffff' : getClusterColor(chunk.cluster_id),
+                                fontSize: isDot ? '15px' : '14px',
+                                lineHeight: 1,
+                                padding: 0,
+                                margin: 0,
+                                opacity: isCurrent ? 1 : 0.82,
+                                transform: isCurrent ? 'scale(1.15)' : 'scale(1)',
+                              }}
+                              aria-label={`Jump to chunk ${chunk.chunk_index + 1}`}
+                            >
+                              {symbol}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div
                         style={{
-                          justifySelf: 'end',
-                          width: '34px',
-                          height: '30px',
-                          cursor: 'pointer',
-                          borderRadius: '4px',
-                          border: '1px solid #ccc',
-                          backgroundColor: '#fff',
-                          fontSize: '18px',
-                          lineHeight: 1,
+                          display: 'grid',
+                          gridTemplateColumns: '1fr auto 1fr',
+                          alignItems: 'center',
+                          width: '100%',
                         }}
-                        aria-label="Next chunk"
                       >
-                        &#8594;
-                      </button>
+                        <button
+                          type="button"
+                          onClick={handlePrevChunk}
+                          disabled={isLoadingContent}
+                          style={{
+                            justifySelf: 'start',
+                            width: '34px',
+                            height: '30px',
+                            cursor: 'pointer',
+                            borderRadius: '4px',
+                            border: '1px solid #ccc',
+                            backgroundColor: '#fff',
+                            fontSize: '18px',
+                            lineHeight: 1,
+                          }}
+                          aria-label="Previous chunk"
+                        >
+                          &#8592;
+                        </button>
+                        <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap', justifySelf: 'center' }}>
+                          Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleNextChunk}
+                          disabled={isLoadingContent}
+                          style={{
+                            justifySelf: 'end',
+                            width: '34px',
+                            height: '30px',
+                            cursor: 'pointer',
+                            borderRadius: '4px',
+                            border: '1px solid #ccc',
+                            backgroundColor: '#fff',
+                            fontSize: '18px',
+                            lineHeight: 1,
+                          }}
+                          aria-label="Next chunk"
+                        >
+                          &#8594;
+                        </button>
+                      </div>
                     </div>
                   ) : (
-                    <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap' }}>
-                      Chunk 1 of 1
-                    </span>
+                    <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
+                      <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap' }}>
+                        Chunk 1 of 1
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
