@@ -1653,7 +1653,6 @@ export default function NoteClusters() {
                   style={{
                     marginTop: 'auto',
                     width: '100%',
-                    maxWidth: '340px',
                   }}
                 >
                   {selectedNode.total_chunks > 1 ? (
