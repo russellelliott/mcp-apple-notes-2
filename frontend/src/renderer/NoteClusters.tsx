@@ -350,6 +350,7 @@ export default function NoteClusters() {
   const [searchSelectedClusters, setSearchSelectedClusters] = useState<Set<string>>(new Set());
   const plotAreaRef = useRef<HTMLDivElement>(null);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSearchMode = sidebarMode === 'search';
   const showSearchLegendOrderButtons =
@@ -1278,6 +1279,15 @@ export default function NoteClusters() {
     return sorted;
   }, [notesSortDirection, notesSortMetric, sidebarNotes]);
 
+  useEffect(() => {
+    if (sidebarMode !== 'notes') return;
+    if (!activeSidebarCluster) return;
+
+    const target = legendClusterRefs.current[activeSidebarCluster];
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [activeSidebarCluster, clusterOrderMode, sidebarMode, sortedLabels]);
+
   const modalRailChunks = useMemo(() => {
     if (!selectedNode) return [] as SidebarChunkData[];
 
@@ -2113,6 +2123,9 @@ export default function NoteClusters() {
                 return (
                   <div
                     key={label}
+                    ref={(el) => {
+                      legendClusterRefs.current[label] = el;
+                    }}
                     className={`cluster-row ${isSelected ? 'cluster-row-selected' : ''}`}
                     onClick={() => {
                       if (sidebarMode === 'notes') {
