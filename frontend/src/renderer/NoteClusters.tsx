@@ -2098,7 +2098,9 @@ export default function NoteClusters() {
                   searchScoreMap.has(pointData.unique_key),
                 );
                 const color = clusterColors[label];
-                const isSelected = sidebarMode === 'search' && activeSelectedClusters.has(label);
+                const isSelected = sidebarMode === 'notes'
+                  ? activeSidebarCluster === label
+                  : activeSelectedClusters.has(label);
                 const isSearchDimmed = isSearchMode && searchResults.length > 0 && !hasHits;
                 const isFilterDimmed = sidebarMode === 'search' && hasActiveClusterFilter && !isSelected;
                 const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
