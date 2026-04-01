@@ -1224,7 +1224,8 @@ export default function NoteClusters() {
     setHighlightedNodeId(uniqueKey);
     setHoveredId(uniqueKey);
     setHoverSource('list');
-  }, []);
+    openSidebarNote(note, chunk.chunk_index);
+  }, [openSidebarNote]);
 
   const handleInactiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
     setSidebarMode('notes');
