@@ -1364,16 +1364,15 @@ export default function NoteClusters() {
               zIndex: 10,
             }}
           >
-            <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Notes Sidebar</h3>
-
             <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
               <button
                 type="button"
                 onClick={() => setSidebarMode('notes')}
                 style={{
                   flex: 1,
-                  padding: '8px 10px',
-                  borderRadius: '6px',
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
                   border: sidebarMode === 'notes' ? '1px solid #1f2937' : '1px solid #ccc',
                   background: sidebarMode === 'notes' ? '#e5e7eb' : '#fff',
                   cursor: 'pointer',
@@ -1387,8 +1386,9 @@ export default function NoteClusters() {
                 onClick={() => setSidebarMode('search')}
                 style={{
                   flex: 1,
-                  padding: '8px 10px',
-                  borderRadius: '6px',
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
                   border: sidebarMode === 'search' ? '1px solid #1f2937' : '1px solid #ccc',
                   background: sidebarMode === 'search' ? '#e5e7eb' : '#fff',
                   cursor: 'pointer',
@@ -1407,8 +1407,9 @@ export default function NoteClusters() {
                     onClick={() => setClusterOrderMode('spike')}
                     style={{
                       flex: 1,
-                      padding: '8px',
-                      borderRadius: '6px',
+                      padding: '5px 8px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
                       border: clusterOrderMode === 'spike' ? '1px solid #1f2937' : '1px solid #ccc',
                       background: clusterOrderMode === 'spike' ? '#dbeafe' : '#fff',
                       cursor: 'pointer',
@@ -1423,8 +1424,9 @@ export default function NoteClusters() {
                     onClick={() => setClusterOrderMode('momentum')}
                     style={{
                       flex: 1,
-                      padding: '8px',
-                      borderRadius: '6px',
+                      padding: '5px 8px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
                       border: clusterOrderMode === 'momentum' ? '1px solid #1f2937' : '1px solid #ccc',
                       background: clusterOrderMode === 'momentum' ? '#dcfce7' : '#fff',
                       cursor: 'pointer',
@@ -1974,7 +1976,7 @@ export default function NoteClusters() {
 
           <div
             style={{
-              width: '450px',
+              width: '360px',
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -2043,7 +2045,12 @@ export default function NoteClusters() {
                 flex-shrink: 0;
               }
             `}</style>
-            <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Clusters</h3>
+            <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
+              Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
+              {sidebarMode === 'notes' && activeSidebarCluster
+                ? ` Active: #${clusterGroups[activeSidebarCluster]?.clusterId || activeSidebarCluster}`
+                : ''}
+            </h3>
             <div style={{ minHeight: '30px', marginBottom: '8px' }}>
               {showSearchLegendOrderButtons && (
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -2080,24 +2087,6 @@ export default function NoteClusters() {
                     Similarity Order
                   </button>
                 </div>
-              )}
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                marginBottom: '10px',
-                minHeight: '30px',
-              }}
-            >
-              <span style={{ color: '#666', fontSize: '11px' }}>
-                Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
-              </span>
-              {sidebarMode === 'notes' && activeSidebarCluster && (
-                <span style={{ color: '#374151', fontSize: '11px' }}>
-                  Active: #{clusterGroups[activeSidebarCluster]?.clusterId || activeSidebarCluster}
-                </span>
               )}
             </div>
             <div style={{ flex: 1, overflowY: 'auto' }}>
