@@ -353,8 +353,7 @@ export default function NoteClusters() {
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const isSearchMode = sidebarMode === 'search';
-  const showSearchLegendOrderButtons =
-    sidebarMode === 'search' && debouncedQuery.trim() !== '' && hasSearchResponse;
+  const showSearchLegendOrderButtons = sidebarMode === 'search';
 
   const fetchNoteContent = async (
     title: string,
