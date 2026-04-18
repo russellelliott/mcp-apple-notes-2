@@ -125,11 +125,11 @@ const identifyChangedNotes = (currentNotes: NoteMetadata[], cachedNotes: NoteMet
   modifiedNotes: NoteMetadata[];
   unchangedNotes: NoteMetadata[];
 } => {
-  const cachedMap = new Map<string, { creation_date: string; modification_date: string }>(); // title -> dates
+  const cachedMap = new Map<string, { modification_date: string }>(); // title + creation_date -> modification date
   
   cachedNotes.forEach(note => {
-    cachedMap.set(note.title, {
-      creation_date: note.creation_date,
+    const key = `${note.title}|||${note.creation_date}`;
+    cachedMap.set(key, {
       modification_date: note.modification_date
     });
   });
@@ -139,17 +139,14 @@ const identifyChangedNotes = (currentNotes: NoteMetadata[], cachedNotes: NoteMet
   const unchangedNotes: NoteMetadata[] = [];
   
   currentNotes.forEach(note => {
-    const cached = cachedMap.get(note.title);
+    const key = `${note.title}|||${note.creation_date}`;
+    const cached = cachedMap.get(key);
     
     if (!cached) {
       // New note (not in cache)
       newNotes.push(note);
     } else if (cached.modification_date !== note.modification_date) {
       // Modified note (modification date changed)
-      modifiedNotes.push(note);
-    } else if (cached.creation_date !== note.creation_date) {
-      // Edge case: creation date changed (shouldn't happen but handle it)
-      console.log(`⚠️ Note "${note.title}" has different creation date - treating as modified`);
       modifiedNotes.push(note);
     } else {
       // Unchanged note
@@ -1189,7 +1186,7 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
       if (modifiedNotes.length > 0) {
         console.log(`\n✏️ Modified notes detected:`);
         modifiedNotes.slice(0, 10).forEach((note, idx) => {
-          const cached = cachedNotesData.find(c => c.title === note.title);
+          const cached = cachedNotesData.find(c => c.title === note.title && c.creation_date === note.creation_date);
           console.log(`  ${idx + 1}. "${note.title}"`);
           console.log(`      Created: ${note.creation_date}`);
           console.log(`      Modified: ${cached?.modification_date} → ${note.modification_date}`);
@@ -1215,7 +1212,9 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
         for (const modNote of modifiedNotes) {
           try {
             // Delete existing chunks for this note
-            await notesTable.delete(`title = '${modNote.title.replace(/'/g, "''")}'`);
+            await notesTable.delete(
+              `title = '${modNote.title.replace(/'/g, "''")}' AND creation_date = '${modNote.creation_date.replace(/'/g, "''")}'`
+            );
             console.log(`   ✅ Removed old chunks for "${modNote.title}"`);
           } catch (error) {
             console.log(`   ⚠️ Could not remove old chunks for "${modNote.title}": ${(error as Error).message}`);
