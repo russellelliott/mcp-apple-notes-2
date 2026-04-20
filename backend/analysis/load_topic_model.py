@@ -487,7 +487,7 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
 
     try:
         resp = requests.post('http://localhost:11434/api/generate', json={
-            "model": "phi3:3.8b-mini-128k-instruct-q4_K_M",
+            "model": "phi4-mini:3.8b",
             "prompt": prompt,
             "stream": False
         }, timeout=120)

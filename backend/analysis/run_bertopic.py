@@ -27,7 +27,7 @@ from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
 
 class Ollama(BaseRepresentation):
-    def __init__(self, model="llama2", prompt=None, tokenizer=None):
+    def __init__(self, model="phi4-mini:3.8b", prompt=None, tokenizer=None):
         self.model = model
         self.prompt = prompt if prompt else """
         I have a topic that contains the following documents: 
