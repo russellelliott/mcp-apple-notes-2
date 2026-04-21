@@ -43,6 +43,9 @@ def load_submodels(model_dir: Path) -> Dict[str, BERTopic]:
             submodels[parent_topic] = BERTopic.load(topic_dir)
         except Exception as e:
             print(f"⚠️ Failed loading submodel {topic_dir}: {e}")
+    
+    if submodels:
+        print(f"📦 Loaded {len(submodels)} subtopic models: {sorted(submodels.keys())}")
     return submodels
 
 
@@ -212,16 +215,33 @@ def gather_topics(
             db_summary = str(first_row['cluster_summary']) if 'cluster_summary' in first_row and pd.notna(first_row['cluster_summary']) else None
 
             keywords = []
+            is_subtopic = False
+            keywords_source = None
+            submodel_path = None
+            
             if '.' in display_id:
+                is_subtopic = True
                 parent_topic, child_topic = display_id.split('.', 1)
                 submodel = submodels.get(parent_topic)
                 if submodel is not None and child_topic.lstrip('-').isdigit():
+                    # Use the submodel for this subtopic
                     keywords = _get_keywords_for_topic(submodel, int(child_topic))
+                    if keywords:
+                        submodel_path = str(model_dir / "submodels" / f"topic_{parent_topic}")
+                        keywords_source = f"submodel({parent_topic})"
+                else:
+                    # Submodel not found or invalid child topic
+                    if parent_topic in submodels:
+                        print(f"  ⚠️  Subtopic {display_id}: invalid child topic '{child_topic}'")
+                    else:
+                        print(f"  ⚠️  Subtopic {display_id}: submodel for topic '{parent_topic}' not found")
 
             if not keywords:
                 base_topic_str = str(first_row.get('base_topic_id', first_row.get('cluster_id', '-1')))
                 if base_topic_str.lstrip('-').isdigit():
                     keywords = _get_keywords_for_topic(model, int(base_topic_str))
+                    if keywords:
+                        keywords_source = f"main_model({base_topic_str})"
 
             out[display_id] = {
                 'label': db_label,
@@ -229,6 +249,9 @@ def gather_topics(
                 'keywords': keywords,
                 'representative_docs': [str(d) for d in representative_docs],
                 'representative_docs_meta': representative_docs_meta,
+                'is_subtopic': is_subtopic,
+                'keywords_source': keywords_source,
+                'submodel_path': submodel_path,
             }
 
         if out:
@@ -470,8 +493,25 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
     # Remove topic prefix (e.g. "15_word" -> "word")
     old_label = re.sub(r'^\d+_', '', old_label)
 
+    is_subtopic = obj.get('is_subtopic', False)
+    keywords_source = obj.get('keywords_source')
     keywords = obj.get('keywords', [])
-    docs = obj.get('representative_docs', [])[:5] 
+    docs = obj.get('representative_docs', [])[:5]
+    
+    # Log subtopic info
+    if is_subtopic:
+        source_info = f" (keywords from {keywords_source})" if keywords_source else " (no keywords found)"
+        submodel_path = obj.get('submodel_path')
+        path_info = f" [path: {submodel_path}]" if submodel_path else ""
+        print(f"  Generating label for subtopic {topic_id}{source_info}{path_info}")
+    
+    # Warn if no keywords for any topic
+    if not keywords:
+        print(f"  ⚠️  Warning: Topic {topic_id} has no keywords (is_subtopic={is_subtopic})")
+    
+    # Warn if no representative docs
+    if not docs:
+        print(f"  ⚠️  Warning: Topic {topic_id} has no representative documents")
     
     prompt = (
         f"<label>{old_label}</label>\n"
@@ -497,13 +537,24 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
             new_label = new_label.strip('"').strip("'").split('\n')[0]
             # if len(new_label) > 100: # sanity check
             #      new_label = new_label[:100]
+            if is_subtopic and new_label and new_label != old_label:
+                print(f"    ✓ {old_label} → {new_label}")
             return (topic_id, old_label, new_label)
-    except Exception:
-        pass
+        else:
+            print(f"  ❌ Ollama API error for topic {topic_id}: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ❌ Error generating label for topic {topic_id}: {e}")
     return (topic_id, old_label, old_label)
 
 def enhance_topic_labels(topics: Dict[str, Dict[str, Any]], max_workers: int = 4):
     print("Generating enhanced topic labels with Ollama...")
+    
+    # Separate subtopics from main topics for logging
+    subtopic_count = sum(1 for t in topics.values() if t.get('is_subtopic', False))
+    main_topic_count = len(topics) - subtopic_count
+    if subtopic_count > 0:
+        print(f"  📊 Found {main_topic_count} main topics and {subtopic_count} subtopics")
+    
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for topic, obj in topics.items():
@@ -512,11 +563,17 @@ def enhance_topic_labels(topics: Dict[str, Dict[str, Any]], max_workers: int = 4
                 continue
             futures.append(executor.submit(_generate_label_task, topic, obj))
         
+        updated_count = 0
         for future in concurrent.futures.as_completed(futures):
             topic_id, old_label, new_label = future.result()
             if new_label and new_label != old_label:
                 topics[topic_id]['label'] = new_label
-                print(f"Topic {topic_id}: {old_label} -> {new_label}")
+                is_subtopic = topics[topic_id].get('is_subtopic', False)
+                if not is_subtopic:  # Log main topics (subtopics logged in _generate_label_task)
+                    print(f"  Topic {topic_id}: {old_label} → {new_label}")
+                updated_count += 1
+        
+        print(f"✅ Enhanced {updated_count} topic labels")
 
 def update_db_labels(topics: Dict[str, Dict[str, Any]]):
     print("Updating database with new topic labels...")
@@ -529,23 +586,48 @@ def update_db_labels(topics: Dict[str, Dict[str, Any]]):
         has_display_topic_id = 'display_topic_id' in notes_df.columns
         has_base_topic_id = 'base_topic_id' in notes_df.columns
         
+        updated_count = 0
+        subtopic_updated_count = 0
+        
         for topic_id, obj in topics.items():
             if str(topic_id) == '-1':
                 continue
             new_label = obj.get('label')
-            if new_label:
-                where_clause = f"cluster_id = '{topic_id}'"
-                if '.' in str(topic_id):
-                    if has_display_topic_id:
-                        where_clause = f"display_topic_id = '{topic_id}'"
+            if not new_label:
+                continue
+            
+            is_subtopic = obj.get('is_subtopic', False)
+            where_clause = None
+            
+            if '.' in str(topic_id):
+                # This is a subtopic (e.g., "0.1")
+                if has_display_topic_id:
+                    where_clause = f"display_topic_id = '{topic_id}'"
+                    updated_count += 1
+                    subtopic_updated_count += 1
                 else:
-                    where_clause = (
-                        f"base_topic_id = '{topic_id}'" if has_base_topic_id else f"cluster_id = '{topic_id}'"
-                    )
-                table.update(where=where_clause, values={"cluster_label": new_label})
-        print("Database update complete.")
+                    print(f"  ⚠️  Subtopic {topic_id}: display_topic_id column not found, skipping")
+                    continue
+            else:
+                # This is a main topic
+                if has_base_topic_id:
+                    where_clause = f"base_topic_id = '{topic_id}'"
+                elif 'cluster_id' in notes_df.columns:
+                    where_clause = f"cluster_id = '{topic_id}'"
+                else:
+                    print(f"  ⚠️  Main topic {topic_id}: no matching column found, skipping")
+                    continue
+                updated_count += 1
+            
+            if where_clause:
+                try:
+                    table.update(where=where_clause, values={"cluster_label": new_label})
+                except Exception as e:
+                    print(f"  ❌ Failed to update topic {topic_id}: {e}")
+        
+        print(f"✅ Database update complete ({updated_count} topics, {subtopic_updated_count} subtopics)")
     except Exception as e:
-        print(f"Failed to update database: {e}")
+        print(f"❌ Failed to update database: {e}")
 
 
 def backup_database():
@@ -616,7 +698,8 @@ def main():
     if not model_dir.exists():
         print(f"Model directory not found: {model_dir}")
         return
-
+    
+    print(f"📂 Loading model from: {model_dir}")
     model = load_model(model_dir)
 
     topics = gather_topics(model, model_dir=model_dir, top_n=args.top_n)
