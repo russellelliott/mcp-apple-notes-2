@@ -523,7 +523,13 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
         prompt += f"<doc>{d_text}</doc>\n"
     prompt += "</representative_docs>\n"
     
-    prompt += "Based on the above information, generate a concise, descriptive name for this cluster (4-8 words). Return ONLY the name."
+    prompt += (
+        "Based on the above information, generate a concise, descriptive name for this cluster (4-8 words). "
+        "Don't try to include all the topic words. Given the provided text, provide an overview of what the cluster is rather than literally what the content is on a surface level. "
+        "In terms of the topic names, go deeper into what the content is about in essence beyond what it literally is. "
+        "Figure out what the content is in a broader sense rather than what it is on the surface. Avoid trying to include all the topic words in the title itself; that just infers the contents and general ideas. "
+        "Return ONLY the name."
+    )
 
     try:
         resp = requests.post('http://localhost:11434/api/generate', json={
