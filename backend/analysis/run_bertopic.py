@@ -273,10 +273,10 @@ print(f"    ✓ Reassigned {outliers_before - outliers_after_p1} outliers ({outl
 
 topic_model.update_topics(docs, topics=new_topics)
 
-# === MEGA-CLUSTER SPLITTING (>=1.8% of corpus) ===
+# === MEGA-CLUSTER SPLITTING (>=2% of corpus) ===
 print("🧩 Evaluating mega-clusters for sub-splitting...")
 total_chunks = len(docs)
-mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.018)))
+mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.02)))
 topic_sizes = pd.Series(new_topics).value_counts().to_dict()
 mega_clusters = [
     int(topic_id)
@@ -441,7 +441,7 @@ if mega_clusters:
         except Exception as e:
             print(f"  ⚠️ Failed to write submodel manifest: {e}")
 else:
-    print("  ℹ️ No mega-clusters met the 1.8% threshold.")
+    print("  ℹ️ No mega-clusters met the 2% threshold.")
 
 # Pass 2: Topic representation similarity (c-TF-IDF based)
 print("  📊 Pass 2: c-TF-IDF similarity reassignment...")
