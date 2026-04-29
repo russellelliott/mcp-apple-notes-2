@@ -1050,7 +1050,9 @@ export default function NoteClusters() {
 
         const color = baseColor.clone();
         if (hasSearchHits && !isHit) {
-          color.lerp(new THREE.Color('#4b5563'), 0.85);
+          const hslC: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
+          color.getHSL(hslC);
+          color.setHSL(hslC.h, Math.max(0, hslC.s * 0.9), Math.max(0, hslC.l * 0.28));
         }
         map.set(meta.unique_key, color.getStyle());
       });
@@ -1076,17 +1078,28 @@ export default function NoteClusters() {
 
         // Use grey for unselected clusters when hideOtherClusters is enabled
         let clusterColor = clusterColors[label] || '#4b5563';
+        // For hide-other mode, keep cluster hue but make it much dimmer by reducing lightness
         if (hideOtherClusters && hasActiveClusterFilter && !isSelected) {
-          clusterColor = '#b0b0b0'; // Grey color for unselected clusters
+          const c = new THREE.Color(clusterColor);
+          const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
+          c.getHSL(hsl);
+          // Preserve hue and most saturation but reduce lightness substantially
+          c.setHSL(hsl.h, Math.max(0, hsl.s * 0.9), Math.max(0, hsl.l * 0.28));
+          clusterColor = c.getStyle();
         }
 
         // Create one representative point per cluster
+        // Make unselected clusters smaller when hide-other is enabled
         let size = 0.04;
         if (hoveredId && group.customdata.some((meta) => meta.unique_key === hoveredId)) {
           size = Math.max(size * 1.35, 0.054);
         }
         if (highlightedNodeId && group.customdata.some((meta) => meta.unique_key === highlightedNodeId)) {
           size = Math.max(size * 1.45, 0.058);
+        }
+
+        if (hideOtherClusters && hasActiveClusterFilter && !isSelected) {
+          size *= 0.55;
         }
 
         const targetPos = positionData?.condensed || new THREE.Vector3(0, 0, 0);
