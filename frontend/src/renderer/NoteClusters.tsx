@@ -63,12 +63,11 @@ interface SidebarNoteData {
   chunks: SidebarChunkData[];
 }
 
-type SidebarMode = 'notes' | 'search';
 type ClusterOrderMode = 'spike' | 'momentum';
 type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size';
 type SortDirection = 'desc' | 'asc';
-type VisualizationMode = 'linear' | 'log' | 'condensed';
+type VisualizationMode = 'linear' | 'condensed';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -327,14 +326,12 @@ export default function NoteClusters() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [hasSearchResponse, setHasSearchResponse] = useState(false);
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('notes');
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
+  const [hideOtherClusters, setHideOtherClusters] = useState(false);
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [notesSortMetric, setNotesSortMetric] = useState<NotesSortMetric>('modified');
   const [notesSortDirection, setNotesSortDirection] = useState<SortDirection>('desc');
   const [searchLegendOrderMode, setSearchLegendOrderMode] = useState<SearchLegendOrderMode>('results');
-  const [activeSidebarCluster, setActiveSidebarCluster] = useState<string | null>(null);
   const [sidebarNotes, setSidebarNotes] = useState<SidebarNoteData[]>([]);
   const [isLoadingSidebar, setIsLoadingSidebar] = useState(false);
   const [loadedSidebarCluster, setLoadedSidebarCluster] = useState<string | null>(null);
@@ -349,13 +346,21 @@ export default function NoteClusters() {
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
-  const [searchSelectedClusters, setSearchSelectedClusters] = useState<Set<string>>(new Set());
   const plotAreaRef = useRef<HTMLDivElement>(null);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const isSearchMode = sidebarMode === 'search';
-  const showSearchLegendOrderButtons = sidebarMode === 'search';
+  const toggleClusterSelection = (label: string) => {
+    setSelectedClusters((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else {
+        next.add(label);
+      }
+      return next;
+    });
+  };
 
   const fetchNoteContent = async (
     title: string,
@@ -460,7 +465,6 @@ export default function NoteClusters() {
     if (val === '') {
       setDebouncedQuery('');
       setSearchResults([]);
-      setHasSearchResponse(false);
     }
   };
 
@@ -482,7 +486,6 @@ export default function NoteClusters() {
     const runSearch = async () => {
       if (!debouncedQuery.trim()) {
         if (active) setSearchResults([]);
-        if (active) setHasSearchResponse(false);
         return;
       }
 
@@ -492,13 +495,11 @@ export default function NoteClusters() {
         );
         if (active) {
           setSearchResults(response.data.results || []);
-          setHasSearchResponse(true);
         }
       } catch (error) {
         console.error('Error searching:', error);
         if (active) {
           setSearchResults([]);
-          setHasSearchResponse(false);
         }
       }
     };
@@ -510,30 +511,11 @@ export default function NoteClusters() {
     };
   }, [debouncedQuery]);
 
-  useEffect(() => {
-    if (!isSearchMode) {
-      setSearchSelectedClusters(new Set());
-    }
-  }, [isSearchMode]);
-
   const searchScoreMap = useMemo(() => {
     const map = new Map<string, number>();
     searchResults.forEach((r) => map.set(r.unique_key, r.distance));
     return map;
   }, [searchResults]);
-
-  const toggleClusterSelection = (label: string) => {
-    const setter = isSearchMode ? setSearchSelectedClusters : setSelectedClusters;
-    setter((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) {
-        next.delete(label);
-      } else {
-        next.add(label);
-      }
-      return next;
-    });
-  };
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
@@ -687,17 +669,18 @@ export default function NoteClusters() {
       return minDistance;
     };
 
-    if (isSearchMode && searchLegendOrderMode === 'similarity' && searchSelectedClusters.size > 0) {
-      const selectedLabels = Array.from(searchSelectedClusters).filter((label) => clusterCentroids.has(label));
+    // When there are search results and similarity order is selected
+    if (searchLegendOrderMode === 'similarity' && selectedClusters.size > 0 && searchResults.length > 0) {
+      const selectedLabels = Array.from(selectedClusters).filter((label) => clusterCentroids.has(label));
 
       const minDistanceToSelection = (label: string) => {
-        if (searchSelectedClusters.has(label)) return -1;
+        if (selectedClusters.has(label)) return -1;
         return distanceToNearest(label, selectedLabels);
       };
 
       sorted.sort((a, b) => {
-        const aSelected = searchSelectedClusters.has(a);
-        const bSelected = searchSelectedClusters.has(b);
+        const aSelected = selectedClusters.has(a);
+        const bSelected = selectedClusters.has(b);
 
         if (aSelected && !bSelected) return -1;
         if (!aSelected && bSelected) return 1;
@@ -716,7 +699,7 @@ export default function NoteClusters() {
         const idB = clusterGroups[b].clusterId || b;
         return compareTopicIds(String(idA), String(idB));
       });
-    } else if (isSearchMode && searchLegendOrderMode === 'similarity' && searchResults.length > 0) {
+    } else if (searchLegendOrderMode === 'similarity' && searchResults.length > 0) {
       const hitLabels = sorted.filter((label) => {
         const group = clusterGroups[label];
         return group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
@@ -760,7 +743,7 @@ export default function NoteClusters() {
         const idB = clusterGroups[b].clusterId || b;
         return compareTopicIds(String(idA), String(idB));
       });
-    } else if (isSearchMode && searchLegendOrderMode === 'results' && searchResults.length > 0) {
+    } else if (searchLegendOrderMode === 'results' && searchResults.length > 0) {
       const firstSeenRank = new Map<string, number>();
       searchResults.forEach((result, idx) => {
         const label = result.display_topic_id || result.cluster_id || '-1';
@@ -807,35 +790,23 @@ export default function NoteClusters() {
     clusterGroups,
     clusterOrderMode,
     clusterOrderScores,
-    isSearchMode,
     searchLegendOrderMode,
-    searchSelectedClusters,
+    selectedClusters,
     searchScoreMap,
     searchResults.length,
   ]);
 
-  const activeSelectedClusters = isSearchMode ? searchSelectedClusters : selectedClusters;
-  const hasActiveClusterFilter = activeSelectedClusters.size > 0;
-  const visibleLabels = isSearchMode && hasActiveClusterFilter
-    ? sortedLabels.filter((label) => activeSelectedClusters.has(label))
+  const hasActiveClusterFilter = selectedClusters.size > 0;
+  const visibleLabels = hideOtherClusters && hasActiveClusterFilter
+    ? sortedLabels.filter((label) => selectedClusters.has(label))
     : sortedLabels;
-
-  useEffect(() => {
-    if (sortedLabels.length === 0) {
-      setActiveSidebarCluster(null);
-      return;
-    }
-
-    if (!activeSidebarCluster || !sortedLabels.includes(activeSidebarCluster)) {
-      setActiveSidebarCluster(sortedLabels[0]);
-    }
-  }, [activeSidebarCluster, sortedLabels]);
 
   useEffect(() => {
     let active = true;
 
     const fetchSidebar = async () => {
-      if (sidebarMode !== 'notes' || !activeSidebarCluster) {
+      // Fetch notes for the first selected cluster if any are selected
+      if (selectedClusters.size === 0) {
         if (active) {
           setSidebarNotes([]);
           setLoadedSidebarCluster(null);
@@ -843,14 +814,15 @@ export default function NoteClusters() {
         return;
       }
 
+      const clusterToFetch = Array.from(selectedClusters)[0];
       setIsLoadingSidebar(true);
       try {
         const response = await axios.get(
-          `http://127.0.0.1:8000/cluster_sidebar?active_cluster_id=${encodeURIComponent(activeSidebarCluster)}`,
+          `http://127.0.0.1:8000/cluster_sidebar?active_cluster_id=${encodeURIComponent(clusterToFetch)}`,
         );
         if (active) {
           setSidebarNotes(Array.isArray(response.data?.notes) ? response.data.notes : []);
-          setLoadedSidebarCluster(activeSidebarCluster);
+          setLoadedSidebarCluster(clusterToFetch);
         }
       } catch (error) {
         console.error('Error loading sidebar notes:', error);
@@ -868,12 +840,11 @@ export default function NoteClusters() {
     return () => {
       active = false;
     };
-  }, [activeSidebarCluster, sidebarMode]);
+  }, [selectedClusters]);
 
   useEffect(() => {
     if (!pendingScrollNoteKey) return;
     if (!pendingScrollTargetCluster) return;
-    if (sidebarMode !== 'notes') return;
     if (isLoadingSidebar) return;
     if (loadedSidebarCluster !== pendingScrollTargetCluster) return;
 
@@ -903,7 +874,6 @@ export default function NoteClusters() {
     pendingScrollNoteTitle,
     pendingScrollTargetCluster,
     sidebarNotes,
-    sidebarMode,
   ]);
 
   const sceneBounds = useMemo(() => {
@@ -1122,9 +1092,7 @@ export default function NoteClusters() {
           // Get position based on visualization mode
           const positionData = pointPositionMap.get(meta.unique_key);
           const targetPos = positionData
-            ? visualizationMode === 'linear'
-              ? positionData.linear
-              : positionData.log
+            ? positionData.linear
             : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
 
           const visualPoint: VisualPoint = {
@@ -1236,19 +1204,35 @@ export default function NoteClusters() {
       event.stopPropagation();
       setHoveredId(null);
       setHoverSource(null);
-      setHighlightedNodeId(point.unique_key);
-      fetchNoteContent(
-        point.title,
-        point.chunk_index,
-        point.cluster_id,
-        point.cluster_label,
-        point.display_topic_id,
-        point.base_topic_id,
-        point.creation_date,
-        point.modification_date,
-      );
+
+      if (visualizationMode === 'condensed') {
+        // In condensed mode, select/deselect the cluster
+        const clusterId = point.display_topic_id || point.cluster_id || '';
+        setSelectedClusters((prev) => {
+          const next = new Set(prev);
+          if (next.has(clusterId)) {
+            next.delete(clusterId);
+          } else {
+            next.add(clusterId);
+          }
+          return next;
+        });
+      } else {
+        // In linear/log mode, open the note
+        setHighlightedNodeId(point.unique_key);
+        fetchNoteContent(
+          point.title,
+          point.chunk_index,
+          point.cluster_id,
+          point.cluster_label,
+          point.display_topic_id,
+          point.base_topic_id,
+          point.creation_date,
+          point.modification_date,
+        );
+      }
     },
-    [],
+    [visualizationMode],
   );
 
   const tooltipStyle = useMemo(() => {
@@ -1330,18 +1314,22 @@ export default function NoteClusters() {
       const fallbackChunk = note.chunks[0];
       const chunkIndex = preferredChunkIndex ?? inClusterChunk?.chunk_index ?? fallbackChunk?.chunk_index ?? 0;
 
+      // Use the first selected cluster or the note's cluster
+      const targetCluster = Array.from(selectedClusters)[0] || inClusterChunk?.cluster_id || fallbackChunk?.cluster_id;
+      const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
+
       fetchNoteContent(
         note.title,
         chunkIndex,
-        activeSidebarCluster || undefined,
-        clusterGroups[activeSidebarCluster || '']?.clusterLabel,
-        activeSidebarCluster || undefined,
-        activeSidebarCluster || undefined,
+        fallbackChunk?.cluster_id || undefined,
+        clusterGroup?.clusterLabel,
+        targetCluster || undefined,
+        targetCluster || undefined,
         note.creation_date,
         note.modification_date,
       );
     },
-    [activeSidebarCluster, clusterGroups],
+    [selectedClusters, clusterGroups],
   );
 
   const handleActiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
@@ -1353,8 +1341,12 @@ export default function NoteClusters() {
   }, [openSidebarNote]);
 
   const handleInactiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
-    setSidebarMode('notes');
-    setActiveSidebarCluster(chunk.cluster_id);
+    // In the merged view, select the cluster and open the note
+    setSelectedClusters((prev) => {
+      const next = new Set(prev);
+      next.add(chunk.cluster_id);
+      return next;
+    });
     setPendingScrollNoteKey(note.note_key);
     setPendingScrollNoteTitle(note.title);
     setPendingScrollTargetCluster(chunk.cluster_id);
@@ -1404,15 +1396,6 @@ export default function NoteClusters() {
 
     return sorted;
   }, [notesSortDirection, notesSortMetric, sidebarNotes]);
-
-  useEffect(() => {
-    if (sidebarMode !== 'notes') return;
-    if (!activeSidebarCluster) return;
-
-    const target = legendClusterRefs.current[activeSidebarCluster];
-    if (!target) return;
-    target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [activeSidebarCluster, clusterOrderMode, sidebarMode, sortedLabels]);
 
   const modalRailChunks = useMemo(() => {
     if (!selectedNode) return [] as SidebarChunkData[];
@@ -1492,41 +1475,6 @@ export default function NoteClusters() {
             <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
               <button
                 type="button"
-                onClick={() => setSidebarMode('notes')}
-                style={{
-                  flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
-                  border: sidebarMode === 'notes' ? '1px solid #1f2937' : '1px solid #ccc',
-                  background: sidebarMode === 'notes' ? '#e5e7eb' : '#fff',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Notes
-              </button>
-              <button
-                type="button"
-                onClick={() => setSidebarMode('search')}
-                style={{
-                  flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
-                  border: sidebarMode === 'search' ? '1px solid #1f2937' : '1px solid #ccc',
-                  background: sidebarMode === 'search' ? '#e5e7eb' : '#fff',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Search
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-              <button
-                type="button"
                 onClick={() => setVisualizationMode('linear')}
                 style={{
                   flex: 1,
@@ -1540,22 +1488,6 @@ export default function NoteClusters() {
                 }}
               >
                 Linear
-              </button>
-              <button
-                type="button"
-                onClick={() => setVisualizationMode('log')}
-                style={{
-                  flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
-                  border: visualizationMode === 'log' ? '1px solid #1f2937' : '1px solid #ccc',
-                  background: visualizationMode === 'log' ? '#e5e7eb' : '#fff',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                Log
               </button>
               <button
                 type="button"
@@ -1575,315 +1507,297 @@ export default function NoteClusters() {
               </button>
             </div>
 
-            {sidebarMode === 'notes' && (
-              <>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setClusterOrderMode('spike')}
-                    style={{
-                      flex: 1,
-                      padding: '5px 8px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: clusterOrderMode === 'spike' ? '1px solid #1f2937' : '1px solid #ccc',
-                      background: clusterOrderMode === 'spike' ? '#dbeafe' : '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setHideOtherClusters(!hideOtherClusters)}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: hideOtherClusters ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: hideOtherClusters ? '#fee2e2' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {hideOtherClusters ? 'Hide Others' : 'Show All'}
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setClusterOrderMode('spike')}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: clusterOrderMode === 'spike' ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: clusterOrderMode === 'spike' ? '#dbeafe' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+                title="Peak Recency (The Spike)"
+              >
+                Peak Recency
+              </button>
+              <button
+                type="button"
+                onClick={() => setClusterOrderMode('momentum')}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: clusterOrderMode === 'momentum' ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: clusterOrderMode === 'momentum' ? '#dcfce7' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+                title="Thematic Momentum (The Average)"
+              >
+                Momentum
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
+                  Sort Notes By
+                </label>
+                <select
+                  value={notesSortMetric}
+                  onChange={(e) => setNotesSortMetric(e.target.value as NotesSortMetric)}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
+                >
+                  <option value="modified">Modification Date</option>
+                  <option value="size">Note Size (Chunks)</option>
+                </select>
+              </div>
+              <div style={{ width: '130px' }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
+                  Direction
+                </label>
+                <select
+                  value={notesSortDirection}
+                  onChange={(e) => setNotesSortDirection(e.target.value as SortDirection)}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
+                >
+                  <option value="desc">Decreasing</option>
+                  <option value="asc">Increasing</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '15px' }}>
+              <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={handleSearch}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  fontSize: '14px',
+                  borderRadius: '4px',
+                  border: '1px solid #ccc',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {searchResults.length === 0 && searchQuery && (
+                <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
+              )}
+              {searchResults.length === 0 && !searchQuery && selectedClusters.size === 0 && (
+                <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>
+                  Select clusters to view their notes.
+                </div>
+              )}
+              {searchResults.map((result) => {
+                const resultClusterKey = result.display_topic_id || result.cluster_id || '-1';
+                const preview = (result.preview || '').trim();
+                const isHovered = hoveredId === result.unique_key;
+                const pointMatch = data.find((d) => d.unique_key === result.unique_key);
+                return (
+                  <div
+                    key={result.unique_key}
+                    onMouseEnter={() => {
+                      setHoveredId(result.unique_key);
+                      setHoverSource('list');
                     }}
-                    title="Peak Recency (The Spike)"
-                  >
-                    Peak Recency
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setClusterOrderMode('momentum')}
-                    style={{
-                      flex: 1,
-                      padding: '5px 8px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: clusterOrderMode === 'momentum' ? '1px solid #1f2937' : '1px solid #ccc',
-                      background: clusterOrderMode === 'momentum' ? '#dcfce7' : '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
+                    onMouseLeave={() => {
+                      setHoveredId(null);
+                      setHoverSource(null);
                     }}
-                    title="Thematic Momentum (The Average)"
+                    onClick={() =>
+                      fetchNoteContent(
+                        result.title,
+                        result.chunk_index,
+                        result.cluster_id,
+                        result.cluster_label,
+                        result.display_topic_id,
+                        result.base_topic_id,
+                        pointMatch?.creation_date,
+                        pointMatch?.modification_date,
+                      )
+                    }
+                    style={{
+                      padding: '12px',
+                      marginBottom: '8px',
+                      borderRadius: '6px',
+                      backgroundColor: clusterTints[resultClusterKey] || 'white',
+                      border: '1px solid #eee',
+                      cursor: 'pointer',
+                      transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                      transform: isHovered ? 'scale(1.015)' : 'scale(1)',
+                      transformOrigin: 'left center',
+                      boxShadow: isHovered ? '0 6px 12px rgba(0,0,0,0.12)' : '0 1px 2px rgba(0,0,0,0.05)',
+                      overflowWrap: 'anywhere',
+                      wordBreak: 'break-word',
+                    }}
                   >
-                    Momentum
-                  </button>
-                </div>
-
-                <div style={{ marginBottom: '10px' }}>
-                  <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
-                    Active Cluster
-                  </label>
-                  <select
-                    value={activeSidebarCluster || ''}
-                    onChange={(e) => setActiveSidebarCluster(e.target.value || null)}
-                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
-                  >
-                    {sortedLabels.map((label) => {
-                      const group = clusterGroups[label];
-                      const cid = group?.clusterId || label;
-                      const cname = group?.clusterLabel || label;
-                      return (
-                        <option key={`cluster-select-${label}`} value={label}>
-                          #{cid} - {cname}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
-                      Sort Notes By
-                    </label>
-                    <select
-                      value={notesSortMetric}
-                      onChange={(e) => setNotesSortMetric(e.target.value as NotesSortMetric)}
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
-                    >
-                      <option value="modified">Modification Date</option>
-                      <option value="size">Note Size (Chunks)</option>
-                    </select>
-                  </div>
-                  <div style={{ width: '130px' }}>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
-                      Direction
-                    </label>
-                    <select
-                      value={notesSortDirection}
-                      onChange={(e) => setNotesSortDirection(e.target.value as SortDirection)}
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
-                    >
-                      <option value="desc">Decreasing</option>
-                      <option value="asc">Increasing</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {isLoadingSidebar && <div style={{ color: '#666', padding: '10px' }}>Loading notes...</div>}
-                  {!isLoadingSidebar && displayedSidebarNotes.length === 0 && (
-                    <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>
-                      No notes found for this cluster.
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px', color: 'black' }}>
+                      {result.title}
+                      <span
+                        style={{
+                          fontWeight: 'normal',
+                          color: '#555',
+                          fontSize: '0.85em',
+                          marginLeft: '6px',
+                        }}
+                      >
+                        (Chunk {result.chunk_index + 1} of {result.total_chunks || '?'})
+                      </span>
                     </div>
-                  )}
-                  {displayedSidebarNotes.map((note) => (
                     <div
-                      key={note.note_key}
-                      ref={(el) => {
-                        sidebarCardRefs.current[note.note_key] = el;
-                      }}
                       style={{
-                        padding: '10px',
-                        marginBottom: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid #e5e7eb',
-                        backgroundColor: activeSidebarCluster
-                          ? (clusterTints[activeSidebarCluster] || '#ffffff')
-                          : '#ffffff',
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                        fontSize: '0.8em',
+                        color: '#444',
+                        marginBottom: '6px',
+                        fontStyle: 'italic',
                       }}
                     >
-                      <div
-                        style={{
-                          padding: 0,
-                          margin: 0,
-                          fontWeight: 700,
-                          color: '#111827',
-                          textAlign: 'left',
-                          width: '100%',
-                          overflowWrap: 'anywhere',
-                          userSelect: 'none',
-                        }}
-                        title={note.title}
-                      >
-                        {note.title}
-                      </div>
-
-                      {note.chunks.length > 1 && (
-                        <SegmentedRail
-                          chunks={note.chunks}
-                          activeClusterId={activeSidebarCluster || ''}
-                          getClusterColor={getClusterColor}
-                          onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
-                          onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
-                        />
-                      )}
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {(() => {
-                          const rows: React.ReactNode[] = [];
-                          let i = 0;
-                          while (i < note.chunks.length) {
-                            const chunk = note.chunks[i];
-                            if (chunk.in_cluster) {
-                              const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                              rows.push(
-                                <button
-                                  type="button"
-                                  key={`snippet-${note.note_key}-${chunk.chunk_index}`}
-                                  onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                                  style={{
-                                    border: '1px solid #e5e7eb',
-                                    background: 'rgba(255,255,255,0.8)',
-                                    borderRadius: '6px',
-                                    padding: '6px 8px',
-                                    cursor: 'pointer',
-                                    textAlign: 'left',
-                                    color: '#374151',
-                                    fontSize: '12px',
-                                    lineHeight: 1.35,
-                                    whiteSpace: 'normal',
-                                    overflowWrap: 'anywhere',
-                                    wordBreak: 'break-word',
-                                  }}
-                                  title={`Open chunk ${chunk.chunk_index + 1}`}
-                                >
-                                  <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                                  {preview.length > 180 ? '...' : ''}
-                                </button>,
-                              );
-                              i += 1;
-                              continue;
-                            }
-
-                            let gapCount = 0;
-                            while (i < note.chunks.length && !note.chunks[i].in_cluster) {
-                              gapCount += 1;
-                              i += 1;
-                            }
-
-                            rows.push(
-                              <div
-                                key={`gap-${note.note_key}-${i}-${gapCount}`}
-                                style={{
-                                  fontSize: '11px',
-                                  color: '#6b7280',
-                                  fontStyle: 'italic',
-                                  padding: '2px 4px',
-                                }}
-                              >
-                                --- {gapCount} Chunks ---
-                              </div>,
-                            );
-                          }
-                          return rows;
-                        })()}
-                      </div>
+                      Cluster{' '}
+                      {result.cluster_id && result.cluster_id !== '-1' ? result.cluster_id : '?'}:{' '}
+                      {result.cluster_label}
                     </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {sidebarMode === 'search' && (
-              <>
-                <div style={{ marginBottom: '15px' }}>
-                  <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
-                  <input
-                    type="text"
-                    placeholder="Search..."
-                    value={searchQuery}
-                    onChange={handleSearch}
+                    <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.35 }}>
+                      {preview.slice(0, 180)}
+                      {preview.length > 180 ? '...' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+              {displayedSidebarNotes.map((note) => (
+                <div
+                  key={note.note_key}
+                  ref={(el) => {
+                    sidebarCardRefs.current[note.note_key] = el;
+                  }}
+                  style={{
+                    padding: '10px',
+                    marginBottom: '8px',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb',
+                    backgroundColor: '#ffffff',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}
+                >
+                  <div
                     style={{
+                      padding: 0,
+                      margin: 0,
+                      fontWeight: 700,
+                      color: '#111827',
+                      textAlign: 'left',
                       width: '100%',
-                      padding: '10px',
-                      fontSize: '14px',
-                      borderRadius: '4px',
-                      border: '1px solid #ccc',
-                      boxSizing: 'border-box',
+                      overflowWrap: 'anywhere',
+                      userSelect: 'none',
                     }}
-                  />
-                </div>
+                    title={note.title}
+                  >
+                    {note.title}
+                  </div>
 
-                <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {searchResults.length === 0 && searchQuery && (
-                    <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
+                  {note.chunks.length > 1 && (
+                    <SegmentedRail
+                      chunks={note.chunks}
+                      activeClusterId=""
+                      getClusterColor={getClusterColor}
+                      onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
+                      onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
+                    />
                   )}
-                  {searchResults.map((result) => {
-                    const resultClusterKey = result.display_topic_id || result.cluster_id || '-1';
-                    const preview = (result.preview || '').trim();
-                    const excerpt = preview.slice(0, 180);
-                    const isHovered = hoveredId === result.unique_key;
-                    const pointMatch = data.find((d) => d.unique_key === result.unique_key);
-                    return (
-                      <div
-                        key={result.unique_key}
-                        onMouseEnter={() => {
-                          setHoveredId(result.unique_key);
-                          setHoverSource('list');
-                        }}
-                        onMouseLeave={() => {
-                          setHoveredId(null);
-                          setHoverSource(null);
-                        }}
-                        onClick={() =>
-                          fetchNoteContent(
-                            result.title,
-                            result.chunk_index,
-                            result.cluster_id,
-                            result.cluster_label,
-                            result.display_topic_id,
-                            result.base_topic_id,
-                            pointMatch?.creation_date,
-                            pointMatch?.modification_date,
-                          )
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {(() => {
+                      const rows: React.ReactNode[] = [];
+                      let i = 0;
+                      while (i < note.chunks.length) {
+                        const chunk = note.chunks[i];
+                        if (chunk.in_cluster) {
+                          const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                          rows.push(
+                            <button
+                              type="button"
+                              key={`snippet-${note.note_key}-${chunk.chunk_index}`}
+                              onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                              style={{
+                                border: '1px solid #e5e7eb',
+                                background: 'rgba(255,255,255,0.8)',
+                                borderRadius: '6px',
+                                padding: '6px 8px',
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                color: '#374151',
+                                fontSize: '12px',
+                                lineHeight: 1.35,
+                                whiteSpace: 'normal',
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                              title={`Open chunk ${chunk.chunk_index + 1}`}
+                            >
+                              <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                              {preview.length > 180 ? '...' : ''}
+                            </button>,
+                          );
+                          i += 1;
+                          continue;
                         }
-                        style={{
-                          padding: '12px',
-                          marginBottom: '8px',
-                          borderRadius: '6px',
-                          backgroundColor: clusterTints[resultClusterKey] || 'white',
-                          border: '1px solid #eee',
-                          cursor: 'pointer',
-                          transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-                          transform: isHovered ? 'scale(1.015)' : 'scale(1)',
-                          transformOrigin: 'left center',
-                          boxShadow: isHovered ? '0 6px 12px rgba(0,0,0,0.12)' : '0 1px 2px rgba(0,0,0,0.05)',
-                          overflowWrap: 'anywhere',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        <div style={{ fontWeight: 'bold', marginBottom: '4px', color: 'black' }}>
-                          {result.title}
-                          <span
+
+                        let gapCount = 0;
+                        while (i < note.chunks.length && !note.chunks[i].in_cluster) {
+                          gapCount += 1;
+                          i += 1;
+                        }
+
+                        rows.push(
+                          <div
+                            key={`gap-${note.note_key}-${i}-${gapCount}`}
                             style={{
-                              fontWeight: 'normal',
-                              color: '#555',
-                              fontSize: '0.85em',
-                              marginLeft: '6px',
+                              fontSize: '11px',
+                              color: '#6b7280',
+                              fontStyle: 'italic',
+                              padding: '2px 4px',
                             }}
                           >
-                            (Chunk {result.chunk_index + 1} of {result.total_chunks || '?'})
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '0.8em',
-                            color: '#444',
-                            marginBottom: '6px',
-                            fontStyle: 'italic',
-                          }}
-                        >
-                          Cluster{' '}
-                          {result.cluster_id && result.cluster_id !== '-1' ? result.cluster_id : '?'}:{' '}
-                          {result.cluster_label}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.35 }}>
-                          {excerpt}
-                          {preview.length > 180 ? '...' : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
+                            --- {gapCount} Chunks ---
+                          </div>,
+                        );
+                      }
+                      return rows;
+                    })()}
+                  </div>
                 </div>
-              </>
-            )}
+              ))}
+            </div>
           </div>
 
           <div style={{ flex: 1, position: 'relative', height: '100%', minWidth: 0 }} ref={plotAreaRef}>
@@ -2223,12 +2137,9 @@ export default function NoteClusters() {
             `}</style>
             <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
               Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
-              {sidebarMode === 'notes' && activeSidebarCluster
-                ? ` Active: #${clusterGroups[activeSidebarCluster]?.clusterId || activeSidebarCluster}`
-                : ''}
             </h3>
             <div style={{ minHeight: '30px', marginBottom: '8px' }}>
-              {showSearchLegendOrderButtons && (
+              {searchResults.length > 0 && (
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button
                     type="button"
@@ -2274,11 +2185,9 @@ export default function NoteClusters() {
                   searchScoreMap.has(pointData.unique_key),
                 );
                 const color = clusterColors[label];
-                const isSelected = sidebarMode === 'notes'
-                  ? activeSidebarCluster === label
-                  : activeSelectedClusters.has(label);
-                const isSearchDimmed = isSearchMode && searchResults.length > 0 && !hasHits;
-                const isFilterDimmed = sidebarMode === 'search' && hasActiveClusterFilter && !isSelected;
+                const isSelected = selectedClusters.has(label);
+                const isSearchDimmed = searchResults.length > 0 && !hasHits;
+                const isFilterDimmed = hasActiveClusterFilter && !isSelected;
                 const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
                 const isSoftDimmed = isSearchDimmed && isSelected;
                 const isDimmed = isHardDimmed || isSoftDimmed;
@@ -2294,11 +2203,7 @@ export default function NoteClusters() {
                     }}
                     className={`cluster-row ${isSelected ? 'cluster-row-selected' : ''}`}
                     onClick={() => {
-                      if (sidebarMode === 'notes') {
-                        setActiveSidebarCluster(label);
-                      } else {
-                        toggleClusterSelection(label);
-                      }
+                      toggleClusterSelection(label);
                     }}
                     style={{
                       opacity: rowOpacity,
