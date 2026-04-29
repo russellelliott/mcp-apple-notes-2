@@ -979,13 +979,15 @@ export default function NoteClusters() {
     const CLUSTER_RADIUS = 2;
     const LOG_FACTOR = 0.5;
     const WORLD_SIZE = 30;
-    const CONDENSED_RADIUS_SCALE = 0.42;
-    const CONDENSED_CURVE = 0.72;
+    const CONDENSED_RADIUS_SCALE = 0.6;
+    const CONDENSED_CURVE = 0.55;
 
-    Object.keys(clusterGroups).forEach((label) => {
-      const group = clusterGroups[label];
-      const centroid = clusterCentroids.get(label);
-      if (!centroid) return;
+      const clusterCondensed = new Map<string, THREE.Vector3>();
+
+      Object.keys(clusterGroups).forEach((label) => {
+        const group = clusterGroups[label];
+        const centroid = clusterCentroids.get(label);
+        if (!centroid) return;
 
       // Calculate cluster center
       const clusterCenter = new THREE.Vector3(
@@ -1016,7 +1018,7 @@ export default function NoteClusters() {
 
         // 3. Condensed: remap cluster centroids around the scene center using a bounded radial curve.
         // This increases separation for nearby clusters while keeping the overall cloud compact.
-        const sceneOffset = new THREE.Vector3(centroid.x, centroid.y, centroid.z).sub(sceneBounds.center);
+            const sceneOffset = new THREE.Vector3(centroid.x, centroid.y, centroid.z).sub(sceneBounds.center);
         const sceneDistance = sceneOffset.length();
         const normalizedDistance = Math.min(sceneDistance / sceneBounds.radius, 1);
         const curvedDistance = Math.pow(normalizedDistance, CONDENSED_CURVE) * (sceneBounds.radius * CONDENSED_RADIUS_SCALE);
@@ -1025,13 +1027,94 @@ export default function NoteClusters() {
             .add(sceneOffset.normalize().multiplyScalar(curvedDistance))
           : new THREE.Vector3(sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z);
 
-        map.set(meta.unique_key, {
-          linear: linearPos,
-          log: logPos,
-          condensed: condensedPos,
-        });
+            clusterCondensed.set(label, condensedPos);
+            map.set(meta.unique_key, {
+              linear: linearPos,
+              log: logPos,
+              condensed: clusterCondensed.get(label) as THREE.Vector3,
+            });
       });
     });
+
+      // Post-process condensed positions:
+      // 1) Apply a mild log-based compression for long distances so far-away clusters
+      //    are pulled closer while preserving small-distance expansion from the curve.
+      // 2) Spread exact duplicates on a small deterministic circle.
+      // 3) Run an iterative repulsion pass to resolve remaining near-overlaps.
+      if (clusterCondensed.size > 0) {
+        const entries = Array.from(clusterCondensed.entries());
+
+        // Compression parameters
+        const LOG_COMPRESSOR = 3.0;
+        const COMPRESS_WEIGHT = 0.45;
+        const maxScale = sceneBounds.radius * CONDENSED_RADIUS_SCALE;
+
+        // 1) compression: remap radii using a log-style normalizer blended with curved distance
+        entries.forEach(([label, vec]) => {
+          const dir = new THREE.Vector3(vec.x - sceneBounds.center.x, vec.y - sceneBounds.center.y, vec.z - sceneBounds.center.z);
+          const r = dir.length();
+          if (r === 0) return;
+          const norm = Math.min(r / maxScale, 1);
+          const curvedNorm = Math.pow(norm, CONDENSED_CURVE);
+          const compressedNorm = Math.log1p(norm * LOG_COMPRESSOR) / Math.log1p(LOG_COMPRESSOR);
+          const blended = curvedNorm * (1 - COMPRESS_WEIGHT) + compressedNorm * COMPRESS_WEIGHT;
+          const finalR = blended * maxScale;
+          dir.normalize().multiplyScalar(finalR);
+          vec.x = sceneBounds.center.x + dir.x;
+          vec.y = sceneBounds.center.y + dir.y;
+          vec.z = sceneBounds.center.z + dir.z;
+        });
+
+        // 2) exact duplicates: spread evenly on a small circle
+        const bins = new Map<string, string[]>();
+        entries.forEach(([label, vec]) => {
+          const key = `${vec.x.toFixed(6)}|${vec.y.toFixed(6)}|${vec.z.toFixed(6)}`;
+          const arr = bins.get(key) || [];
+          arr.push(label);
+          bins.set(key, arr);
+        });
+
+        bins.forEach((labels) => {
+          if (labels.length <= 1) return;
+          const n = labels.length;
+          const smallRadius = Math.max(0.02 * sceneBounds.radius, 0.9) * (1 + n * 0.08);
+          for (let i = 0; i < n; i += 1) {
+            const angle = (2 * Math.PI * i) / n;
+            const base = clusterCondensed.get(labels[i])!;
+            base.x += Math.cos(angle) * smallRadius;
+            base.y += Math.sin(angle) * smallRadius;
+          }
+        });
+
+        // 3) iterative repulsion for near overlaps
+        const minSep = Math.max(0.03 * sceneBounds.radius, 0.9);
+        const repulseIters = 4;
+        for (let iter = 0; iter < repulseIters; iter += 1) {
+          const all = Array.from(clusterCondensed.entries());
+          for (let i = 0; i < all.length; i += 1) {
+            for (let j = i + 1; j < all.length; j += 1) {
+              const a = clusterCondensed.get(all[i][0])!;
+              const b = clusterCondensed.get(all[j][0])!;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const dz = b.z - a.z;
+              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+              if (dist < minSep) {
+                const overlap = (minSep - dist) * 0.55; // fraction to move per iter
+                const nx = dx / dist;
+                const ny = dy / dist;
+                const nz = dz / dist;
+                a.x -= nx * overlap;
+                a.y -= ny * overlap;
+                a.z -= nz * overlap;
+                b.x += nx * overlap;
+                b.y += ny * overlap;
+                b.z += nz * overlap;
+              }
+            }
+          }
+        }
+      }
 
     return map;
   }, [clusterGroups, clusterCentroids]);
@@ -1787,12 +1870,27 @@ export default function NoteClusters() {
                 >
                   <div style={{ fontWeight: 700, marginBottom: '6px' }}>Selected Clusters</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {selectedClusterSummaries.map((summary) => (
-                      <div key={summary.clusterId} style={{ display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ fontWeight: 700 }}>Cluster {summary.clusterId}</div>
-                        <div style={{ color: '#4b5563' }}>{summary.clusterLabel}</div>
-                      </div>
-                    ))}
+                    {selectedClusterSummaries.map((summary) => {
+                      const tint = clusterTints[summary.clusterId] || '#f3f4f6';
+                      const border = clusterOpaqueTints[summary.clusterId] || '#e5e7eb';
+                      return (
+                        <div
+                          key={summary.clusterId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            backgroundColor: tint,
+                            border: `1px solid ${border}`,
+                            padding: '6px 8px',
+                            borderRadius: '6px',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700 }}>#{summary.clusterId}</div>
+                          <div style={{ color: '#4b5563', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary.clusterLabel}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
