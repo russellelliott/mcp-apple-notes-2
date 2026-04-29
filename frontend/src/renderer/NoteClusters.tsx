@@ -979,6 +979,8 @@ export default function NoteClusters() {
     const CLUSTER_RADIUS = 2;
     const LOG_FACTOR = 0.5;
     const WORLD_SIZE = 30;
+    const CONDENSED_RADIUS_SCALE = 0.42;
+    const CONDENSED_CURVE = 0.72;
 
     Object.keys(clusterGroups).forEach((label) => {
       const group = clusterGroups[label];
@@ -1012,18 +1014,16 @@ export default function NoteClusters() {
           clusterCenter.z + (relativePos.z / (dist || 1)) * scaledDist,
         );
 
-        // 3. Condensed Log: Map to cluster centroid, then log-scale relative to world origin
-        const originDist = Math.sqrt(
-          centroid.x * centroid.x + centroid.y * centroid.y + centroid.z * centroid.z,
-        );
-        const scaledOriginDist =
-          Math.log(1 + originDist * (LOG_FACTOR * 0.1)) *
-          (WORLD_SIZE / Math.log(1 + WORLD_SIZE * (LOG_FACTOR * 0.1)));
-        const condensedPos = new THREE.Vector3(
-          (centroid.x / (originDist || 1)) * scaledOriginDist,
-          (centroid.y / (originDist || 1)) * scaledOriginDist,
-          (centroid.z / (originDist || 1)) * scaledOriginDist,
-        );
+        // 3. Condensed: remap cluster centroids around the scene center using a bounded radial curve.
+        // This increases separation for nearby clusters while keeping the overall cloud compact.
+        const sceneOffset = new THREE.Vector3(centroid.x, centroid.y, centroid.z).sub(sceneBounds.center);
+        const sceneDistance = sceneOffset.length();
+        const normalizedDistance = Math.min(sceneDistance / sceneBounds.radius, 1);
+        const curvedDistance = Math.pow(normalizedDistance, CONDENSED_CURVE) * (sceneBounds.radius * CONDENSED_RADIUS_SCALE);
+        const condensedPos = sceneDistance > 0
+          ? new THREE.Vector3(sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z)
+            .add(sceneOffset.normalize().multiplyScalar(curvedDistance))
+          : new THREE.Vector3(sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z);
 
         map.set(meta.unique_key, {
           linear: linearPos,
@@ -1090,7 +1090,7 @@ export default function NoteClusters() {
 
         // Create one representative point per cluster
         // Make unselected clusters smaller when hide-other is enabled
-        let size = 0.04;
+        let size = 0.055;
         if (hoveredId && group.customdata.some((meta) => meta.unique_key === hoveredId)) {
           size = Math.max(size * 1.35, 0.054);
         }
