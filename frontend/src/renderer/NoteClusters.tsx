@@ -350,18 +350,6 @@ export default function NoteClusters() {
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const toggleClusterSelection = (label: string) => {
-    setSelectedClusters((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) {
-        next.delete(label);
-      } else {
-        next.add(label);
-      }
-      return next;
-    });
-  };
-
   const fetchNoteContent = async (
     title: string,
     chunkIndex: number,
@@ -805,7 +793,7 @@ export default function NoteClusters() {
     let active = true;
 
     const fetchSidebar = async () => {
-      // Fetch notes for the first selected cluster if any are selected
+      // Fetch notes for all selected clusters
       if (selectedClusters.size === 0) {
         if (active) {
           setSidebarNotes([]);
@@ -814,15 +802,29 @@ export default function NoteClusters() {
         return;
       }
 
-      const clusterToFetch = Array.from(selectedClusters)[0];
+      const clusterArray = Array.from(selectedClusters);
       setIsLoadingSidebar(true);
       try {
-        const response = await axios.get(
-          `http://127.0.0.1:8000/cluster_sidebar?active_cluster_id=${encodeURIComponent(clusterToFetch)}`,
-        );
+        // Fetch notes for each selected cluster
+        const allNotes: SidebarNoteData[] = [];
+        const noteTitles = new Set<string>();
+
+        for (const clusterId of clusterArray) {
+          const response = await axios.get(
+            `http://127.0.0.1:8000/cluster_sidebar?active_cluster_id=${encodeURIComponent(clusterId)}`,
+          );
+          const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
+          notes.forEach((note: SidebarNoteData) => {
+            if (!noteTitles.has(note.title)) {
+              allNotes.push(note);
+              noteTitles.add(note.title);
+            }
+          });
+        }
+
         if (active) {
-          setSidebarNotes(Array.isArray(response.data?.notes) ? response.data.notes : []);
-          setLoadedSidebarCluster(clusterToFetch);
+          setSidebarNotes(allNotes);
+          setLoadedSidebarCluster(clusterArray[0]);
         }
       } catch (error) {
         console.error('Error loading sidebar notes:', error);
@@ -1000,11 +1002,20 @@ export default function NoteClusters() {
     const hasSearchHits = searchResults.length > 0;
 
     if (visualizationMode === 'condensed') {
-      // In condensed mode, show only one representative point per cluster
-      visibleLabels.forEach((label) => {
+      // In condensed mode, show one representative point per cluster
+      // When hideOtherClusters is enabled, unselected clusters appear greyed out
+      const labelsToShow = hideOtherClusters && hasActiveClusterFilter ? sortedLabels : visibleLabels;
+
+      labelsToShow.forEach((label) => {
         const group = clusterGroups[label];
         const positionData = pointPositionMap.get(group.customdata[0]?.unique_key);
-        const clusterColor = clusterColors[label] || '#4b5563';
+        const isSelected = selectedClusters.has(label);
+
+        // Use grey for unselected clusters when hideOtherClusters is enabled
+        let clusterColor = clusterColors[label] || '#4b5563';
+        if (hideOtherClusters && hasActiveClusterFilter && !isSelected) {
+          clusterColor = '#b0b0b0'; // Grey color for unselected clusters
+        }
 
         // Create one representative point per cluster
         let size = 0.04;
@@ -1208,15 +1219,23 @@ export default function NoteClusters() {
       if (visualizationMode === 'condensed') {
         // In condensed mode, select/deselect the cluster
         const clusterId = point.display_topic_id || point.cluster_id || '';
-        setSelectedClusters((prev) => {
-          const next = new Set(prev);
-          if (next.has(clusterId)) {
-            next.delete(clusterId);
-          } else {
-            next.add(clusterId);
-          }
-          return next;
-        });
+        const isShiftClick = event.shiftKey;
+
+        if (isShiftClick) {
+          // Shift+click: Add/toggle cluster to selection
+          setSelectedClusters((prev) => {
+            const next = new Set(prev);
+            if (next.has(clusterId)) {
+              next.delete(clusterId);
+            } else {
+              next.add(clusterId);
+            }
+            return next;
+          });
+        } else {
+          // Regular click: Select only this cluster
+          setSelectedClusters(new Set([clusterId]));
+        }
       } else {
         // In linear/log mode, open the note
         setHighlightedNodeId(point.unique_key);
@@ -1743,14 +1762,16 @@ export default function NoteClusters() {
                         const chunk = note.chunks[i];
                         if (chunk.in_cluster) {
                           const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                          const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                          const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                           rows.push(
                             <button
                               type="button"
                               key={`snippet-${note.note_key}-${chunk.chunk_index}`}
                               onClick={() => openSidebarNote(note, chunk.chunk_index)}
                               style={{
-                                border: '1px solid #e5e7eb',
-                                background: 'rgba(255,255,255,0.8)',
+                                border: `1px solid ${chunkClusterColor}`,
+                                background: lightenedColor,
                                 borderRadius: '6px',
                                 padding: '6px 8px',
                                 cursor: 'pointer',
@@ -2139,42 +2160,40 @@ export default function NoteClusters() {
               Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
             </h3>
             <div style={{ minHeight: '30px', marginBottom: '8px' }}>
-              {searchResults.length > 0 && (
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setSearchLegendOrderMode('results')}
-                    style={{
-                      flex: 1,
-                      padding: '5px 8px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                      backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Results Order
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSearchLegendOrderMode('similarity')}
-                    style={{
-                      flex: 1,
-                      padding: '5px 8px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                      backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Similarity Order
-                  </button>
-                </div>
-              )}
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setSearchLegendOrderMode('results')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                    backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  {searchResults.length > 0 ? 'Results Order' : 'Sorted Order'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchLegendOrderMode('similarity')}
+                  style={{
+                    flex: 1,
+                    padding: '5px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
+                    backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  Similarity Order
+                </button>
+              </div>
             </div>
             <div style={{ flex: 1, overflowY: 'auto' }}>
               {sortedLabels.map((label) => {
@@ -2202,8 +2221,23 @@ export default function NoteClusters() {
                       legendClusterRefs.current[label] = el;
                     }}
                     className={`cluster-row ${isSelected ? 'cluster-row-selected' : ''}`}
-                    onClick={() => {
-                      toggleClusterSelection(label);
+                    onClick={(e) => {
+                      const isShiftClick = e.shiftKey;
+                      if (isShiftClick) {
+                        // Shift+click: Add/toggle cluster to selection
+                        setSelectedClusters((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(label)) {
+                            next.delete(label);
+                          } else {
+                            next.add(label);
+                          }
+                          return next;
+                        });
+                      } else {
+                        // Regular click: Select only this cluster
+                        setSelectedClusters(new Set([label]));
+                      }
                     }}
                     style={{
                       opacity: rowOpacity,
