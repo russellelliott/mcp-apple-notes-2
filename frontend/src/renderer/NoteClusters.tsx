@@ -660,6 +660,22 @@ export default function NoteClusters() {
     return scores;
   }, [clusterGroups, data]);
 
+  // On first load, default-select the peak-recency cluster (highest `spike` score)
+  useEffect(() => {
+    if (selectedClusters.size > 0) return;
+    if (!clusterOrderScores || clusterOrderScores.size === 0) return;
+    let bestLabel: string | null = null;
+    let bestVal = Number.NEGATIVE_INFINITY;
+    clusterOrderScores.forEach((scores, label) => {
+      const val = scores?.spike ?? Number.NEGATIVE_INFINITY;
+      if (val > bestVal) {
+        bestVal = val;
+        bestLabel = label;
+      }
+    });
+    if (bestLabel) setSelectedClusters(new Set([bestLabel]));
+  }, [clusterOrderScores]);
+
   const sortedLabels = useMemo(() => {
     const sorted = Object.keys(clusterGroups);
 
