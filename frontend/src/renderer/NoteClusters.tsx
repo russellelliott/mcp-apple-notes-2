@@ -269,15 +269,17 @@ const ClusterLabel = ({
 const SegmentedRail = ({
   chunks,
   activeClusterId,
+  currentChunkIndex,
   getClusterColor,
   onActiveDotClick,
   onInactiveDashClick,
 }: {
   chunks: SidebarChunkData[];
-  activeClusterId: string;
+  activeClusterId: string | null;
+  currentChunkIndex: number | null;
   getClusterColor: (clusterId: string) => string;
-  onActiveDotClick: (chunk: SidebarChunkData) => void;
-  onInactiveDashClick: (chunk: SidebarChunkData) => void;
+  onActiveDotClick: (chunk: SidebarChunkData, e: React.MouseEvent) => void;
+  onInactiveDashClick: (chunk: SidebarChunkData, e: React.MouseEvent) => void;
 }) => {
   return (
     <div
@@ -293,23 +295,26 @@ const SegmentedRail = ({
       }}
     >
       {chunks.map((chunk) => {
-        const isActive = chunk.cluster_id === activeClusterId;
-        const symbol = isActive ? '●' : '−';
+        const isDot = !!activeClusterId && chunk.cluster_id === activeClusterId;
+        const symbol = isDot ? '●' : '−';
+        const isCurrent = currentChunkIndex !== null && chunk.chunk_index === currentChunkIndex;
         return (
           <button
             type="button"
             key={`rail-${chunk.chunk_index}-${chunk.cluster_id}`}
-            onClick={() => (isActive ? onActiveDotClick(chunk) : onInactiveDashClick(chunk))}
+            onClick={(e) => (isDot ? onActiveDotClick(chunk, e) : onInactiveDashClick(chunk, e))}
             title={`Chunk ${chunk.chunk_index + 1} | Cluster: ${chunk.cluster_name}`}
             style={{
               border: 'none',
               background: 'transparent',
               cursor: 'pointer',
-              color: isActive ? '#ffffff' : getClusterColor(chunk.cluster_id),
-              fontSize: isActive ? '15px' : '14px',
+              color: isDot ? '#ffffff' : getClusterColor(chunk.cluster_id),
+              fontSize: isDot ? '15px' : '14px',
               lineHeight: 1,
               padding: 0,
               margin: 0,
+              opacity: isCurrent ? 1 : 0.82,
+              transform: isCurrent ? 'scale(1.15)' : 'scale(1)',
             }}
             aria-label={`Chunk ${chunk.chunk_index + 1} in cluster ${chunk.cluster_name}`}
           >
@@ -1372,20 +1377,36 @@ export default function NoteClusters() {
     setHighlightedNodeId(uniqueKey);
     setHoveredId(uniqueKey);
     setHoverSource('list');
-    openSidebarNote(note, chunk.chunk_index);
-  }, [openSidebarNote]);
-
-  const handleInactiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
-    // In the merged view, select the cluster and open the note
-    setSelectedClusters((prev) => {
-      const next = new Set(prev);
-      next.add(chunk.cluster_id);
-      return next;
-    });
+    // Select this chunk's cluster as the sole selection
+    setSelectedClusters(new Set([chunk.cluster_id]));
+    // Ensure the sidebar will scroll to this note after cluster load
     setPendingScrollNoteKey(note.note_key);
     setPendingScrollNoteTitle(note.title);
     setPendingScrollTargetCluster(chunk.cluster_id);
-  }, []);
+    openSidebarNote(note, chunk.chunk_index);
+  }, [openSidebarNote]);
+
+  const handleInactiveRailClick = useCallback(
+    (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
+      const shift = !!(e && e.shiftKey);
+      if (shift) {
+        // add to selection
+        setSelectedClusters((prev) => {
+          const next = new Set(prev);
+          if (next.has(chunk.cluster_id)) next.delete(chunk.cluster_id);
+          else next.add(chunk.cluster_id);
+          return next;
+        });
+      } else {
+        // normal click -> select sole cluster
+        setSelectedClusters(new Set([chunk.cluster_id]));
+      }
+      setPendingScrollNoteKey(note.note_key);
+      setPendingScrollNoteTitle(note.title);
+      setPendingScrollTargetCluster(chunk.cluster_id);
+    },
+    [],
+  );
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
@@ -1761,13 +1782,23 @@ export default function NoteClusters() {
                   </div>
 
                   {note.chunks.length > 1 && (
-                    <SegmentedRail
-                      chunks={note.chunks}
-                      activeClusterId=""
-                      getClusterColor={getClusterColor}
-                      onActiveDotClick={(chunk) => handleActiveRailClick(note, chunk)}
-                      onInactiveDashClick={(chunk) => handleInactiveRailClick(note, chunk)}
-                    />
+                    (() => {
+                      const isSameAsSelected = selectedNode && selectedNode.title === note.title;
+                      const activeClusterId = isSameAsSelected
+                        ? (selectedNode!.display_topic_id || selectedNode!.cluster_id || null)
+                        : (selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null);
+                      const currentChunkIndex = isSameAsSelected ? selectedNode!.chunk_index : null;
+                      return (
+                        <SegmentedRail
+                          chunks={note.chunks}
+                          activeClusterId={activeClusterId}
+                          currentChunkIndex={currentChunkIndex}
+                          getClusterColor={getClusterColor}
+                          onActiveDotClick={(chunk, _e) => handleActiveRailClick(note, chunk)}
+                          onInactiveDashClick={(chunk, e) => handleInactiveRailClick(note, chunk, e)}
+                        />
+                      );
+                    })()
                   )}
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
