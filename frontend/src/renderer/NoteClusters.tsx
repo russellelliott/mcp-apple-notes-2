@@ -268,14 +268,14 @@ const ClusterLabel = ({
 
 const SegmentedRail = ({
   chunks,
-  activeClusterId,
+  activeClusterIds,
   currentChunkIndex,
   getClusterColor,
   onActiveDotClick,
   onInactiveDashClick,
 }: {
   chunks: SidebarChunkData[];
-  activeClusterId: string | null;
+  activeClusterIds: Set<string>;
   currentChunkIndex: number | null;
   getClusterColor: (clusterId: string) => string;
   onActiveDotClick: (chunk: SidebarChunkData, e: React.MouseEvent) => void;
@@ -295,7 +295,7 @@ const SegmentedRail = ({
       }}
     >
       {chunks.map((chunk) => {
-        const isDot = !!activeClusterId && chunk.cluster_id === activeClusterId;
+        const isDot = activeClusterIds.has(chunk.cluster_id);
         const symbol = isDot ? '●' : '−';
         const isCurrent = currentChunkIndex !== null && chunk.chunk_index === currentChunkIndex;
         return (
@@ -1828,14 +1828,14 @@ export default function NoteClusters() {
                   {note.chunks.length > 1 && (
                     (() => {
                       const isSameAsSelected = selectedNode && selectedNode.title === note.title;
-                      const activeClusterId = isSameAsSelected
-                        ? (selectedNode!.display_topic_id || selectedNode!.cluster_id || null)
-                        : (selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null);
+                      const activeClusterIds = isSameAsSelected
+                        ? new Set([selectedNode!.display_topic_id || selectedNode!.cluster_id || ''])
+                        : selectedClusters;
                       const currentChunkIndex = isSameAsSelected ? selectedNode!.chunk_index : null;
                       return (
                         <SegmentedRail
                           chunks={note.chunks}
-                          activeClusterId={activeClusterId}
+                          activeClusterIds={activeClusterIds}
                           currentChunkIndex={currentChunkIndex}
                           getClusterColor={getClusterColor}
                           onActiveDotClick={(chunk, _e) => handleActiveRailClick(note, chunk)}
