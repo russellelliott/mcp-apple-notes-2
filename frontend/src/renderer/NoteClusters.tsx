@@ -355,6 +355,8 @@ export default function NoteClusters() {
   const plotAreaRef = useRef<HTMLDivElement>(null);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const legendContainerRef = useRef<HTMLDivElement | null>(null);
+  const notesListRef = useRef<HTMLDivElement | null>(null);
 
   const fetchNoteContent = async (
     title: string,
@@ -1388,9 +1390,20 @@ export default function NoteClusters() {
 
   const handleInactiveRailClick = useCallback(
     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
+      // Capture positions for scrolling adjustments
+      const leftContainer = notesListRef.current;
+      const legendElBefore = legendClusterRefs.current[chunk.cluster_id];
+      const cardElBefore = sidebarCardRefs.current[note.note_key];
+      let cardOffsetFromContainer: number | null = null;
+      if (leftContainer && cardElBefore) {
+        const containerRect = leftContainer.getBoundingClientRect();
+        const cardRect = cardElBefore.getBoundingClientRect();
+        cardOffsetFromContainer = cardRect.top - containerRect.top;
+      }
+
       const shift = !!(e && e.shiftKey);
       if (shift) {
-        // add to selection
+        // add to selection (toggle)
         setSelectedClusters((prev) => {
           const next = new Set(prev);
           if (next.has(chunk.cluster_id)) next.delete(chunk.cluster_id);
@@ -1401,9 +1414,40 @@ export default function NoteClusters() {
         // normal click -> select sole cluster
         setSelectedClusters(new Set([chunk.cluster_id]));
       }
+
       setPendingScrollNoteKey(note.note_key);
       setPendingScrollNoteTitle(note.title);
       setPendingScrollTargetCluster(chunk.cluster_id);
+
+      // After state updates and potential list reorders, scroll legend and left list so the
+      // cluster and note remain visible in similar positions.
+      setTimeout(() => {
+        // Scroll legend cluster into view (center) using the legend container
+        const legendEl = legendClusterRefs.current[chunk.cluster_id];
+        const legendContainer = legendContainerRef.current;
+        if (legendEl && legendContainer) {
+          const parentRect = legendContainer.getBoundingClientRect();
+          const elRect = legendEl.getBoundingClientRect();
+          const offset = elRect.top - parentRect.top;
+          const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
+          try {
+            legendContainer.scrollTo({ top: target, behavior: 'smooth' });
+          } catch (err) {
+            legendContainer.scrollTop = target;
+          }
+        }
+
+        // Adjust left column scroll so the note card stays at same relative position
+        const leftContainerNow = notesListRef.current;
+        const cardElNow = sidebarCardRefs.current[note.note_key];
+        if (leftContainerNow && cardOffsetFromContainer !== null && cardElNow) {
+          const containerRectNow = leftContainerNow.getBoundingClientRect();
+          const cardRectNow = cardElNow.getBoundingClientRect();
+          const newOffset = cardRectNow.top - containerRectNow.top;
+          const delta = newOffset - cardOffsetFromContainer;
+          leftContainerNow.scrollTop += delta;
+        }
+      }, 60);
     },
     [],
   );
@@ -1666,7 +1710,7 @@ export default function NoteClusters() {
               />
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto' }}>
               {searchResults.length === 0 && searchQuery && (
                 <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
               )}
@@ -2243,7 +2287,7 @@ export default function NoteClusters() {
                 </button>
               </div>
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', userSelect: 'none' }}>
+            <div ref={legendContainerRef} style={{ flex: 1, overflowY: 'auto', userSelect: 'none' }}>
               {sortedLabels.map((label) => {
                 const group = clusterGroups[label];
                 const cid = group.clusterId || label;
