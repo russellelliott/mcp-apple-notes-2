@@ -1217,6 +1217,31 @@ export default function NoteClusters() {
   const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
   const hoveredClusterColor = hoveredPoint ? getDotSurfaceTint(hoveredPoint.dotColor) : '#ffffff';
 
+  const selectedClusterSummaries = useMemo(() => {
+    if (selectedClusters.size > 0) {
+      return Array.from(selectedClusters)
+        .map((clusterId) => {
+          const group = clusterGroups[clusterId];
+          return {
+            clusterId: clusterId || '?',
+            clusterLabel: group?.clusterLabel || clusterId || 'Unknown cluster',
+          };
+        })
+        .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
+    }
+
+    if (selectedNode) {
+      return [
+        {
+          clusterId: selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?',
+          clusterLabel: selectedNode.cluster_label || 'Unknown cluster',
+        },
+      ];
+    }
+
+    return [] as Array<{ clusterId: string; clusterLabel: string }>;
+  }, [clusterGroups, selectedClusters, selectedNode]);
+
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
     const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
@@ -1747,6 +1772,30 @@ export default function NoteClusters() {
                   boxSizing: 'border-box',
                 }}
               />
+              {selectedClusterSummaries.length > 0 && (
+                <div
+                  style={{
+                    marginTop: '8px',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    backgroundColor: '#f3f4f6',
+                    border: '1px solid #e5e7eb',
+                    fontSize: '12px',
+                    lineHeight: 1.4,
+                    color: '#1f2937',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: '6px' }}>Selected Clusters</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {selectedClusterSummaries.map((summary) => (
+                      <div key={summary.clusterId} style={{ display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ fontWeight: 700 }}>Cluster {summary.clusterId}</div>
+                        <div style={{ color: '#4b5563' }}>{summary.clusterLabel}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto' }}>
@@ -2137,14 +2186,26 @@ export default function NoteClusters() {
                   overflowWrap: 'anywhere',
                 }}
               >
-                <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
-                <div style={{ color: '#333' }}>
-                  Cluster {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}:{' '}
-                  {hoveredPoint.cluster_label}
-                </div>
-                <div style={{ color: '#333' }}>
-                  Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
-                </div>
+                {visualizationMode === 'condensed' ? (
+                  <>
+                    <div style={{ color: '#333', fontWeight: 700 }}>
+                      Cluster {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}
+                    </div>
+                    <div style={{ color: '#333' }}>{hoveredPoint.cluster_label}</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
+                    <div style={{ color: '#333' }}>
+                      Cluster{' '}
+                      {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}:{' '}
+                      {hoveredPoint.cluster_label}
+                    </div>
+                    <div style={{ color: '#333' }}>
+                      Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
