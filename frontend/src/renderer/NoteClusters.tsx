@@ -1390,15 +1390,14 @@ export default function NoteClusters() {
 
   const handleInactiveRailClick = useCallback(
     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
-      // Capture positions for scrolling adjustments
+      // Immediately scroll the note to the top of the notes list
       const leftContainer = notesListRef.current;
-      const legendElBefore = legendClusterRefs.current[chunk.cluster_id];
-      const cardElBefore = sidebarCardRefs.current[note.note_key];
-      let cardOffsetFromContainer: number | null = null;
-      if (leftContainer && cardElBefore) {
+      const cardEl = sidebarCardRefs.current[note.note_key];
+      if (leftContainer && cardEl) {
+        const cardRect = cardEl.getBoundingClientRect();
         const containerRect = leftContainer.getBoundingClientRect();
-        const cardRect = cardElBefore.getBoundingClientRect();
-        cardOffsetFromContainer = cardRect.top - containerRect.top;
+        const offsetFromTop = cardRect.top - containerRect.top;
+        leftContainer.scrollTop += offsetFromTop;
       }
 
       const shift = !!(e && e.shiftKey);
@@ -1419,10 +1418,8 @@ export default function NoteClusters() {
       setPendingScrollNoteTitle(note.title);
       setPendingScrollTargetCluster(chunk.cluster_id);
 
-      // After state updates and potential list reorders, scroll legend and left list so the
-      // cluster and note remain visible in similar positions.
+      // After state updates, scroll legend cluster into view (centered)
       setTimeout(() => {
-        // Scroll legend cluster into view (center) using the legend container
         const legendEl = legendClusterRefs.current[chunk.cluster_id];
         const legendContainer = legendContainerRef.current;
         if (legendEl && legendContainer) {
@@ -1435,17 +1432,6 @@ export default function NoteClusters() {
           } catch (err) {
             legendContainer.scrollTop = target;
           }
-        }
-
-        // Adjust left column scroll so the note card stays at same relative position
-        const leftContainerNow = notesListRef.current;
-        const cardElNow = sidebarCardRefs.current[note.note_key];
-        if (leftContainerNow && cardOffsetFromContainer !== null && cardElNow) {
-          const containerRectNow = leftContainerNow.getBoundingClientRect();
-          const cardRectNow = cardElNow.getBoundingClientRect();
-          const newOffset = cardRectNow.top - containerRectNow.top;
-          const delta = newOffset - cardOffsetFromContainer;
-          leftContainerNow.scrollTop += delta;
         }
       }, 60);
     },
