@@ -346,6 +346,7 @@ export default function NoteClusters() {
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
+  const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
   const plotAreaRef = useRef<HTMLDivElement>(null);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -498,6 +499,21 @@ export default function NoteClusters() {
       active = false;
     };
   }, [debouncedQuery]);
+
+  // Manage cluster selection in search mode
+  useEffect(() => {
+    if (searchResults.length > 0) {
+      // Search is active - save current selection and clear it
+      if (selectedClusters.size > 0 && savedClustersBeforeSearch.size === 0) {
+        setSavedClustersBeforeSearch(new Set(selectedClusters));
+        setSelectedClusters(new Set());
+      }
+    } else if (searchResults.length === 0 && savedClustersBeforeSearch.size > 0) {
+      // Search ended - restore previously saved clusters
+      setSelectedClusters(new Set(savedClustersBeforeSearch));
+      setSavedClustersBeforeSearch(new Set());
+    }
+  }, [searchResults.length, selectedClusters.size, savedClustersBeforeSearch.size]);
 
   const searchScoreMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -2098,6 +2114,7 @@ export default function NoteClusters() {
               zIndex: 10,
               fontSize: '11px',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+              userSelect: 'none',
             }}
           >
             <style>{`
@@ -2156,11 +2173,11 @@ export default function NoteClusters() {
                 flex-shrink: 0;
               }
             `}</style>
-            <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
+            <h3 style={{ margin: '0 0 10px 0', color: '#333', userSelect: 'none' }}>
               Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
             </h3>
-            <div style={{ minHeight: '30px', marginBottom: '8px' }}>
-              <div style={{ display: 'flex', gap: '6px' }}>
+            <div style={{ minHeight: '30px', marginBottom: '8px', userSelect: 'none' }}>
+              <div style={{ display: 'flex', gap: '6px', userSelect: 'none' }}>
                 <button
                   type="button"
                   onClick={() => setSearchLegendOrderMode('results')}
@@ -2195,7 +2212,7 @@ export default function NoteClusters() {
                 </button>
               </div>
             </div>
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div style={{ flex: 1, overflowY: 'auto', userSelect: 'none' }}>
               {sortedLabels.map((label) => {
                 const group = clusterGroups[label];
                 const cid = group.clusterId || label;
@@ -2206,7 +2223,7 @@ export default function NoteClusters() {
                 const color = clusterColors[label];
                 const isSelected = selectedClusters.has(label);
                 const isSearchDimmed = searchResults.length > 0 && !hasHits;
-                const isFilterDimmed = hasActiveClusterFilter && !isSelected;
+                const isFilterDimmed = hideOtherClusters && hasActiveClusterFilter && !isSelected;
                 const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
                 const isSoftDimmed = isSearchDimmed && isSelected;
                 const isDimmed = isHardDimmed || isSoftDimmed;
