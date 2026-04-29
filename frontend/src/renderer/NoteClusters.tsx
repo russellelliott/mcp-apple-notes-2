@@ -68,6 +68,7 @@ type ClusterOrderMode = 'spike' | 'momentum';
 type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size';
 type SortDirection = 'desc' | 'asc';
+type VisualizationMode = 'linear' | 'log' | 'condensed';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -328,6 +329,7 @@ export default function NoteClusters() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [hasSearchResponse, setHasSearchResponse] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('notes');
+  const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [notesSortMetric, setNotesSortMetric] = useState<NotesSortMetric>('modified');
   const [notesSortDirection, setNotesSortDirection] = useState<SortDirection>('desc');
@@ -937,6 +939,68 @@ export default function NoteClusters() {
     return { center, radius };
   }, [data]);
 
+  const pointPositionMap = useMemo(() => {
+    const map = new Map<string, { linear: THREE.Vector3; log: THREE.Vector3; condensed: THREE.Vector3 }>();
+    const CLUSTER_RADIUS = 2;
+    const LOG_FACTOR = 0.5;
+    const WORLD_SIZE = 30;
+
+    Object.keys(clusterGroups).forEach((label) => {
+      const group = clusterGroups[label];
+      const centroid = clusterCentroids.get(label);
+      if (!centroid) return;
+
+      // Calculate cluster center
+      const clusterCenter = new THREE.Vector3(
+        group.x.reduce((a, b) => a + b, 0) / group.x.length,
+        group.y.reduce((a, b) => a + b, 0) / group.y.length,
+        group.z.reduce((a, b) => a + b, 0) / group.z.length,
+      );
+
+      group.customdata.forEach((meta, index) => {
+        // 1. Linear: Raw position from UMAP
+        const linearPos = new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
+
+        // 2. Local Log Scale: Compress distances relative to cluster center
+        const relativePos = new THREE.Vector3(
+          group.x[index] - clusterCenter.x,
+          group.y[index] - clusterCenter.y,
+          group.z[index] - clusterCenter.z,
+        );
+        const dist = relativePos.length();
+        const scaledDist =
+          Math.log(1 + dist * LOG_FACTOR) *
+          (CLUSTER_RADIUS / Math.log(1 + CLUSTER_RADIUS * LOG_FACTOR));
+        const logPos = new THREE.Vector3(
+          clusterCenter.x + (relativePos.x / (dist || 1)) * scaledDist,
+          clusterCenter.y + (relativePos.y / (dist || 1)) * scaledDist,
+          clusterCenter.z + (relativePos.z / (dist || 1)) * scaledDist,
+        );
+
+        // 3. Condensed Log: Map to cluster centroid, then log-scale relative to world origin
+        const originDist = Math.sqrt(
+          centroid.x * centroid.x + centroid.y * centroid.y + centroid.z * centroid.z,
+        );
+        const scaledOriginDist =
+          Math.log(1 + originDist * (LOG_FACTOR * 0.1)) *
+          (WORLD_SIZE / Math.log(1 + WORLD_SIZE * (LOG_FACTOR * 0.1)));
+        const condensedPos = new THREE.Vector3(
+          (centroid.x / (originDist || 1)) * scaledOriginDist,
+          (centroid.y / (originDist || 1)) * scaledOriginDist,
+          (centroid.z / (originDist || 1)) * scaledOriginDist,
+        );
+
+        map.set(meta.unique_key, {
+          linear: linearPos,
+          log: logPos,
+          condensed: condensedPos,
+        });
+      });
+    });
+
+    return map;
+  }, [clusterGroups, clusterCentroids]);
+
   const pointRenderColorMap = useMemo(() => {
     const map = new Map<string, string>();
     const hasSearchHits = searchResults.length > 0;
@@ -965,58 +1029,118 @@ export default function NoteClusters() {
     const lookup = new Map<string, VisualPoint>();
     const hasSearchHits = searchResults.length > 0;
 
-    visibleLabels.forEach((label) => {
-      const group = clusterGroups[label];
+    if (visualizationMode === 'condensed') {
+      // In condensed mode, show only one representative point per cluster
+      visibleLabels.forEach((label) => {
+        const group = clusterGroups[label];
+        const positionData = pointPositionMap.get(group.customdata[0]?.unique_key);
+        const clusterColor = clusterColors[label] || '#4b5563';
 
-      group.customdata.forEach((meta, index) => {
-        const score = searchScoreMap.get(meta.unique_key);
-        const isHit = score !== undefined;
-        const isHovered = hoveredId === meta.unique_key;
-        const isHighlighted = highlightedNodeId === meta.unique_key;
-
-        let size = 0.02;
-        if (hasSearchHits && isHit) {
-          const clamped = Math.max(0, Math.min(1, score));
-          size = 0.018 + (1 - clamped) * 0.018;
-        } else if (hasSearchHits && !isHit) {
-          size = 0.012;
+        // Create one representative point per cluster
+        let size = 0.04;
+        if (hoveredId && group.customdata.some((meta) => meta.unique_key === hoveredId)) {
+          size = Math.max(size * 1.35, 0.054);
+        }
+        if (highlightedNodeId && group.customdata.some((meta) => meta.unique_key === highlightedNodeId)) {
+          size = Math.max(size * 1.45, 0.058);
         }
 
-        if (isHovered) {
-          size = Math.max(size * 1.35, 0.024);
-        }
-
-        if (isHighlighted) {
-          size = Math.max(size * 1.45, 0.026);
-        }
-
-        const dotColor = pointRenderColorMap.get(meta.unique_key) || (clusterColors[label] || '#4b5563');
-        const glowOpacity = hasSearchHits ? (isHit ? 0.24 : 0) : 0.2;
+        const targetPos = positionData?.condensed || new THREE.Vector3(0, 0, 0);
+        const glowOpacity = 0.2;
         const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
-        const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
+        const bucketKey = `${quantizedSize}|${clusterColor}|${glowOpacity}`;
+
         if (!bucketMap.has(bucketKey)) {
           bucketMap.set(bucketKey, {
             key: bucketKey,
             sizeMetric: quantizedSize,
-            color: dotColor,
+            color: clusterColor,
             glowOpacity,
             points: [],
           });
         }
 
+        // Use first point's data as representative for the cluster
+        const firstMeta = group.customdata[0];
         const visualPoint: VisualPoint = {
-          ...meta,
-          x: group.x[index],
-          y: group.y[index],
-          z: group.z[index],
-          dotColor,
+          ...firstMeta,
+          x: targetPos.x,
+          y: targetPos.y,
+          z: targetPos.z,
+          dotColor: clusterColor,
         };
-        lookup.set(meta.unique_key, visualPoint);
+
+        // Store under cluster label for hover/selection
+        lookup.set(`cluster-${label}`, visualPoint);
+        // Also store under first point's key for backward compatibility
+        lookup.set(firstMeta.unique_key, visualPoint);
 
         const bucket = bucketMap.get(bucketKey)!;
         bucket.points.push(visualPoint);
       });
-    });
+    } else {
+      // In linear and log modes, show all individual points
+      visibleLabels.forEach((label) => {
+        const group = clusterGroups[label];
+
+        group.customdata.forEach((meta, index) => {
+          const score = searchScoreMap.get(meta.unique_key);
+          const isHit = score !== undefined;
+          const isHovered = hoveredId === meta.unique_key;
+          const isHighlighted = highlightedNodeId === meta.unique_key;
+
+          let size = 0.02;
+          if (hasSearchHits && isHit) {
+            const clamped = Math.max(0, Math.min(1, score));
+            size = 0.018 + (1 - clamped) * 0.018;
+          } else if (hasSearchHits && !isHit) {
+            size = 0.012;
+          }
+
+          if (isHovered) {
+            size = Math.max(size * 1.35, 0.024);
+          }
+
+          if (isHighlighted) {
+            size = Math.max(size * 1.45, 0.026);
+          }
+
+          const dotColor = pointRenderColorMap.get(meta.unique_key) || (clusterColors[label] || '#4b5563');
+          const glowOpacity = hasSearchHits ? (isHit ? 0.24 : 0) : 0.2;
+          const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
+          const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
+          if (!bucketMap.has(bucketKey)) {
+            bucketMap.set(bucketKey, {
+              key: bucketKey,
+              sizeMetric: quantizedSize,
+              color: dotColor,
+              glowOpacity,
+              points: [],
+            });
+          }
+
+          // Get position based on visualization mode
+          const positionData = pointPositionMap.get(meta.unique_key);
+          const targetPos = positionData
+            ? visualizationMode === 'linear'
+              ? positionData.linear
+              : positionData.log
+            : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
+
+          const visualPoint: VisualPoint = {
+            ...meta,
+            x: targetPos.x,
+            y: targetPos.y,
+            z: targetPos.z,
+            dotColor,
+          };
+          lookup.set(meta.unique_key, visualPoint);
+
+          const bucket = bucketMap.get(bucketKey)!;
+          bucket.points.push(visualPoint);
+        });
+      });
+    }
 
     return {
       buckets: Array.from(bucketMap.values()).sort((a, b) => a.sizeMetric - b.sizeMetric),
@@ -1028,9 +1152,11 @@ export default function NoteClusters() {
     highlightedNodeId,
     hoveredId,
     pointRenderColorMap,
+    pointPositionMap,
     searchResults.length,
     searchScoreMap,
     visibleLabels,
+    visualizationMode,
   ]);
 
   const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
@@ -1395,6 +1521,57 @@ export default function NoteClusters() {
                 }}
               >
                 Search
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setVisualizationMode('linear')}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: visualizationMode === 'linear' ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: visualizationMode === 'linear' ? '#e5e7eb' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Linear
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisualizationMode('log')}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: visualizationMode === 'log' ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: visualizationMode === 'log' ? '#e5e7eb' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Log
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisualizationMode('condensed')}
+                style={{
+                  flex: 1,
+                  padding: '5px 8px',
+                  fontSize: '11px',
+                  borderRadius: '5px',
+                  border: visualizationMode === 'condensed' ? '1px solid #1f2937' : '1px solid #ccc',
+                  background: visualizationMode === 'condensed' ? '#e5e7eb' : '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Condensed
               </button>
             </div>
 
