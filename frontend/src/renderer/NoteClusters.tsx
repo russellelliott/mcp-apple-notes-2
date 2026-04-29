@@ -696,36 +696,60 @@ export default function NoteClusters() {
       return minDistance;
     };
 
-    // When there are search results and similarity order is selected
-    if (searchLegendOrderMode === 'similarity' && selectedClusters.size > 0 && searchResults.length > 0) {
-      const selectedLabels = Array.from(selectedClusters).filter((label) => clusterCentroids.has(label));
+    // When similarity ordering is requested
+    if (searchLegendOrderMode === 'similarity' && selectedClusters.size > 0) {
+      // Compute the collective centroid (average) of currently selected clusters
+      const selectedCentroids: { x: number; y: number; z: number }[] = Array.from(selectedClusters)
+        .map((label) => clusterCentroids.get(label))
+        .filter((c): c is { x: number; y: number; z: number } => !!c);
 
-      const minDistanceToSelection = (label: string) => {
-        if (selectedClusters.has(label)) return -1;
-        return distanceToNearest(label, selectedLabels);
-      };
+      if (selectedCentroids.length === 0) {
+        // fallback to previous behavior when there are no available centroids for selection
+        // (falls through to other branches below)
+      } else {
+        const collective = selectedCentroids.reduce(
+          (acc, cur) => ({ x: acc.x + cur.x, y: acc.y + cur.y, z: acc.z + cur.z }),
+          { x: 0, y: 0, z: 0 },
+        );
+        collective.x /= selectedCentroids.length;
+        collective.y /= selectedCentroids.length;
+        collective.z /= selectedCentroids.length;
 
-      sorted.sort((a, b) => {
-        const aSelected = selectedClusters.has(a);
-        const bSelected = selectedClusters.has(b);
+        const collectiveNorm = Math.sqrt(collective.x * collective.x + collective.y * collective.y + collective.z * collective.z) || 1;
 
-        if (aSelected && !bSelected) return -1;
-        if (!aSelected && bSelected) return 1;
+        const cosineSimilarity = (a: { x: number; y: number; z: number }) => {
+          const dot = a.x * collective.x + a.y * collective.y + a.z * collective.z;
+          const normA = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z) || 1;
+          return dot / (normA * collectiveNorm);
+        };
 
-        if (aSelected && bSelected) {
+        sorted.sort((a, b) => {
+          const aSelected = selectedClusters.has(a);
+          const bSelected = selectedClusters.has(b);
+
+          if (aSelected && !bSelected) return -1;
+          if (!aSelected && bSelected) return 1;
+
+          if (aSelected && bSelected) {
+            const idA = clusterGroups[a].clusterId || a;
+            const idB = clusterGroups[b].clusterId || b;
+            return compareTopicIds(String(idA), String(idB));
+          }
+
+          const centroidA = clusterCentroids.get(a);
+          const centroidB = clusterCentroids.get(b);
+
+          const simA = centroidA ? cosineSimilarity(centroidA) : -Infinity;
+          const simB = centroidB ? cosineSimilarity(centroidB) : -Infinity;
+
+          if (simA !== simB) return simB - simA; // higher similarity first
+
           const idA = clusterGroups[a].clusterId || a;
           const idB = clusterGroups[b].clusterId || b;
           return compareTopicIds(String(idA), String(idB));
-        }
-
-        const distA = minDistanceToSelection(a);
-        const distB = minDistanceToSelection(b);
-        if (distA !== distB) return distA - distB;
-
-        const idA = clusterGroups[a].clusterId || a;
-        const idB = clusterGroups[b].clusterId || b;
-        return compareTopicIds(String(idA), String(idB));
-      });
+        });
+        return sorted;
+      }
     } else if (searchLegendOrderMode === 'similarity' && searchResults.length > 0) {
       const hitLabels = sorted.filter((label) => {
         const group = clusterGroups[label];
