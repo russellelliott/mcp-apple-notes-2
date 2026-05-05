@@ -230,12 +230,17 @@ const ClusterLabel = ({
   isDimmed: boolean;
 }) => {
   const [isOverflowing, setIsOverflowing] = useState(false);
+  const [marqueeDuration, setMarqueeDuration] = useState(5);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLSpanElement>(null);
+  const marqueeSpeedPxPerSecond = 40;
 
   const checkOverflow = () => {
     if (containerRef.current && contentRef.current) {
-      setIsOverflowing(contentRef.current.scrollWidth > containerRef.current.clientWidth);
+      const contentWidth = contentRef.current.scrollWidth;
+      const containerWidth = containerRef.current.clientWidth;
+      setIsOverflowing(contentWidth > containerWidth);
+      setMarqueeDuration(Math.max((contentWidth + 20) / marqueeSpeedPxPerSecond, 1));
     }
   };
 
@@ -257,6 +262,7 @@ const ClusterLabel = ({
         style={{
           fontWeight: isSelected ? 700 : hasHits ? 600 : 400,
           color: isDimmed ? '#8c8c8c' : '#222',
+          animationDuration: `${marqueeDuration}s`,
         }}
         ref={contentRef}
       >
@@ -2409,7 +2415,7 @@ export default function NoteClusters() {
                 text-overflow: clip;
               }
               .cluster-label-container.overflowing:hover .cluster-label-content {
-                animation: marquee-scroll 5s linear infinite;
+                animation: marquee-scroll linear infinite;
                 padding-right: 20px;
               }
               .cluster-row {

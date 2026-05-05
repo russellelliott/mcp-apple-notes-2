@@ -193,6 +193,7 @@ Task: Provide a concise, professional label (3-5 words) for this cluster.
 Don't try to include all the topic words. Given the provided text, provide an overview of what the cluster is rather than literally what the content is on a surface level.
 In terms of the topic names, go deeper into what the content is about in essence beyond what it literally is.
 Figure out what the content is in a broader sense rather than what it is on the surface. Avoid trying to include all the topic words in the title itself; that just infers the contents and general ideas.
+Do NOT start or end the label with the word cluster.
 Output ONLY the label string. No preamble, no quotes.
 <|assistant|>"""
 
