@@ -2692,7 +2692,7 @@ export default function NoteClusters() {
 
           <div
             style={{
-              width: '420px',
+              width: '440px',
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
