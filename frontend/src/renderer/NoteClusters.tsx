@@ -3,6 +3,12 @@ import axios from 'axios';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
+import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 
 interface NotePoint {
   unique_key: string;
@@ -68,6 +74,7 @@ type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size';
 type SortDirection = 'desc' | 'asc';
 type VisualizationMode = 'linear' | 'condensed';
+type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -339,7 +346,11 @@ export default function NoteClusters() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
   const [hideOtherClusters, setHideOtherClusters] = useState(false);
+  const [clusterSearchQuery, setClusterSearchQuery] = useState('');
+  const [debouncedClusterQuery, setDebouncedClusterQuery] = useState('');
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
+  const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('momentum');
+  const [clusterSortDirection, setClusterSortDirection] = useState<SortDirection>('desc');
   const [notesSortMetric, setNotesSortMetric] = useState<NotesSortMetric>('modified');
   const [notesSortDirection, setNotesSortDirection] = useState<SortDirection>('desc');
   const [searchLegendOrderMode, setSearchLegendOrderMode] = useState<SearchLegendOrderMode>('results');
@@ -468,6 +479,50 @@ export default function NoteClusters() {
       setDebouncedQuery('');
       setSearchResults([]);
     }
+  };
+
+  const handleClusterSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setClusterSearchQuery(val);
+    if (val === '') setDebouncedClusterQuery('');
+  };
+
+  useEffect(() => {
+    if (clusterSearchQuery === '') return;
+    const h = setTimeout(() => setDebouncedClusterQuery(clusterSearchQuery), 350);
+    return () => clearTimeout(h);
+  }, [clusterSearchQuery]);
+
+  const fuzzyScore = (pattern: string, text: string) => {
+    // simple fuzzy subsequence score: lower is better; Infinity when no match
+    if (!pattern) return 0;
+    pattern = pattern.toLowerCase();
+    text = text.toLowerCase();
+    let pi = 0;
+    let firstIdx = -1;
+    for (let ti = 0; ti < text.length && pi < pattern.length; ti++) {
+      if (text[ti] === pattern[pi]) {
+        if (firstIdx === -1) firstIdx = ti;
+        pi += 1;
+      }
+    }
+    if (pi !== pattern.length) return Number.POSITIVE_INFINITY;
+    const lastIdx = text.lastIndexOf(pattern[pattern.length - 1]);
+    const span = Math.max(1, lastIdx - (firstIdx === -1 ? 0 : firstIdx));
+    // shorter span and earlier first match -> better score
+    return span + firstIdx * 0.2;
+  };
+
+  const timeAgo = (iso?: string | number | null) => {
+    if (!iso) return '';
+    const t = typeof iso === 'number' ? iso : Date.parse(String(iso));
+    if (!Number.isFinite(t)) return '';
+    const diff = Math.floor((Date.now() - t) / 1000);
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}d ago`;
+    return new Date(t).toLocaleDateString();
   };
 
   useEffect(() => {
@@ -623,6 +678,30 @@ export default function NoteClusters() {
       clusterOpaqueTints: processingOpaqueTints,
     };
   }, [data]);
+
+  const clusterAverageRelevance = useMemo(() => {
+    // compute average relevance per cluster from searchResults (lower distance = better)
+    if (searchResults.length === 0) return new Map<string, number>();
+    const byCluster = new Map<string, number[]>();
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    searchResults.forEach((r) => {
+      const label = r.display_topic_id || r.cluster_id || '-1';
+      const arr = byCluster.get(label) || [];
+      arr.push(r.distance);
+      byCluster.set(label, arr);
+      if (r.distance < min) min = r.distance;
+      if (r.distance > max) max = r.distance;
+    });
+    const map = new Map<string, number>();
+    const range = Math.max(1e-6, max - min);
+    byCluster.forEach((arr, label) => {
+      const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+      const normalized = 1 - (avg - min) / range; // higher => more relevant
+      map.set(label, Math.max(0, Math.min(1, normalized)));
+    });
+    return map;
+  }, [searchResults]);
 
   const clusterCentroids = useMemo(() => {
     const centroids = new Map<string, { x: number; y: number; z: number }>();
@@ -853,10 +932,57 @@ export default function NoteClusters() {
     searchResults.length,
   ]);
 
+  const displayedClusterLabels = useMemo(() => {
+    // start from sortedLabels, then apply cluster-name fuzzy filtering and final sort (A-Z / size / recency)
+    let list = sortedLabels.slice();
+
+    if (debouncedClusterQuery && debouncedClusterQuery.trim().length > 0) {
+      const q = debouncedClusterQuery.trim();
+      const scored = list
+        .map((label) => ({ label, score: fuzzyScore(q, clusterGroups[label]?.clusterLabel || label) }))
+        .filter((s) => Number.isFinite(s.score))
+        .sort((a, b) => a.score - b.score)
+        .map((s) => s.label);
+      list = scored;
+    }
+
+    // secondary sorts
+    if (clusterSortMetric === 'az') {
+      list = list.slice().sort((a, b) => {
+        const aLabel = (clusterGroups[a]?.clusterLabel || a).toLowerCase();
+        const bLabel = (clusterGroups[b]?.clusterLabel || b).toLowerCase();
+        return aLabel.localeCompare(bLabel, undefined, { numeric: true });
+      });
+    } else if (clusterSortMetric === 'size') {
+      list = list.slice().sort((a, b) => {
+        const sa = clusterGroups[a]?.customdata.length || 0;
+        const sb = clusterGroups[b]?.customdata.length || 0;
+        return clusterSortDirection === 'asc' ? sa - sb : sb - sa;
+      });
+    } else if (clusterSortMetric === 'recency') {
+      list = list.slice().sort((a, b) => {
+        const as = clusterGroups[a]?.customdata.map((d) => Date.parse(String(d.modification_date || ''))).filter(Number.isFinite) || [];
+        const bs = clusterGroups[b]?.customdata.map((d) => Date.parse(String(d.modification_date || ''))).filter(Number.isFinite) || [];
+        const aMax = as.length ? Math.max(...as) : Number.NEGATIVE_INFINITY;
+        const bMax = bs.length ? Math.max(...bs) : Number.NEGATIVE_INFINITY;
+        return clusterSortDirection === 'asc' ? aMax - bMax : bMax - aMax;
+      });
+    } else if (clusterSortMetric === 'momentum') {
+      // use previously computed clusterOrderScores (momentum = average)
+      list = list.slice().sort((a, b) => {
+        const sa = clusterOrderScores.get(a)?.momentum ?? Number.NEGATIVE_INFINITY;
+        const sb = clusterOrderScores.get(b)?.momentum ?? Number.NEGATIVE_INFINITY;
+        return clusterSortDirection === 'asc' ? sa - sb : sb - sa;
+      });
+    }
+
+    return list;
+  }, [sortedLabels, debouncedClusterQuery, clusterGroups, clusterSortMetric, clusterSortDirection, clusterOrderScores]);
+
   const hasActiveClusterFilter = selectedClusters.size > 0;
   const visibleLabels = hideOtherClusters && hasActiveClusterFilter
-    ? sortedLabels.filter((label) => selectedClusters.has(label))
-    : sortedLabels;
+    ? displayedClusterLabels.filter((label) => selectedClusters.has(label))
+    : displayedClusterLabels;
 
   useEffect(() => {
     let active = true;
@@ -1180,6 +1306,11 @@ export default function NoteClusters() {
         // Create one representative point per cluster
         // Make unselected clusters smaller when hide-other is enabled
         let size = 0.055;
+        // scale condensed cluster by average relevance when search active
+        const avgRel = clusterAverageRelevance.get(label) || 0;
+        if (searchResults.length > 0 && avgRel > 0) {
+          size = size * (1 + avgRel * 1.6);
+        }
         if (hoveredId && group.customdata.some((meta) => meta.unique_key === hoveredId)) {
           size = Math.max(size * 1.35, 0.054);
         }
@@ -1192,7 +1323,7 @@ export default function NoteClusters() {
         }
 
         const targetPos = positionData?.condensed || new THREE.Vector3(0, 0, 0);
-        const glowOpacity = 0.2;
+        const glowOpacity = 0.2 + (clusterAverageRelevance.get(label) || 0) * 0.45;
         const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
         const bucketKey = `${quantizedSize}|${clusterColor}|${glowOpacity}`;
 
@@ -1729,34 +1860,40 @@ export default function NoteClusters() {
               <button
                 type="button"
                 onClick={() => setVisualizationMode('linear')}
+                title="Linear"
                 style={{
                   flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  borderRadius: '6px',
                   border: visualizationMode === 'linear' ? '1px solid #1f2937' : '1px solid #ccc',
                   background: visualizationMode === 'linear' ? '#e5e7eb' : '#fff',
                   cursor: 'pointer',
-                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                Linear
+                <ZoomOutMapIcon style={{ fontSize: 18 }} />
               </button>
               <button
                 type="button"
                 onClick={() => setVisualizationMode('condensed')}
+                title="Condensed"
                 style={{
                   flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  borderRadius: '6px',
                   border: visualizationMode === 'condensed' ? '1px solid #1f2937' : '1px solid #ccc',
                   background: visualizationMode === 'condensed' ? '#e5e7eb' : '#fff',
                   cursor: 'pointer',
-                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                Condensed
+                <ZoomInMapIcon style={{ fontSize: 18 }} />
               </button>
             </div>
 
@@ -1766,16 +1903,21 @@ export default function NoteClusters() {
                 onClick={() => setHideOtherClusters(!hideOtherClusters)}
                 style={{
                   flex: 1,
-                  padding: '5px 8px',
-                  fontSize: '11px',
-                  borderRadius: '5px',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  borderRadius: '6px',
                   border: hideOtherClusters ? '1px solid #1f2937' : '1px solid #ccc',
-                  background: hideOtherClusters ? '#fee2e2' : '#fff',
+                  background: hideOtherClusters ? '#fff' : '#fff',
                   cursor: 'pointer',
-                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
                 }}
+                title={hideOtherClusters ? 'Show Selected (Hide Others active)' : 'Show All Clusters'}
               >
-                {hideOtherClusters ? 'Hide Others' : 'Show All'}
+                {hideOtherClusters ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                <span style={{ marginLeft: 6, fontSize: 12 }}>{hideOtherClusters ? 'Show Selected' : 'Show All'}</span>
               </button>
             </div>
 
@@ -1861,6 +2003,16 @@ export default function NoteClusters() {
                   boxSizing: 'border-box',
                 }}
               />
+              <div style={{ marginTop: '8px' }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>Search Clusters</label>
+                <input
+                  type="text"
+                  placeholder="Cluster name..."
+                  value={clusterSearchQuery}
+                  onChange={handleClusterSearch}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
+                />
+              </div>
               {selectedClusterSummaries.length > 0 && (
                 <div
                   style={{
@@ -1966,6 +2118,9 @@ export default function NoteClusters() {
                       >
                         (Chunk {result.chunk_index + 1} of {result.total_chunks || '?'})
                       </span>
+                      {pointMatch?.modification_date && (
+                        <span style={{ float: 'right', fontSize: '0.8em', color: '#666' }}>{timeAgo(pointMatch.modification_date)}</span>
+                      )}
                     </div>
                     <div
                       style={{
@@ -2132,9 +2287,12 @@ export default function NoteClusters() {
                   </button>
                 </div>
 
-                <div style={{ fontSize: '0.9em', color: '#555', marginBottom: '10px', textAlign: 'left' }}>
-                  Cluster {selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?'}:{' '}
-                  {selectedNode.cluster_label}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '0.9em', color: '#555', textAlign: 'left' }}>
+                    Cluster {selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?'}:{' '}
+                    {selectedNode.cluster_label}
+                  </div>
+                  <div style={{ fontSize: '0.85em', color: '#666' }}>{timeAgo(selectedNode.modification_date)}</div>
                 </div>
 
                 <div
@@ -2456,43 +2614,49 @@ export default function NoteClusters() {
               Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
             </h3>
             <div style={{ minHeight: '30px', marginBottom: '8px', userSelect: 'none' }}>
-              <div style={{ display: 'flex', gap: '6px', userSelect: 'none' }}>
-                <button
-                  type="button"
-                  onClick={() => setSearchLegendOrderMode('results')}
-                  style={{
-                    flex: 1,
-                    padding: '5px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: searchLegendOrderMode === 'results' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                    backgroundColor: searchLegendOrderMode === 'results' ? '#e5e7eb' : '#fff',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                  }}
-                >
-                  {searchResults.length > 0 ? 'Results Order' : 'Sorted Order'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSearchLegendOrderMode('similarity')}
-                  style={{
-                    flex: 1,
-                    padding: '5px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: searchLegendOrderMode === 'similarity' ? '1px solid #1f2937' : '1px solid #c9c9c9',
-                    backgroundColor: searchLegendOrderMode === 'similarity' ? '#e5e7eb' : '#fff',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                  }}
-                >
-                  Similarity Order
-                </button>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 13 }}>
+                  {([
+                    { key: 'recency', label: 'Recency' },
+                    { key: 'momentum', label: 'Momentum' },
+                    { key: 'az', label: 'A–Z' },
+                    { key: 'size', label: 'Size' },
+                  ] as Array<{ key: ClusterSortMetric; label: string }>).map((opt, idx, arr) => (
+                    <span key={opt.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => setClusterSortMetric(opt.key)}
+                        style={{
+                          background: clusterSortMetric === opt.key ? '#eef2ff' : 'transparent',
+                          border: clusterSortMetric === opt.key ? '1px solid #c7d2fe' : 'none',
+                          padding: '4px 6px',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: clusterSortMetric === opt.key ? 700 : 600,
+                          color: '#111827',
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                      {idx < arr.length - 1 && <span style={{ color: '#9ca3af' }}>•</span>}
+                    </span>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => setClusterSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                    title={clusterSortDirection === 'asc' ? 'Ascending' : 'Descending'}
+                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 6 }}
+                  >
+                    {clusterSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
+                  </button>
+                </div>
               </div>
             </div>
             <div ref={legendContainerRef} style={{ flex: 1, overflowY: 'auto', userSelect: 'none' }}>
-              {sortedLabels.map((label) => {
+              {displayedClusterLabels.map((label, idx) => {
                 const group = clusterGroups[label];
                 const cid = group.clusterId || label;
                 const displayLabel = group.clusterLabel || label;
@@ -2502,15 +2666,29 @@ export default function NoteClusters() {
                 const color = clusterColors[label];
                 const isSelected = selectedClusters.has(label);
                 const isSearchDimmed = searchResults.length > 0 && !hasHits;
-                const isFilterDimmed = hideOtherClusters && hasActiveClusterFilter && !isSelected;
+                // Don't let the hide-other filter dim clusters that actually have search hits
+                const isFilterDimmed = hideOtherClusters && hasActiveClusterFilter && !isSelected && !hasHits;
                 const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
                 const isSoftDimmed = isSearchDimmed && isSelected;
                 const isDimmed = isHardDimmed || isSoftDimmed;
                 const rowOpacity = isHardDimmed ? 0.5 : isSoftDimmed ? 0.76 : 1;
                 const dotOpacity = isHardDimmed ? 0.55 : isSoftDimmed ? 0.78 : 1;
                 const idColor = isHardDimmed ? '#8a8a8a' : isSoftDimmed ? '#666' : '#555';
+                const items: React.ReactNode[] = [];
+                if (clusterSortMetric === 'az') {
+                  const prev = displayedClusterLabels[idx - 1];
+                  const prevLetter = prev ? (clusterGroups[prev]?.clusterLabel || prev).charAt(0).toUpperCase() : '';
+                  const curLetter = (displayLabel || '').charAt(0).toUpperCase();
+                  if (!prev || prevLetter !== curLetter) {
+                    items.push(
+                      <div key={`divider-${label}`} style={{ padding: '6px 6px', color: '#6b7280', fontWeight: 700 }}>
+                        {curLetter}
+                      </div>,
+                    );
+                  }
+                }
 
-                return (
+                items.push(
                   <div
                     key={label}
                     ref={(el) => {
@@ -2556,8 +2734,10 @@ export default function NoteClusters() {
                       isSelected={isSelected}
                       isDimmed={isDimmed}
                     />
-                  </div>
+                  </div>,
                 );
+
+                return items;
               })}
             </div>
           </div>
