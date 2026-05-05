@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import Fuse from 'fuse.js';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -75,7 +74,7 @@ type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size' | 'search';
 type SortDirection = 'desc' | 'asc';
 type VisualizationMode = 'linear' | 'condensed';
-type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size';
+type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size' | 'search' | 'similarity';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -347,8 +346,6 @@ export default function NoteClusters() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
   const [hideOtherClusters, setHideOtherClusters] = useState(false);
-  const [clusterSearchQuery, setClusterSearchQuery] = useState('');
-  const [debouncedClusterQuery, setDebouncedClusterQuery] = useState('');
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('momentum');
   const [clusterSortDirection, setClusterSortDirection] = useState<SortDirection>('desc');
@@ -481,49 +478,6 @@ export default function NoteClusters() {
       setDebouncedQuery('');
       setSearchResults([]);
     }
-  };
-
-  const handleClusterSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setClusterSearchQuery(val);
-    if (val === '') setDebouncedClusterQuery('');
-  };
-
-  useEffect(() => {
-    if (clusterSearchQuery === '') return;
-    const h = setTimeout(() => setDebouncedClusterQuery(clusterSearchQuery), 350);
-    return () => clearTimeout(h);
-  }, [clusterSearchQuery]);
-
-  const fuzzyScore = (pattern: string, text: string) => {
-    // keep as fallback but prefer Fuse.js searches elsewhere
-    if (!pattern) return 0;
-    pattern = pattern.toLowerCase();
-    text = text.toLowerCase();
-    let pi = 0;
-    let firstIdx = -1;
-    for (let ti = 0; ti < text.length && pi < pattern.length; ti++) {
-      if (text[ti] === pattern[pi]) {
-        if (firstIdx === -1) firstIdx = ti;
-        pi += 1;
-      }
-    }
-    if (pi !== pattern.length) return Number.POSITIVE_INFINITY;
-    const lastIdx = text.lastIndexOf(pattern[pattern.length - 1]);
-    const span = Math.max(1, lastIdx - (firstIdx === -1 ? 0 : firstIdx));
-    return span + firstIdx * 0.2;
-  };
-
-  const timeAgo = (iso?: string | number | null) => {
-    if (!iso) return '';
-    const t = typeof iso === 'number' ? iso : Date.parse(String(iso));
-    if (!Number.isFinite(t)) return '';
-    const diff = Math.floor((Date.now() - t) / 1000);
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    if (diff < 86400 * 30) return `${Math.floor(diff / 86400)}d ago`;
-    return new Date(t).toLocaleDateString();
   };
 
   const formatDateMMDDYYYY = (iso?: string | number | null) => {
@@ -738,6 +692,44 @@ export default function NoteClusters() {
     return centroids;
   }, [clusterGroups]);
 
+  const selectedClustersCentroid = useMemo(() => {
+    if (selectedClusters.size === 0) return null;
+    const centroids = Array.from(selectedClusters)
+      .map((label) => clusterCentroids.get(label))
+      .filter((centroid): centroid is { x: number; y: number; z: number } => !!centroid);
+    if (centroids.length === 0) return null;
+    const sum = centroids.reduce((acc, centroid) => ({
+      x: acc.x + centroid.x,
+      y: acc.y + centroid.y,
+      z: acc.z + centroid.z,
+    }), { x: 0, y: 0, z: 0 });
+    sum.x /= centroids.length;
+    sum.y /= centroids.length;
+    sum.z /= centroids.length;
+    const norm = Math.sqrt(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z) || 1;
+    return { x: sum.x, y: sum.y, z: sum.z, norm };
+  }, [clusterCentroids, selectedClusters]);
+
+  const distanceToNearestCluster = useCallback(
+    (label: string, anchors: string[]) => {
+      const current = clusterCentroids.get(label);
+      if (!current || anchors.length === 0) return Number.POSITIVE_INFINITY;
+
+      let minDistance = Number.POSITIVE_INFINITY;
+      anchors.forEach((anchorLabel) => {
+        const centroid = clusterCentroids.get(anchorLabel);
+        if (!centroid) return;
+        const dx = current.x - centroid.x;
+        const dy = current.y - centroid.y;
+        const dz = current.z - centroid.z;
+        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance < minDistance) minDistance = distance;
+      });
+      return minDistance;
+    },
+    [clusterCentroids],
+  );
+
   const clusterOrderScores = useMemo(() => {
     const scores = new Map<string, { spike: number; momentum: number }>();
     const sums = new Map<string, { sum: number; count: number; max: number }>();
@@ -785,23 +777,6 @@ export default function NoteClusters() {
 
   const sortedLabels = useMemo(() => {
     const sorted = Object.keys(clusterGroups);
-
-    const distanceToNearest = (label: string, anchors: string[]) => {
-      const current = clusterCentroids.get(label);
-      if (!current || anchors.length === 0) return Number.POSITIVE_INFINITY;
-
-      let minDistance = Number.POSITIVE_INFINITY;
-      anchors.forEach((anchorLabel) => {
-        const centroid = clusterCentroids.get(anchorLabel);
-        if (!centroid) return;
-        const dx = current.x - centroid.x;
-        const dy = current.y - centroid.y;
-        const dz = current.z - centroid.z;
-        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (distance < minDistance) minDistance = distance;
-      });
-      return minDistance;
-    };
 
     // When similarity ordering is requested via selected clusters or selected notes
     if (searchLegendOrderMode === 'similarity' && selectedSearchNotes.size > 0 && selectedNotesCentroid) {
@@ -899,7 +874,7 @@ export default function NoteClusters() {
       });
 
       const distanceToNearestHitCluster = (label: string) => {
-        return distanceToNearest(label, hitLabels);
+        return distanceToNearestCluster(label, hitLabels);
       };
 
       sorted.sort((a, b) => {
@@ -955,8 +930,8 @@ export default function NoteClusters() {
         if (rankA !== undefined) return -1;
         if (rankB !== undefined) return 1;
 
-        const distA = distanceToNearest(a, hitLabels);
-        const distB = distanceToNearest(b, hitLabels);
+        const distA = distanceToNearestCluster(a, hitLabels);
+        const distB = distanceToNearestCluster(b, hitLabels);
         if (distA !== distB) return distA - distB;
 
         const idA = clusterGroups[a].clusterId || a;
@@ -992,28 +967,7 @@ export default function NoteClusters() {
   ]);
 
   const displayedClusterLabels = useMemo(() => {
-    // start from sortedLabels, then apply cluster-name fuzzy filtering and final sort (A-Z / size / recency)
     let list = sortedLabels.slice();
-
-    if (debouncedClusterQuery && debouncedClusterQuery.trim().length > 0) {
-      const q = debouncedClusterQuery.trim();
-      try {
-        const fuseData = list.map((label) => ({ label, clusterLabel: clusterGroups[label]?.clusterLabel || label }));
-        const fuse = new Fuse(fuseData, { keys: ['clusterLabel'], threshold: 0.4, ignoreLocation: true });
-        const res = fuse.search(q);
-        list = res.map((r) => (r.item ? String((r.item as any).label) : String(r.refIndex)));
-      } catch (err) {
-        // fallback
-        const scored = list
-          .map((label) => ({ label, score: fuzzyScore(q, clusterGroups[label]?.clusterLabel || label) }))
-          .filter((s) => Number.isFinite(s.score))
-          .sort((a, b) => a.score - b.score)
-          .map((s) => s.label);
-        list = scored;
-      }
-    }
-
-    // secondary sorts
     if (clusterSortMetric === 'az') {
       list = list.slice().sort((a, b) => {
         const aLabel = (clusterGroups[a]?.clusterLabel || a).toLowerCase();
@@ -1024,6 +978,54 @@ export default function NoteClusters() {
       list = list.slice().sort((a, b) => {
         const sa = clusterGroups[a]?.customdata.length || 0;
         const sb = clusterGroups[b]?.customdata.length || 0;
+        return clusterSortDirection === 'asc' ? sa - sb : sb - sa;
+      });
+    } else if (clusterSortMetric === 'search') {
+      const firstSeenRank = new Map<string, number>();
+      searchResults.forEach((result, index) => {
+        const label = result.display_topic_id || result.cluster_id || '-1';
+        if (clusterGroups[label] && !firstSeenRank.has(label)) {
+          firstSeenRank.set(label, index);
+        }
+      });
+
+      const hitLabels = Array.from(firstSeenRank.keys());
+
+      list = list.slice().sort((a, b) => {
+        const rankA = firstSeenRank.get(a);
+        const rankB = firstSeenRank.get(b);
+
+        if (rankA !== undefined && rankB !== undefined) {
+          return clusterSortDirection === 'asc' ? rankA - rankB : rankB - rankA;
+        }
+        if (rankA !== undefined) return -1;
+        if (rankB !== undefined) return 1;
+
+        const distA = distanceToNearestCluster(a, hitLabels);
+        const distB = distanceToNearestCluster(b, hitLabels);
+        if (distA !== distB) {
+          return clusterSortDirection === 'asc' ? distA - distB : distB - distA;
+        }
+
+        const idA = clusterGroups[a].clusterId || a;
+        const idB = clusterGroups[b].clusterId || b;
+        return compareTopicIds(String(idA), String(idB));
+      });
+    } else if (clusterSortMetric === 'similarity') {
+      list = list.slice().sort((a, b) => {
+        const centroid = selectedClustersCentroid;
+        if (!centroid) return compareTopicIds(String(clusterGroups[a]?.clusterId || a), String(clusterGroups[b]?.clusterId || b));
+
+        const similarity = (label: string) => {
+          const point = clusterCentroids.get(label);
+          if (!point) return Number.NEGATIVE_INFINITY;
+          const dot = point.x * centroid.x + point.y * centroid.y + point.z * centroid.z;
+          const norm = Math.sqrt(point.x * point.x + point.y * point.y + point.z * point.z) || 1;
+          return dot / (norm * centroid.norm);
+        };
+
+        const sa = similarity(a);
+        const sb = similarity(b);
         return clusterSortDirection === 'asc' ? sa - sb : sb - sa;
       });
     } else if (clusterSortMetric === 'recency') {
@@ -1044,7 +1046,63 @@ export default function NoteClusters() {
     }
 
     return list;
-  }, [sortedLabels, debouncedClusterQuery, clusterGroups, clusterSortMetric, clusterSortDirection, clusterOrderScores]);
+  }, [sortedLabels, clusterGroups, clusterSortMetric, clusterSortDirection, clusterOrderScores, clusterAverageRelevance, clusterCentroids, selectedClustersCentroid]);
+
+  const displayedSearchResults = useMemo(() => {
+    const sorted = searchResults.slice();
+
+    const getModifiedTimestamp = (result: SearchResult) => {
+      const match = data.find((point) => point.unique_key === result.unique_key);
+      const parsed = Date.parse(String(match?.modification_date || ''));
+      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    };
+
+    const getSize = (result: SearchResult) => {
+      const match = data.find((point) => point.unique_key === result.unique_key);
+      return match?.total_chunks ?? result.total_chunks ?? 0;
+    };
+
+    if (notesSortMetric === 'search') {
+      const order = new Map(searchResults.map((result, index) => [result.unique_key, index]));
+      sorted.sort((a, b) => {
+        const ra = order.get(a.unique_key) ?? Number.POSITIVE_INFINITY;
+        const rb = order.get(b.unique_key) ?? Number.POSITIVE_INFINITY;
+        if (ra !== rb) {
+          return notesSortDirection === 'asc' ? ra - rb : rb - ra;
+        }
+        return notesSortDirection === 'asc'
+          ? a.title.localeCompare(b.title, undefined, { numeric: true })
+          : b.title.localeCompare(a.title, undefined, { numeric: true });
+      });
+      return sorted;
+    }
+
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      if (notesSortMetric === 'size') {
+        cmp = getSize(a) - getSize(b);
+      } else {
+        cmp = getModifiedTimestamp(a) - getModifiedTimestamp(b);
+      }
+
+      if (cmp === 0) {
+        cmp = a.title.localeCompare(b.title, undefined, { numeric: true });
+      }
+
+      return notesSortDirection === 'asc' ? cmp : -cmp;
+    });
+
+    return sorted;
+  }, [data, notesSortDirection, notesSortMetric, searchResults]);
+
+  useEffect(() => {
+    if (clusterSortMetric === 'search' && searchResults.length === 0) {
+      setClusterSortMetric('momentum');
+    }
+    if (clusterSortMetric === 'similarity' && selectedClusters.size === 0) {
+      setClusterSortMetric('momentum');
+    }
+  }, [clusterSortMetric, searchResults.length, selectedClusters.size]);
 
 
   const hasActiveClusterFilter = selectedClusters.size > 0;
@@ -1966,8 +2024,8 @@ export default function NoteClusters() {
 
               <button
                 type="button"
-                onClick={() => setHideOtherClusters(false)}
-                title="Show All"
+                onClick={() => setHideOtherClusters((value) => !value)}
+                title={hideOtherClusters ? 'Show All Clusters' : 'Show Selected (Hide Others)'}
                 style={{
                   width: 36,
                   height: 36,
@@ -1977,53 +2035,14 @@ export default function NoteClusters() {
                   borderRadius: 8,
                   border: 'none',
                   cursor: 'pointer',
-                  background: !hideOtherClusters ? '#eef6ec' : 'transparent',
+                  background: hideOtherClusters ? '#fff1f2' : '#eef6ec',
                 }}
               >
-                <VisibilityIcon style={{ color: !hideOtherClusters ? '#16a34a' : '#9ca3af' }} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setHideOtherClusters(true)}
-                title="Show Selected (Hide Others)"
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: hideOtherClusters ? '#fff1f2' : 'transparent',
-                }}
-              >
-                <VisibilityOffIcon style={{ color: hideOtherClusters ? '#dc2626' : '#9ca3af' }} />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-              <button
-                type="button"
-                onClick={() => setHideOtherClusters(!hideOtherClusters)}
-                style={{
-                  flex: 1,
-                  padding: '6px 8px',
-                  fontSize: '13px',
-                  borderRadius: '6px',
-                  border: hideOtherClusters ? '1px solid #1f2937' : '1px solid #ccc',
-                  background: hideOtherClusters ? '#fff' : '#fff',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                }}
-                title={hideOtherClusters ? 'Show Selected (Hide Others active)' : 'Show All Clusters'}
-              >
-                {hideOtherClusters ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                <span style={{ marginLeft: 6, fontSize: 12 }}>{hideOtherClusters ? 'Show Selected' : 'Show All'}</span>
+                {hideOtherClusters ? (
+                  <VisibilityOffIcon style={{ color: '#dc2626' }} />
+                ) : (
+                  <VisibilityIcon style={{ color: '#16a34a' }} />
+                )}
               </button>
             </div>
 
@@ -2048,14 +2067,24 @@ export default function NoteClusters() {
                 <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
                   Direction
                 </label>
-                <select
-                  value={notesSortDirection}
-                  onChange={(e) => setNotesSortDirection(e.target.value as SortDirection)}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
+                <button
+                  type="button"
+                  onClick={() => setNotesSortDirection((dir) => (dir === 'asc' ? 'desc' : 'asc'))}
+                  title={notesSortDirection === 'asc' ? 'Increasing' : 'Decreasing'}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    borderRadius: '6px',
+                    border: '1px solid #ccc',
+                    background: '#fff',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
                 >
-                  <option value="desc">Decreasing</option>
-                  <option value="asc">Increasing</option>
-                </select>
+                  {notesSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
+                </button>
               </div>
             </div>
 
@@ -2075,16 +2104,6 @@ export default function NoteClusters() {
                   boxSizing: 'border-box',
                 }}
               />
-              <div style={{ marginTop: '8px' }}>
-                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>Search Clusters</label>
-                <input
-                  type="text"
-                  placeholder="Cluster name..."
-                  value={clusterSearchQuery}
-                  onChange={handleClusterSearch}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
-                />
-              </div>
               {selectedClusterSummaries.length > 0 && (
                 <div
                   style={{
@@ -2135,7 +2154,7 @@ export default function NoteClusters() {
                   Select clusters to view their notes.
                 </div>
               )}
-              {searchResults.map((result) => {
+              {displayedSearchResults.map((result) => {
                 const resultClusterKey = result.display_topic_id || result.cluster_id || '-1';
                 const preview = (result.preview || '').trim();
                 const isHovered = hoveredId === result.unique_key;
@@ -2217,7 +2236,7 @@ export default function NoteClusters() {
                         (Chunk {result.chunk_index + 1} of {result.total_chunks || '?'})
                       </span>
                       {pointMatch?.modification_date && (
-                        <span style={{ float: 'right', fontSize: '0.8em', color: '#666' }}>{timeAgo(pointMatch.modification_date)}</span>
+                        <span style={{ float: 'right', fontSize: '0.8em', color: '#666' }}>{formatDateMMDDYYYY(pointMatch.modification_date)}</span>
                       )}
                     </div>
                     <div
@@ -2713,30 +2732,32 @@ export default function NoteClusters() {
             </h3>
             <div style={{ minHeight: '30px', marginBottom: '8px', userSelect: 'none' }}>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 11 }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: 11, flexWrap: 'wrap' }}>
                   {([
                     { key: 'recency', label: 'Recency' },
                     { key: 'momentum', label: 'Momentum' },
                     { key: 'az', label: 'A–Z' },
                     { key: 'size', label: 'Size' },
+                    ...(searchResults.length > 0 ? [{ key: 'search', label: 'Search Relevance' }] : []),
+                    ...(selectedClusters.size > 0 ? [{ key: 'similarity', label: 'Cluster Similarity' }] : []),
                   ] as Array<{ key: ClusterSortMetric; label: string }>).map((opt, idx, arr) => (
                     <span key={opt.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <button
-                          type="button"
-                          onClick={() => setClusterSortMetric(opt.key)}
-                          style={{
-                            background: clusterSortMetric === opt.key ? '#eef2ff' : 'transparent',
-                            border: clusterSortMetric === opt.key ? '1px solid #c7d2fe' : 'none',
-                            padding: '4px 6px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
-                            fontWeight: clusterSortMetric === opt.key ? 700 : 600,
-                            color: '#111827',
-                            fontSize: 11,
-                          }}
-                        >
-                          {opt.label}
-                        </button>
+                        type="button"
+                        onClick={() => setClusterSortMetric(opt.key)}
+                        style={{
+                          background: clusterSortMetric === opt.key ? '#eef2ff' : 'transparent',
+                          border: clusterSortMetric === opt.key ? '1px solid #c7d2fe' : 'none',
+                          padding: '4px 6px',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          fontWeight: clusterSortMetric === opt.key ? 700 : 600,
+                          color: '#111827',
+                          fontSize: 11,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
                       {idx < arr.length - 1 && <span style={{ color: '#9ca3af' }}>•</span>}
                     </span>
                   ))}
