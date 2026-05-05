@@ -2286,7 +2286,12 @@ export default function NoteClusters() {
                     }}
                     title={note.title}
                   >
-                    {note.title}
+                    <span>{note.title}</span>
+                    {note.modification_date && (
+                      <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
+                        {formatDateMMDDYYYY(note.modification_date)}
+                      </span>
+                    )}
                   </div>
 
                   {note.chunks.length > 1 && (
