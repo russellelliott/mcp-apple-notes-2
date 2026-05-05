@@ -1111,9 +1111,9 @@ export default function NoteClusters() {
 
         const oneDay = 24 * 60 * 60 * 1000;
         const diffDays = Math.floor((Date.now() - representativeDate) / oneDay);
-        if (diffDays <= 1) return '1 day ago';
-        if (diffDays <= 7) return '7 days ago';
-        if (diffDays <= 30) return '30 days ago';
+        if (diffDays <= 1) return 'Today & Yesterday';
+        if (diffDays <= 7) return 'Last 7 Days';
+        if (diffDays <= 30) return 'Last 30 Days';
 
         return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(
           new Date(representativeDate),
