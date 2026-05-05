@@ -1095,6 +1095,36 @@ export default function NoteClusters() {
     return sorted;
   }, [data, notesSortDirection, notesSortMetric, searchResults]);
 
+  const getClusterSectionTitle = useCallback(
+    (label: string) => {
+      if (clusterSortMetric === 'recency' || clusterSortMetric === 'momentum') {
+        const dates = (clusterGroups[label]?.customdata || [])
+          .map((point) => Date.parse(String(point.modification_date || '')))
+          .filter(Number.isFinite) as number[];
+
+        if (dates.length === 0) return 'Unknown date';
+
+        const representativeDate =
+          clusterSortMetric === 'momentum'
+            ? Math.round(dates.reduce((sum, value) => sum + value, 0) / dates.length)
+            : Math.max(...dates);
+
+        const oneDay = 24 * 60 * 60 * 1000;
+        const diffDays = Math.floor((Date.now() - representativeDate) / oneDay);
+        if (diffDays <= 1) return '1 day ago';
+        if (diffDays <= 7) return '7 days ago';
+        if (diffDays <= 30) return '30 days ago';
+
+        return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(
+          new Date(representativeDate),
+        );
+      }
+
+      return '';
+    },
+    [clusterGroups, clusterSortMetric],
+  );
+
   useEffect(() => {
     if (clusterSortMetric === 'search' && searchResults.length === 0) {
       setClusterSortMetric('momentum');
@@ -2662,7 +2692,7 @@ export default function NoteClusters() {
 
           <div
             style={{
-              width: '360px',
+              width: '420px',
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -2811,6 +2841,17 @@ export default function NoteClusters() {
                       </div>,
                     );
                   }
+                } else if (clusterSortMetric === 'recency' || clusterSortMetric === 'momentum') {
+                  const prev = displayedClusterLabels[idx - 1];
+                  const currentSection = getClusterSectionTitle(label);
+                  const prevSection = prev ? getClusterSectionTitle(prev) : '';
+                  if (!prev || currentSection !== prevSection) {
+                    items.push(
+                      <div key={`divider-${label}`} style={{ padding: '6px 6px', color: '#6b7280', fontWeight: 700 }}>
+                        {currentSection}
+                      </div>,
+                    );
+                  }
                 }
 
                 items.push(
@@ -2859,6 +2900,11 @@ export default function NoteClusters() {
                       isSelected={isSelected}
                       isDimmed={isDimmed}
                     />
+                    {clusterSortMetric === 'size' && (
+                      <span style={{ marginLeft: '8px', color: '#6b7280', fontWeight: 600, fontSize: '0.85em' }}>
+                        {group.customdata.length} chunk{group.customdata.length === 1 ? '' : 's'}
+                      </span>
+                    )}
                   </div>,
                 );
 
