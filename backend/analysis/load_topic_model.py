@@ -528,7 +528,7 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
         "Don't try to include all the topic words. Given the provided text, provide an overview of what the cluster is rather than literally what the content is on a surface level. "
         "In terms of the topic names, go deeper into what the content is about in essence beyond what it literally is. "
         "Figure out what the content is in a broader sense rather than what it is on the surface. Avoid trying to include all the topic words in the title itself; that just infers the contents and general ideas. "
-        "Do NOT start or end the name with the word \"cluster\". "
+        "Do NOT start the name with the word \"cluster\" (case-insensitive) or with any phrase that begins with it — for example: \"Cluster Summary:\", \"Cluster Overview:\", \"Cluster Title:\", \"Cluster Of\", or \"Cluster: \". It's acceptable if the word \"cluster\" appears at the end of the name. "
         "Rules: Plain English only. No emojis. No hashtags. No special characters except spaces. "
         "Return ONLY the name."
     )
