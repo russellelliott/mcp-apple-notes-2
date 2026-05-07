@@ -159,12 +159,10 @@ def _build_nested_tree(
         key=lambda x: _display_topic_sort_key(x[0])
     )
     
-    for display_id, cluster_info in sorted_displays:
+    def _insert_node(tree_node: Dict[str, Dict[str, Any]], display_id: str, cluster_info: Dict[str, Any]) -> None:
         parts = display_id.split('.')
-        
-        # Determine nesting level and parent
-        if len(parts) == 2:  # e.g., "0.0" - direct child of base
-            tree[display_id] = {
+        if len(parts) == 2:
+            tree_node[display_id] = {
                 "display_topic_id": display_id,
                 "cluster_name": cluster_info["cluster_name"],
                 "chunk_count": cluster_info["chunk_count"],
@@ -172,18 +170,36 @@ def _build_nested_tree(
                 "percent_of_parent_cluster": round(_safe_percentage(cluster_info["chunk_count"], base_cluster_count), 2),
                 "nested_clusters": {},
             }
-        else:  # e.g., "0.0.0" - nested deeper, find parent in tree
-            parent_id = '.'.join(parts[:-1])  # e.g., "0.0" for "0.0.0"
-            if parent_id in tree:
-                tree[parent_id]["nested_clusters"][display_id] = {
-                    "display_topic_id": display_id,
-                    "cluster_name": cluster_info["cluster_name"],
-                    "chunk_count": cluster_info["chunk_count"],
-                    "percent_of_total_chunks": round(_safe_percentage(cluster_info["chunk_count"], total_chunks), 2),
-                    "percent_of_parent_cluster": round(_safe_percentage(cluster_info["chunk_count"], 
-                                                       nested_clusters.get(parent_id, {}).get("chunk_count", 1)), 2),
-                    "nested_clusters": {},
-                }
+            return
+
+        parent_id = '.'.join(parts[:-1])
+        if parent_id not in tree_node:
+            # Create a placeholder parent so deeper descendants can still be attached.
+            parent_info = nested_clusters.get(parent_id, cluster_info)
+            tree_node[parent_id] = {
+                "display_topic_id": parent_id,
+                "cluster_name": parent_info.get("cluster_name", f"Intermediate {parent_id}"),
+                "chunk_count": parent_info.get("chunk_count", 0),
+                "percent_of_total_chunks": round(_safe_percentage(parent_info.get("chunk_count", 0), total_chunks), 2),
+                "percent_of_parent_cluster": round(_safe_percentage(parent_info.get("chunk_count", 0), base_cluster_count), 2),
+                "nested_clusters": {},
+                "is_inferred": True,
+            }
+
+        if "nested_clusters" not in tree_node[parent_id]:
+            tree_node[parent_id]["nested_clusters"] = {}
+
+        tree_node[parent_id]["nested_clusters"][display_id] = {
+            "display_topic_id": display_id,
+            "cluster_name": cluster_info["cluster_name"],
+            "chunk_count": cluster_info["chunk_count"],
+            "percent_of_total_chunks": round(_safe_percentage(cluster_info["chunk_count"], total_chunks), 2),
+            "percent_of_parent_cluster": round(_safe_percentage(cluster_info["chunk_count"], nested_clusters.get(parent_id, {}).get("chunk_count", 1)), 2),
+            "nested_clusters": {},
+        }
+
+    for display_id, cluster_info in sorted_displays:
+        _insert_node(tree, display_id, cluster_info)
     
     return tree
 
@@ -219,7 +235,7 @@ def _print_nested_clusters(nested_dict: Dict[str, Dict[str, Any]], indent: int =
     """Recursively print nested clusters with proper indentation."""
     for display_id in sorted(nested_dict.keys(), key=_display_topic_sort_key):
         cluster = nested_dict[display_id]
-        indent_str = " " * (indent * 3)
+        indent_str = " " * (indent * 4)
         
         cluster_name = str(cluster.get("cluster_name", "Unknown")).replace("\n", " ").strip()
         if len(cluster_name) > 40:

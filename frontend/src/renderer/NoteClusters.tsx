@@ -2912,7 +2912,7 @@ export default function NoteClusters() {
                       className="cluster-id"
                       style={{ color: idColor, fontWeight: isSelected ? 700 : 600 }}
                     >
-                      #{cid}
+                      {cid}
                     </div>
                     <ClusterLabel
                       label={displayLabel}

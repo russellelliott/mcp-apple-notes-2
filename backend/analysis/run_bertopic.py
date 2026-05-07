@@ -499,13 +499,24 @@ topic_model.update_topics(docs, topics=new_topics)
 print("🔄 Checking for oversized subclusters requiring recursive splitting...")
 
 
-def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int, cluster_pct: float):
-    """Split one finalized cluster into a nested subcluster model."""
+def _split_oversized_cluster(
+    display_id: str,
+    indices: list,
+    cluster_count: int,
+    cluster_pct: float,
+    depth: int = 1,
+    max_depth: int = 6,
+):
+    """Split one finalized cluster into a nested subcluster model and recurse into oversized children."""
     if len(indices) < 3:
         print("      ⚠️ Skipping: not enough chunks for stable sub-clustering")
         return
 
     if display_id == "-1" or display_id.startswith("-1."):
+        return
+
+    if depth > max_depth:
+        print(f"      ⚠️ Skipping {display_id}: reached max recursive depth ({max_depth})")
         return
 
     cluster_docs = [docs[i] for i in indices]
@@ -594,6 +605,7 @@ def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int,
                     recursive_sub_topics[pos] = assigned_child
 
     recursive_child_dist = Counter()
+    recursive_child_groups = {}
     for local_idx, recursive_child in enumerate(recursive_sub_topics):
         global_idx = int(indices[local_idx])
         normalized_recursive_child = int(recursive_child)
@@ -614,6 +626,7 @@ def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int,
             f"Subtopic {normalized_recursive_child}"
         )
         recursive_child_dist[str(normalized_recursive_child)] += 1
+        recursive_child_groups.setdefault(normalized_recursive_child, []).append(global_idx)
 
     parent_parts = str(display_id).split('.')
     submodel_nested_path = submodel_root
@@ -640,6 +653,25 @@ def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int,
         print(f"      ✅ Saved recursive submodel: {submodel_nested_path}")
     except Exception as e:
         print(f"      ⚠️ Failed to save recursive submodel for {display_id}: {e}")
+
+    # Recurse into any child cluster that still exceeds the oversized threshold.
+    if depth < max_depth:
+        for child_id, child_indices in sorted(recursive_child_groups.items(), key=lambda item: item[0]):
+            child_display_id = f"{display_id}.{child_id}"
+            child_count = len(child_indices)
+            child_pct = (child_count / total_chunks) * 100 if total_chunks > 0 else 0.0
+            if child_count >= mega_cluster_threshold:
+                print(
+                    f"      🔬 Recursively splitting child {child_display_id} ({child_count} chunks, {child_pct:.2f}%)"
+                )
+                _split_oversized_cluster(
+                    child_display_id,
+                    child_indices,
+                    child_count,
+                    child_pct,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                )
 
 
 final_cluster_indices = {}
