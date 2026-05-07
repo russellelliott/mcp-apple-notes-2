@@ -495,6 +495,208 @@ print(f"\n✨ Total outlier reduction: {outliers_before} → {outliers_final} ({
 
 topic_model.update_topics(docs, topics=new_topics)
 
+# === RECURSIVE SECONDARY CLUSTER SPLITTING (after all outlier reassignment) ===
+print("🔄 Checking for oversized subclusters requiring recursive splitting...")
+
+
+def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int, cluster_pct: float):
+    """Split one finalized cluster into a nested subcluster model."""
+    if len(indices) < 3:
+        print("      ⚠️ Skipping: not enough chunks for stable sub-clustering")
+        return
+
+    if display_id == "-1" or display_id.startswith("-1."):
+        return
+
+    cluster_docs = [docs[i] for i in indices]
+    cluster_embeddings = vectors[indices]
+
+    local_neighbors = min(30, max(2, len(cluster_docs) - 1))
+    local_min_cluster_size = max(5, min(20, len(cluster_docs) // 20))
+    local_min_cluster_size = min(local_min_cluster_size, len(cluster_docs))
+
+    recursive_sub_model = BERTopic(
+        embedding_model=embedding_model,
+        umap_model=UMAP(
+            n_neighbors=local_neighbors,
+            n_components=5,
+            min_dist=0.0,
+            metric='cosine'
+        ),
+        hdbscan_model=HDBSCAN(
+            min_cluster_size=max(2, local_min_cluster_size),
+            min_samples=2,
+            cluster_selection_method='eom',
+            prediction_data=True,
+        ),
+        vectorizer_model=vectorizer_model,
+        ctfidf_model=ctfidf_model,
+        representation_model=representation_model,
+        calculate_probabilities=True,
+    )
+
+    try:
+        recursive_sub_topics, _ = recursive_sub_model.fit_transform(cluster_docs, embeddings=cluster_embeddings)
+    except Exception as e:
+        print(f"      ⚠️ Failed to split {display_id}: {e}")
+        return
+
+    recursive_sub_topics = np.array(recursive_sub_topics, dtype=int)
+
+    sub_topic_info = recursive_sub_model.get_topic_info()
+    recursive_label_map = {}
+    if sub_topic_info is not None and not sub_topic_info.empty:
+        for _, row in sub_topic_info.iterrows():
+            topic_id = int(row.get("Topic", -1))
+            if "Label" in sub_topic_info.columns:
+                recursive_label_map[topic_id] = _extract_topic_name(row.get("Label"), f"Subtopic {topic_id}")
+            elif "Name" in sub_topic_info.columns:
+                recursive_label_map[topic_id] = _extract_topic_name(row.get("Name"), f"Subtopic {topic_id}")
+            else:
+                recursive_label_map[topic_id] = f"Subtopic {topic_id}"
+
+    unique_children = sorted(set(recursive_sub_topics.tolist()))
+    valid_children = [child for child in unique_children if child >= 0]
+
+    if not valid_children:
+        recursive_sub_topics = np.zeros(len(recursive_sub_topics), dtype=int)
+        valid_children = [0]
+        if 0 not in recursive_label_map:
+            recursive_label_map[0] = "Subtopic 0"
+    else:
+        outlier_positions = np.where(recursive_sub_topics < 0)[0]
+        if len(outlier_positions) > 0:
+            child_centroids = []
+            centroid_child_ids = []
+            for child_id in valid_children:
+                child_positions = np.where(recursive_sub_topics == child_id)[0]
+                if len(child_positions) == 0:
+                    continue
+                centroid = cluster_embeddings[child_positions].mean(axis=0)
+                child_centroids.append(centroid)
+                centroid_child_ids.append(child_id)
+
+            if child_centroids:
+                centroid_matrix = np.vstack(child_centroids)
+                centroid_norms = np.linalg.norm(centroid_matrix, axis=1, keepdims=True)
+                centroid_norms[centroid_norms == 0] = 1.0
+                centroid_matrix = centroid_matrix / centroid_norms
+
+                for pos in outlier_positions:
+                    vec = cluster_embeddings[pos]
+                    vec_norm = np.linalg.norm(vec)
+                    if vec_norm == 0:
+                        assigned_child = centroid_child_ids[0]
+                    else:
+                        sims = centroid_matrix @ (vec / vec_norm)
+                        assigned_child = centroid_child_ids[int(np.argmax(sims))]
+                    recursive_sub_topics[pos] = assigned_child
+
+    recursive_child_dist = Counter()
+    for local_idx, recursive_child in enumerate(recursive_sub_topics):
+        global_idx = int(indices[local_idx])
+        normalized_recursive_child = int(recursive_child)
+        new_display_id = f"{display_id}.{normalized_recursive_child}"
+
+        subcluster_lookup[global_idx] = {
+            "base_topic_id": str(new_topics[global_idx]),
+            "display_topic_id": new_display_id,
+            "subcluster_label": recursive_label_map.get(
+                normalized_recursive_child,
+                f"Subtopic {normalized_recursive_child}"
+            ),
+            "is_split_child": True,
+        }
+
+        mega_child_label_map[(str(display_id), normalized_recursive_child)] = recursive_label_map.get(
+            normalized_recursive_child,
+            f"Subtopic {normalized_recursive_child}"
+        )
+        recursive_child_dist[str(normalized_recursive_child)] += 1
+
+    parent_parts = str(display_id).split('.')
+    submodel_nested_path = submodel_root
+    for part in parent_parts[:-1]:
+        submodel_nested_path = submodel_nested_path / f"topic_{part}"
+    submodel_nested_path = submodel_nested_path / f"subtopic_{parent_parts[-1]}"
+
+    submodel_nested_path.mkdir(parents=True, exist_ok=True)
+    try:
+        recursive_sub_model.save(
+            submodel_nested_path,
+            serialization="safetensors",
+            save_ctfidf=True
+        )
+        submodel_manifest[display_id] = {
+            "parent_display_id": display_id,
+            "threshold": mega_cluster_threshold,
+            "chunk_count": int(cluster_count),
+            "chunk_pct": float(cluster_pct),
+            "submodel_path": str(submodel_nested_path),
+            "child_distribution": dict(recursive_child_dist),
+            "nesting_level": len(str(display_id).split('.')) + 1,
+        }
+        print(f"      ✅ Saved recursive submodel: {submodel_nested_path}")
+    except Exception as e:
+        print(f"      ⚠️ Failed to save recursive submodel for {display_id}: {e}")
+
+
+final_cluster_indices = {}
+for idx, base_topic in enumerate(new_topics):
+    base_topic_int = int(base_topic)
+    if base_topic_int < 0:
+        continue
+
+    if idx in subcluster_lookup:
+        display_id = subcluster_lookup[idx]['display_topic_id']
+    elif base_topic_int in mega_cluster_set:
+        existing_children = [
+            str(m['display_topic_id']).split('.')[-1]
+            for m in subcluster_lookup.values()
+            if m.get('base_topic_id') == str(base_topic_int) and '.' in str(m.get('display_topic_id'))
+        ]
+        fallback_child = Counter(existing_children).most_common(1)[0][0] if existing_children else '0'
+        display_id = f"{base_topic_int}.{fallback_child}"
+    else:
+        display_id = str(base_topic_int)
+
+    if display_id == "-1" or display_id.startswith("-1."):
+        continue
+
+    final_cluster_indices.setdefault(display_id, []).append(idx)
+
+oversized_clusters = {
+    display_id: {
+        'count': len(indices),
+        'pct': (len(indices) / total_chunks) * 100,
+        'indices': indices,
+    }
+    for display_id, indices in final_cluster_indices.items()
+    if len(indices) >= mega_cluster_threshold
+}
+
+if oversized_clusters:
+    print(f"  🎯 Found {len(oversized_clusters)} oversized cluster(s) requiring recursive split")
+    for display_id, cluster_info in sorted(oversized_clusters.items()):
+        depth = len(str(display_id).split('.'))
+        if depth > 3:
+            print(f"    ⚠️ Skipping {display_id}: already deeply nested (depth={depth})")
+            continue
+
+        print(f"    🔬 Recursively splitting {display_id} ({cluster_info['count']} chunks, {cluster_info['pct']:.2f}%)")
+        _split_oversized_cluster(display_id, cluster_info['indices'], cluster_info['count'], cluster_info['pct'])
+
+    if submodel_manifest:
+        manifest_path = submodel_root / "manifest.json"
+        try:
+            with manifest_path.open("w", encoding="utf-8") as mf:
+                json.dump(submodel_manifest, mf, indent=2)
+            print(f"  🗂️ Updated submodel manifest: {manifest_path}")
+        except Exception as e:
+            print(f"  ⚠️ Failed to update submodel manifest: {e}")
+else:
+    print("  ℹ️ No oversized clusters requiring recursive splitting.")
+
 # --- 5. SCHEMA MAPPING & PERSISTENCE ---
 topic_info = topic_model.get_topic_info()
 print(f"DEBUG: topic_info columns: {topic_info.columns.tolist()}")

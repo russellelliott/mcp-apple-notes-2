@@ -35,14 +35,32 @@ def load_submodels(model_dir: Path) -> Dict[str, BERTopic]:
     if not submodels_dir.exists():
         return submodels
 
-    for topic_dir in sorted(submodels_dir.glob("topic_*")):
-        if not topic_dir.is_dir():
-            continue
-        parent_topic = topic_dir.name.replace("topic_", "")
-        try:
-            submodels[parent_topic] = BERTopic.load(topic_dir)
-        except Exception as e:
-            print(f"⚠️ Failed loading submodel {topic_dir}: {e}")
+    def _recursive_load(search_dir: Path, prefix: str = ""):
+        """Recursively load submodels from nested directory structure."""
+        for item in sorted(search_dir.iterdir()):
+            if not item.is_dir():
+                continue
+            
+            # Check if this is a topic/subtopic directory with a model
+            if item.name.startswith("topic_") or item.name.startswith("subtopic_"):
+                # Extract the topic/subtopic number
+                parts = item.name.split("_", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    topic_num = parts[1]
+                    current_id = f"{prefix}.{topic_num}" if prefix else topic_num
+                    
+                    # Try to load model from this directory
+                    try:
+                        model = BERTopic.load(item)
+                        submodels[current_id] = model
+                    except Exception:
+                        # Not a model directory, continue searching
+                        pass
+                    
+                    # Recursively search subdirectories
+                    _recursive_load(item, current_id)
+    
+    _recursive_load(submodels_dir)
     
     if submodels:
         print(f"📦 Loaded {len(submodels)} subtopic models: {sorted(submodels.keys())}")
@@ -221,20 +239,39 @@ def gather_topics(
             
             if '.' in display_id:
                 is_subtopic = True
-                parent_topic, child_topic = display_id.split('.', 1)
-                submodel = submodels.get(parent_topic)
-                if submodel is not None and child_topic.lstrip('-').isdigit():
-                    # Use the submodel for this subtopic
-                    keywords = _get_keywords_for_topic(submodel, int(child_topic))
-                    if keywords:
-                        submodel_path = str(model_dir / "submodels" / f"topic_{parent_topic}")
-                        keywords_source = f"submodel({parent_topic})"
-                else:
-                    # Submodel not found or invalid child topic
-                    if parent_topic in submodels:
-                        print(f"  ⚠️  Subtopic {display_id}: invalid child topic '{child_topic}'")
+                parts = display_id.split('.')
+                
+                # Try to find the appropriate submodel for this nested display ID
+                # For "0.1.2", try submodels["0.1"], then ["0"], then main model
+                found_keywords = False
+                for depth in range(len(parts) - 1, 0, -1):
+                    parent_id = '.'.join(parts[:depth])
+                    child_topic_str = parts[depth]
+                    
+                    submodel = submodels.get(parent_id)
+                    if submodel is not None and child_topic_str.lstrip('-').isdigit():
+                        # Use this submodel for the child topic
+                        keywords = _get_keywords_for_topic(submodel, int(child_topic_str))
+                        if keywords:
+                            # Build the path to the loaded parent submodel.
+                            submodel_path_parts = ["submodels"]
+                            for i, part in enumerate(parent_id.split('.')):
+                                if i == 0:
+                                    submodel_path_parts.append(f"topic_{part}")
+                                else:
+                                    submodel_path_parts.append(f"subtopic_{part}")
+                            submodel_path = str(model_dir / "/".join(submodel_path_parts))
+                            keywords_source = f"submodel({parent_id})"
+                            found_keywords = True
+                            break
+                
+                if not found_keywords:
+                    # Fallback: check if parent_id exists in submodels
+                    parent_id = '.'.join(parts[:-1])
+                    if parent_id in submodels:
+                        print(f"  ⚠️  Subtopic {display_id}: unable to extract keywords from submodel '{parent_id}'")
                     else:
-                        print(f"  ⚠️  Subtopic {display_id}: submodel for topic '{parent_topic}' not found")
+                        print(f"  ⚠️  Subtopic {display_id}: submodel for parent '{parent_id}' not found")
 
             if not keywords:
                 base_topic_str = str(first_row.get('base_topic_id', first_row.get('cluster_id', '-1')))
