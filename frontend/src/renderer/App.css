@@ -72,12 +72,14 @@ a:hover {
 }
 
 .cluster-id {
-  /* widen the id column so long ids like 2.0.30 don't overlap the label */
-  flex: 0 0 88px;
+  /* Keep the id column tight; longest ids fit in a few monospace chars. */
+  flex: 0 0 7ch;
+  width: 7ch;
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 0.92em;
   color: #444;
+  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -86,8 +88,7 @@ a:hover {
 /* Allow the cluster label to take remaining space and handle overflow */
 .cluster-label-container {
   flex: 1 1 auto;
-  min-width: 120px;
-  max-width: calc(100% - 160px);
+  min-width: 0;
   overflow: hidden;
 }
 
