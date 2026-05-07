@@ -46,8 +46,8 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     # Aggregate at base-cluster level (main BERTopic retrieval cluster).
     clusters: Dict[str, Dict[str, Any]] = {}
-    # Track child display clusters for mega-cluster splits.
-    subclusters_by_base: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    # Track nested display clusters (supports multiple levels: 0.0, 0.0.0, 0.0.0.0, etc.)
+    nested_clusters: Dict[str, Dict[str, Any]] = {}
 
     for record in records:
         cluster_id = str(record.get("cluster_id", "-1"))
@@ -61,22 +61,61 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "cluster_id": cluster_id,
                 "cluster_name": str(base_cluster_label),
                 "chunk_count": 0,
-                "subclusters": [],
+                "nested_clusters": {},
             }
 
         clusters[cluster_id]["chunk_count"] += 1
 
-        # A subcluster is recognized as parent.child (e.g. 12.0) that maps to a base topic.
-        if "." in display_topic_id and base_topic_id == cluster_id:
-            if cluster_id not in subclusters_by_base:
-                subclusters_by_base[cluster_id] = {}
-            if display_topic_id not in subclusters_by_base[cluster_id]:
-                subclusters_by_base[cluster_id][display_topic_id] = {
+        # Track any display_topic_id that differs from base (indicates a split cluster)
+        if display_topic_id != cluster_id:
+            if display_topic_id not in nested_clusters:
+                nested_clusters[display_topic_id] = {
                     "display_topic_id": display_topic_id,
-                    "subcluster_name": str(cluster_label),
+                    "cluster_name": str(cluster_label),
                     "chunk_count": 0,
+                    "base_topic_id": cluster_id,
                 }
-            subclusters_by_base[cluster_id][display_topic_id]["chunk_count"] += 1
+            nested_clusters[display_topic_id]["chunk_count"] += 1
+
+    # Infer intermediate cluster levels from their children
+    # E.g., if we have "0.0.0" and "0.0.1", create "0.0" if it doesn't exist
+    inferred_clusters: Dict[str, Dict[str, Any]] = {}
+    for display_id in list(nested_clusters.keys()):
+        parts = display_id.split('.')
+        base_id = parts[0]
+        
+        # For each level between base and this display_id, create intermediate entries
+        for level in range(1, len(parts)):
+            intermediate_id = '.'.join(parts[:level + 1])
+            if intermediate_id not in nested_clusters and intermediate_id not in inferred_clusters:
+                inferred_clusters[intermediate_id] = {
+                    "display_topic_id": intermediate_id,
+                    "cluster_name": f"Intermediate {intermediate_id}",  # Placeholder name
+                    "chunk_count": 0,
+                    "base_topic_id": base_id,
+                    "is_inferred": True,
+                }
+    
+    # Merge inferred clusters with actual ones
+    nested_clusters.update(inferred_clusters)
+    
+    # Calculate chunk counts for inferred clusters (sum of all descendants)
+    def sum_descendants(cluster_id: str, all_clusters: Dict[str, Dict[str, Any]]) -> int:
+        """Recursively sum chunk counts of all descendants."""
+        total = 0
+        prefix = cluster_id + '.'
+        for other_id, other_data in all_clusters.items():
+            if other_id != cluster_id and other_id.startswith(prefix):
+                # Check if it's a direct child (one level deeper)
+                other_parts = other_id.split('.')
+                cluster_parts = cluster_id.split('.')
+                if len(other_parts) == len(cluster_parts) + 1:
+                    # This is a direct child, add its count (it will recursively add its own children)
+                    total += other_data["chunk_count"]
+        return total
+    
+    for inferred_id in inferred_clusters.keys():
+        nested_clusters[inferred_id]["chunk_count"] = sum_descendants(inferred_id, nested_clusters)
 
     cluster_list = sorted(clusters.values(), key=lambda c: _cluster_sort_key(c["cluster_id"]))
 
@@ -86,26 +125,68 @@ def build_cluster_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         cluster["percent_of_total_chunks"] = round(percent, 2)
 
         base_cluster_id = cluster["cluster_id"]
-        subcluster_map = subclusters_by_base.get(base_cluster_id, {})
-        if subcluster_map:
-            sorted_subclusters = sorted(
-                subcluster_map.values(),
-                key=lambda s: _display_topic_sort_key(s["display_topic_id"]),
-            )
-            for subcluster in sorted_subclusters:
-                subcluster["percent_of_total_chunks"] = round(
-                    _safe_percentage(subcluster["chunk_count"], total_chunks), 2
-                )
-                subcluster["percent_of_parent_cluster"] = round(
-                    _safe_percentage(subcluster["chunk_count"], cluster["chunk_count"]), 2
-                )
-            cluster["subclusters"] = sorted_subclusters
+        
+        # Collect all nested clusters that belong to this base cluster
+        belonging_nested = {
+            display_id: info 
+            for display_id, info in nested_clusters.items() 
+            if info["base_topic_id"] == base_cluster_id
+        }
+        
+        if belonging_nested:
+            # Build a tree structure for nested clusters
+            cluster_tree = _build_nested_tree(belonging_nested, base_cluster_id, total_chunks, cluster["chunk_count"])
+            cluster["nested_clusters"] = cluster_tree
 
     return {
         "total_chunks": total_chunks,
         "cluster_count": len(cluster_list),
         "clusters": cluster_list,
     }
+
+
+def _build_nested_tree(
+    nested_clusters: Dict[str, Dict[str, Any]], 
+    base_cluster_id: str, 
+    total_chunks: int,
+    base_cluster_count: int
+) -> Dict[str, Dict[str, Any]]:
+    """Recursively build a tree of nested clusters."""
+    tree: Dict[str, Dict[str, Any]] = {}
+    
+    sorted_displays = sorted(
+        nested_clusters.items(),
+        key=lambda x: _display_topic_sort_key(x[0])
+    )
+    
+    for display_id, cluster_info in sorted_displays:
+        parts = display_id.split('.')
+        
+        # Determine nesting level and parent
+        if len(parts) == 2:  # e.g., "0.0" - direct child of base
+            tree[display_id] = {
+                "display_topic_id": display_id,
+                "cluster_name": cluster_info["cluster_name"],
+                "chunk_count": cluster_info["chunk_count"],
+                "percent_of_total_chunks": round(_safe_percentage(cluster_info["chunk_count"], total_chunks), 2),
+                "percent_of_parent_cluster": round(_safe_percentage(cluster_info["chunk_count"], base_cluster_count), 2),
+                "nested_clusters": {},
+            }
+        else:  # e.g., "0.0.0" - nested deeper, find parent in tree
+            parent_id = '.'.join(parts[:-1])  # e.g., "0.0" for "0.0.0"
+            if parent_id in tree:
+                tree[parent_id]["nested_clusters"][display_id] = {
+                    "display_topic_id": display_id,
+                    "cluster_name": cluster_info["cluster_name"],
+                    "chunk_count": cluster_info["chunk_count"],
+                    "percent_of_total_chunks": round(_safe_percentage(cluster_info["chunk_count"], total_chunks), 2),
+                    "percent_of_parent_cluster": round(_safe_percentage(cluster_info["chunk_count"], 
+                                                       nested_clusters.get(parent_id, {}).get("chunk_count", 1)), 2),
+                    "nested_clusters": {},
+                }
+    
+    return tree
+
 
 
 def print_cluster_stats(report: Dict[str, Any]) -> None:
@@ -128,21 +209,37 @@ def print_cluster_stats(report: Dict[str, Any]) -> None:
         percent = cluster["percent_of_total_chunks"]
         print(f"{cluster_id:<12} {cluster_name:<40} {chunk_count:>10} {percent:>11.2f}%")
 
-        subclusters = cluster.get("subclusters", [])
-        for subcluster in subclusters:
-            subcluster_id = subcluster["display_topic_id"]
-            subcluster_name = str(subcluster.get("subcluster_name", "Unknown")).replace("\n", " ").strip()
-            if len(subcluster_name) > 40:
-                subcluster_name = f"{subcluster_name[:37]}..."
-            subcluster_count = subcluster["chunk_count"]
-            subcluster_percent = subcluster["percent_of_total_chunks"]
-            subcluster_parent_percent = subcluster.get("percent_of_parent_cluster", 0.0)
-            print(
-                f"{'':<12} {('-> ' + subcluster_id + ' | ' + subcluster_name):<40} {subcluster_count:>10} {subcluster_percent:>11.2f}%"
-            )
-            print(
-                f"{'':<12} {('   rate within parent: ' + str(subcluster_parent_percent) + '%'):<40} {'':>10} {'':>12}"
-            )
+        # Recursively print nested clusters
+        nested = cluster.get("nested_clusters", {})
+        if nested:
+            _print_nested_clusters(nested, indent=1)
+
+
+def _print_nested_clusters(nested_dict: Dict[str, Dict[str, Any]], indent: int = 1) -> None:
+    """Recursively print nested clusters with proper indentation."""
+    for display_id in sorted(nested_dict.keys(), key=_display_topic_sort_key):
+        cluster = nested_dict[display_id]
+        indent_str = " " * (indent * 3)
+        
+        cluster_name = str(cluster.get("cluster_name", "Unknown")).replace("\n", " ").strip()
+        if len(cluster_name) > 40:
+            cluster_name = f"{cluster_name[:37]}..."
+        
+        chunk_count = cluster["chunk_count"]
+        percent_total = cluster["percent_of_total_chunks"]
+        percent_parent = cluster.get("percent_of_parent_cluster", 0.0)
+        
+        # Print the cluster line
+        cluster_display = f"-> {display_id} | {cluster_name}"
+        print(f"{indent_str:<12} {cluster_display:<40} {chunk_count:>10} {percent_total:>11.2f}%")
+        
+        # Print the parent percentage line
+        print(f"{indent_str:<12} {('   rate within parent: ' + str(percent_parent) + '%'):<40} {'':>10} {'':>12}")
+        
+        # Recursively print children
+        children = cluster.get("nested_clusters", {})
+        if children:
+            _print_nested_clusters(children, indent + 1)
 
 
 def main() -> None:

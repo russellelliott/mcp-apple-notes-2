@@ -512,7 +512,8 @@ def _split_oversized_cluster(display_id: str, indices: list, cluster_count: int,
     cluster_embeddings = vectors[indices]
 
     local_neighbors = min(30, max(2, len(cluster_docs) - 1))
-    local_min_cluster_size = max(5, min(20, len(cluster_docs) // 20))
+    # More aggressive splitting: lower min_cluster_size to force more granular clusters
+    local_min_cluster_size = max(3, min(10, len(cluster_docs) // 30))
     local_min_cluster_size = min(local_min_cluster_size, len(cluster_docs))
 
     recursive_sub_model = BERTopic(
