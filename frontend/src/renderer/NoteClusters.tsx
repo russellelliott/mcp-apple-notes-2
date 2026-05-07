@@ -1520,17 +1520,25 @@ export default function NoteClusters() {
       // In linear and log modes, show all individual points
       visibleLabels.forEach((label) => {
         const group = clusterGroups[label];
+        const clusterColorBase = clusterColors[label] || '#4b5563';
+        const clusterHasSearchHit = group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
 
         group.customdata.forEach((meta, index) => {
-          const score = searchScoreMap.get(meta.unique_key);
-          const isHit = score !== undefined;
+          const isHit = searchScoreMap.has(meta.unique_key);
           const isHovered = hoveredId === meta.unique_key;
           const isHighlighted = highlightedNodeId === meta.unique_key;
 
           // Keep dot size constant; only adjust brightness/glow for relevance.
           let size = 0.02;
 
-          const dotColor = pointRenderColorMap.get(meta.unique_key) || (clusterColors[label] || '#4b5563');
+          let dotColor = clusterColorBase;
+          if (searchResults.length > 0 && !clusterHasSearchHit) {
+            const c = new THREE.Color(dotColor);
+            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
+            c.getHSL(hsl);
+            c.setHSL(hsl.h, Math.max(0, hsl.s * 0.9), Math.max(0, hsl.l * 0.28));
+            dotColor = c.getStyle();
+          }
           const glowOpacity = hasSearchHits ? (isHit ? 0.24 : 0.06) : 0.2;
           const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
           const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
@@ -1613,11 +1621,9 @@ export default function NoteClusters() {
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
     const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
-    const dotColor = clusterColors[selectedClusterKey]
-      || pointRenderColorMap.get(selectedNode.unique_key)
-      || '#ffffff';
+    const dotColor = clusterColors[selectedClusterKey] || '#ffffff';
     return getDotSurfaceTint(dotColor);
-  }, [clusterColors, pointRenderColorMap, selectedNode]);
+  }, [clusterColors, selectedNode]);
 
   const updateTooltipPosition = useCallback((nativeEvent: PointerEvent | MouseEvent) => {
     if (!plotAreaRef.current) return;
