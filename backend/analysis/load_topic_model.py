@@ -36,14 +36,37 @@ def load_submodels(model_dir: Path) -> Dict[str, BERTopic]:
         return submodels
 
     def _recursive_load(search_dir: Path, prefix: str = ""):
-        """Recursively load submodels from nested directory structure."""
+        """Recursively load submodels from nested directory structure.
+        
+        Expected structure:
+        - topic_X/ = root topic X
+        - topic_X/subtopic_Y/ = subtopic Y of topic X (id = X.Y)
+        - topic_X/subtopic_Y/subtopic_Z/ = subtopic Z of X.Y (id = X.Y.Z)
+        etc.
+        """
         for item in sorted(search_dir.iterdir()):
             if not item.is_dir():
                 continue
             
-            # Check if this is a topic/subtopic directory with a model
-            if item.name.startswith("topic_") or item.name.startswith("subtopic_"):
-                # Extract the topic/subtopic number
+            if item.name.startswith("topic_"):
+                # Root level topic (only at the top)
+                parts = item.name.split("_", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    topic_num = parts[1]
+                    current_id = topic_num
+                    
+                    # Try to load model from this directory
+                    try:
+                        model = BERTopic.load(item)
+                        submodels[current_id] = model
+                    except Exception:
+                        pass
+                    
+                    # Recursively search subdirectories
+                    _recursive_load(item, current_id)
+            
+            elif item.name.startswith("subtopic_"):
+                # Subtopic (at any nesting level)
                 parts = item.name.split("_", 1)
                 if len(parts) == 2 and parts[1].isdigit():
                     topic_num = parts[1]
@@ -54,7 +77,6 @@ def load_submodels(model_dir: Path) -> Dict[str, BERTopic]:
                         model = BERTopic.load(item)
                         submodels[current_id] = model
                     except Exception:
-                        # Not a model directory, continue searching
                         pass
                     
                     # Recursively search subdirectories

@@ -630,9 +630,12 @@ def _split_oversized_cluster(
 
     parent_parts = str(display_id).split('.')
     submodel_nested_path = submodel_root
-    for part in parent_parts[:-1]:
-        submodel_nested_path = submodel_nested_path / f"topic_{part}"
-    submodel_nested_path = submodel_nested_path / f"subtopic_{parent_parts[-1]}"
+    # For the first part, use topic_{X}; for subsequent parts, use subtopic_{X}
+    for i, part in enumerate(parent_parts):
+        if i == 0:
+            submodel_nested_path = submodel_nested_path / f"topic_{part}"
+        else:
+            submodel_nested_path = submodel_nested_path / f"subtopic_{part}"
 
     submodel_nested_path.mkdir(parents=True, exist_ok=True)
     try:
