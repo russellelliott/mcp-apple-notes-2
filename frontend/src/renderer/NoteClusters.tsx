@@ -398,12 +398,12 @@ export default function NoteClusters() {
       );
 
       const newUniqueKey = `${title}_${chunkIndex}`;
-      const existingNode = data.find((d) => d.unique_key === newUniqueKey);
 
-      const cluster_id = existingNode ? existingNode.cluster_id : initialClusterId;
-      const cluster_label = existingNode ? existingNode.cluster_label : initialClusterLabel;
-      const display_topic_id = existingNode ? existingNode.display_topic_id : initialDisplayTopicId;
-      const base_topic_id = existingNode ? existingNode.base_topic_id : initialBaseTopicId;
+      // Prefer authoritative values from the backend row for the opened chunk.
+      const cluster_id = response.data?.cluster_id || initialClusterId;
+      const cluster_label = response.data?.cluster_label || initialClusterLabel;
+      const display_topic_id = response.data?.display_topic_id || initialDisplayTopicId;
+      const base_topic_id = response.data?.base_topic_id || initialBaseTopicId;
 
       setSelectedNode({
         ...response.data,
@@ -553,6 +553,17 @@ export default function NoteClusters() {
     searchResults.forEach((r) => map.set(r.unique_key, r.distance));
     return map;
   }, [searchResults]);
+
+  const clusterNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    data.forEach((point) => {
+      const clusterId = point.display_topic_id || point.cluster_id || '-1';
+      if (!map.has(clusterId) && point.cluster_label) {
+        map.set(clusterId, point.cluster_label);
+      }
+    });
+    return map;
+  }, [data]);
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
@@ -1602,8 +1613,8 @@ export default function NoteClusters() {
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
     const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
-    const dotColor = pointRenderColorMap.get(selectedNode.unique_key)
-      || clusterColors[selectedClusterKey]
+    const dotColor = clusterColors[selectedClusterKey]
+      || pointRenderColorMap.get(selectedNode.unique_key)
       || '#ffffff';
     return getDotSurfaceTint(dotColor);
   }, [clusterColors, pointRenderColorMap, selectedNode]);
@@ -1961,11 +1972,14 @@ export default function NoteClusters() {
       .map((row) => ({
         chunk_index: row.chunk_index,
         cluster_id: row.display_topic_id || row.cluster_id || '-1',
-        cluster_name: row.cluster_label || 'Unclustered',
+        cluster_name:
+          clusterNameById.get(row.display_topic_id || row.cluster_id || '-1')
+          || row.cluster_label
+          || 'Unclustered',
         in_cluster: (row.display_topic_id || row.cluster_id || '') === selectedClusterId,
         text: null,
       }));
-  }, [data, selectedNode]);
+  }, [clusterNameById, data, selectedNode]);
 
   const handleModalChunkJump = useCallback(
     (chunkIndex: number) => {
@@ -2441,7 +2455,7 @@ export default function NoteClusters() {
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                   <div style={{ fontSize: '0.9em', color: '#555', textAlign: 'left' }}>
-                    Cluster {selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?'}:{' '}
+                    Cluster {selectedNode.display_topic_id || (selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?')}:{' '}
                     {selectedNode.cluster_label}
                   </div>
                   <div style={{ fontSize: '0.85em', color: '#666' }}>{formatDateMMDDYYYY(selectedNode.modification_date)}</div>

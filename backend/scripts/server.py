@@ -185,6 +185,8 @@ class NoteContent(BaseModel):
     chunk_index: int
     content: str
     total_chunks: int
+    cluster_id: Optional[str] = None
+    cluster_label: Optional[str] = None
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
 
@@ -248,6 +250,8 @@ async def get_note_content(
             chunk_index=chunk_index,
             content=str(content),
             total_chunks=int(total),
+            cluster_id=(str(row.iloc[0].get('cluster_id')) if row.iloc[0].get('cluster_id') is not None else None),
+            cluster_label=(str(row.iloc[0].get('cluster_label')) if row.iloc[0].get('cluster_label') is not None else None),
             base_topic_id=(str(row.iloc[0].get('base_topic_id')) if row.iloc[0].get('base_topic_id') is not None else None),
             display_topic_id=(str(row.iloc[0].get('display_topic_id')) if row.iloc[0].get('display_topic_id') is not None else None),
         )
@@ -467,6 +471,18 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
 @app.get("/health")
 async def health():
     return {"status": "ok", "loaded_rows": len(state.df_viz)}
+
+
+@app.post("/reload_data")
+async def reload_data():
+    """Force reload data from LanceDB and recompute UMAP/projections.
+    Useful after running clustering scripts so the API reflects DB updates.
+    """
+    try:
+        load_and_process_data()
+        return {"reloaded": True, "loaded_rows": len(state.df_viz)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
