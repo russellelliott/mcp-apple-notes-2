@@ -247,10 +247,10 @@ def _print_nested_clusters(nested_dict: Dict[str, Dict[str, Any]], indent: int =
         
         # Print the cluster line
         cluster_display = f"-> {display_id} | {cluster_name}"
-        print(f"{indent_str:<12} {cluster_display:<40} {chunk_count:>10} {percent_total:>11.2f}%")
+        print(f"{indent_str}{cluster_display:<40} {chunk_count:>10} {percent_total:>11.2f}%")
         
         # Print the parent percentage line
-        print(f"{indent_str:<12} {('   rate within parent: ' + str(percent_parent) + '%'):<40} {'':>10} {'':>12}")
+        print(f"{indent_str}{'   rate within parent: ' + str(percent_parent) + '%':<40} {'':>10} {'':>12}")
         
         # Recursively print children
         children = cluster.get("nested_clusters", {})
