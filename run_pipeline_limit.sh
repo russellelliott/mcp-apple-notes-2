@@ -23,4 +23,10 @@ echo "Running BERTopic analysis..."
 cd "$ROOT_DIR/backend/analysis"
 python run_bertopic.py
 
+# 3. Run backend/analysis/load_topic_model.py
+echo "Running topic-generation utilities (load saved model)..."
+python load_topic_model.py
+
+echo "Topic generation step finished."
+
 echo "Pipeline finished successfully."
