@@ -347,7 +347,7 @@ export default function NoteClusters() {
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
   const [hideOtherClusters, setHideOtherClusters] = useState(false);
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
-  const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('momentum');
+  const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('recency');
   const [clusterSortDirection, setClusterSortDirection] = useState<SortDirection>('desc');
   const [notesSortMetric, setNotesSortMetric] = useState<NotesSortMetric>('modified');
   const [notesSortDirection, setNotesSortDirection] = useState<SortDirection>('desc');
