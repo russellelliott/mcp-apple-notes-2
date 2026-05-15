@@ -381,6 +381,7 @@ export default function NoteClusters() {
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
   const notesListRef = useRef<HTMLDivElement | null>(null);
+  const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string }>>(new Map());
 
   const fetchNoteContent = async (
     title: string,
@@ -422,6 +423,12 @@ export default function NoteClusters() {
         creation_date: creationDate,
         modification_date: modificationDate,
         unique_key: newUniqueKey,
+      });
+      // Cache the authoritative cluster info from backend for this unique_key
+      const cacheClusId = cluster_id || display_topic_id || '-1';
+      recentClusterInfoCache.current.set(newUniqueKey, {
+        clusterId: cacheClusId,
+        clusterLabel: cluster_label || '',
       });
     } catch (err) {
       console.error(err);
@@ -2083,6 +2090,13 @@ export default function NoteClusters() {
       if (selectedNode && selectedNode.unique_key === uniqueKey) {
         const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
         return { key, label: selectedNode.cluster_label || clusterNameById.get(key) || '' };
+      }
+
+      // Check cache for recently loaded backend cluster info (from successfully opened modals)
+      // This ensures we use fresh backend data even for points not currently in selectedNode
+      const cached = recentClusterInfoCache.current.get(uniqueKey);
+      if (cached) {
+        return { key: cached.clusterId, label: cached.clusterLabel || clusterNameById.get(cached.clusterId) || '' };
       }
 
       // Otherwise, consult the initial `data` set (best-effort local authority)
