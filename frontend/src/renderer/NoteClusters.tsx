@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { Canvas, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, Billboard, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
@@ -73,7 +72,6 @@ type ClusterOrderMode = 'spike' | 'momentum';
 type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size' | 'search';
 type SortDirection = 'desc' | 'asc';
-type VisualizationMode = 'linear' | 'condensed';
 type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size' | 'search' | 'similarity';
 
 interface ClusterPointMeta {
@@ -129,6 +127,7 @@ const mixColorWithWhite = (baseColor: string, whiteMix: number) => {
 const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35);
 
 const DOT_RADIUS_BASE = 0.016;
+const GLOBAL_LAYOUT_SPREAD = 2.45;
 
 const compareTopicIds = (a: string, b: string) => {
   const aParts = String(a).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
@@ -153,6 +152,8 @@ const compareTopicIds = (a: string, b: string) => {
 const DotInstances = ({
   bucket,
   sphereRadius,
+  hoveredId,
+  highlightedId,
   onPointerOver,
   onPointerMove,
   onPointerOut,
@@ -160,6 +161,8 @@ const DotInstances = ({
 }: {
   bucket: PointBucket;
   sphereRadius: number;
+  hoveredId: string | null;
+  highlightedId: string | null;
   onPointerOver: (event: ThreeEvent<PointerEvent>) => void;
   onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOut: (event: ThreeEvent<PointerEvent>) => void;
@@ -176,12 +179,18 @@ const DotInstances = ({
     const temp = new THREE.Object3D();
     bucket.points.forEach((point, index) => {
       temp.position.set(point.x, point.y, point.z);
-      temp.scale.setScalar(sphereRadius);
+      // scale up hovered / highlighted nodes for emphasis
+      const isHovered = hoveredId === point.unique_key;
+      const isHighlighted = highlightedId === point.unique_key;
+      const scale = isHovered ? sphereRadius * 1.8 : isHighlighted ? sphereRadius * 1.35 : sphereRadius;
+      temp.scale.setScalar(scale);
       temp.updateMatrix();
       mesh.setMatrixAt(index, temp.matrix);
 
       if (glowMesh) {
-        temp.scale.setScalar(sphereRadius * 2.4);
+        // glow is larger and stronger for hovered points
+        const glowScale = isHovered ? scale * 3.0 : scale * 2.4;
+        temp.scale.setScalar(glowScale);
         temp.updateMatrix();
         glowMesh.setMatrixAt(index, temp.matrix);
       }
@@ -191,7 +200,7 @@ const DotInstances = ({
     if (glowMesh) {
       glowMesh.instanceMatrix.needsUpdate = true;
     }
-  }, [bucket.points, sphereRadius]);
+  }, [bucket.points, sphereRadius, hoveredId, highlightedId]);
 
   return (
     <>
@@ -344,7 +353,6 @@ export default function NoteClusters() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('linear');
   const [hideOtherClusters, setHideOtherClusters] = useState(false);
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('recency');
@@ -1275,13 +1283,14 @@ export default function NoteClusters() {
 
   const pointPositionMap = useMemo(() => {
     const map = new Map<string, { linear: THREE.Vector3; log: THREE.Vector3; condensed: THREE.Vector3 }>();
-    const CLUSTER_RADIUS = 2;
-    const LOG_FACTOR = 0.5;
-    const WORLD_SIZE = 30;
-    const CONDENSED_RADIUS_SCALE = 0.6;
-    const CONDENSED_CURVE = 0.55;
+    const INTRA_CLUSTER_RADIUS = 1.75;
+    const INTRA_LOG_STRENGTH = 4.2;
+    const CONDENSED_RADIUS_SCALE = 1.7;
+    const CONDENSED_CURVE = 0.72;
 
       const clusterCondensed = new Map<string, THREE.Vector3>();
+      const clusterCenterMap = new Map<string, THREE.Vector3>();
+      const uniqueToLabel = new Map<string, string>();
 
       Object.keys(clusterGroups).forEach((label) => {
         const group = clusterGroups[label];
@@ -1294,26 +1303,33 @@ export default function NoteClusters() {
         group.y.reduce((a, b) => a + b, 0) / group.y.length,
         group.z.reduce((a, b) => a + b, 0) / group.z.length,
       );
+      clusterCenterMap.set(label, clusterCenter);
+
+      const localOffsets = group.customdata.map((_, idx) => (
+        new THREE.Vector3(
+          group.x[idx] - clusterCenter.x,
+          group.y[idx] - clusterCenter.y,
+          group.z[idx] - clusterCenter.z,
+        )
+      ));
+      const maxLocalDist = Math.max(
+        ...localOffsets.map((offset) => offset.length()),
+        1e-6,
+      );
 
       group.customdata.forEach((meta, index) => {
         // 1. Linear: Raw position from UMAP
         const linearPos = new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
 
-        // 2. Local Log Scale: Compress distances relative to cluster center
-        const relativePos = new THREE.Vector3(
-          group.x[index] - clusterCenter.x,
-          group.y[index] - clusterCenter.y,
-          group.z[index] - clusterCenter.z,
-        );
+        // 2. Local Log Scale (bounded): keep cluster points compact while preserving orientation.
+        const relativePos = localOffsets[index];
         const dist = relativePos.length();
-        const scaledDist =
-          Math.log(1 + dist * LOG_FACTOR) *
-          (CLUSTER_RADIUS / Math.log(1 + CLUSTER_RADIUS * LOG_FACTOR));
-        const logPos = new THREE.Vector3(
-          clusterCenter.x + (relativePos.x / (dist || 1)) * scaledDist,
-          clusterCenter.y + (relativePos.y / (dist || 1)) * scaledDist,
-          clusterCenter.z + (relativePos.z / (dist || 1)) * scaledDist,
-        );
+        const normLocal = Math.min(dist / maxLocalDist, 1);
+        const logNorm = Math.log1p(normLocal * INTRA_LOG_STRENGTH) / Math.log1p(INTRA_LOG_STRENGTH);
+        const scaledDist = logNorm * INTRA_CLUSTER_RADIUS;
+        const logPos = dist > 0
+          ? clusterCenter.clone().add(relativePos.clone().normalize().multiplyScalar(scaledDist))
+          : clusterCenter.clone();
 
         // 3. Condensed: remap cluster centroids around the scene center using a bounded radial curve.
         // This increases separation for nearby clusters while keeping the overall cloud compact.
@@ -1332,6 +1348,7 @@ export default function NoteClusters() {
               log: logPos,
               condensed: clusterCondensed.get(label) as THREE.Vector3,
             });
+            uniqueToLabel.set(meta.unique_key, label);
       });
     });
 
@@ -1386,8 +1403,8 @@ export default function NoteClusters() {
         });
 
         // 3) iterative repulsion for near overlaps
-        const minSep = Math.max(0.03 * sceneBounds.radius, 0.9);
-        const repulseIters = 4;
+        const minSep = Math.max(0.12 * sceneBounds.radius, 3.2);
+        const repulseIters = 12;
         for (let iter = 0; iter < repulseIters; iter += 1) {
           const all = Array.from(clusterCondensed.entries());
           for (let i = 0; i < all.length; i += 1) {
@@ -1413,165 +1430,190 @@ export default function NoteClusters() {
             }
           }
         }
+
+        // Pull cluster centers inward to reduce the large middle void.
+        const VOID_PULL = 1.08;
+        entries.forEach(([, vec]) => {
+          const dx = vec.x - sceneBounds.center.x;
+          const dy = vec.y - sceneBounds.center.y;
+          const dz = vec.z - sceneBounds.center.z;
+          vec.x = sceneBounds.center.x + dx * VOID_PULL;
+          vec.y = sceneBounds.center.y + dy * VOID_PULL;
+          vec.z = sceneBounds.center.z + dz * VOID_PULL;
+        });
+
+        // Re-apply a lighter repulsion so inward pull doesn't re-introduce overlaps.
+        const postPullMinSep = Math.max(0.11 * sceneBounds.radius, 3.0);
+        for (let iter = 0; iter < 12; iter += 1) {
+          const all = Array.from(clusterCondensed.entries());
+          for (let i = 0; i < all.length; i += 1) {
+            for (let j = i + 1; j < all.length; j += 1) {
+              const a = clusterCondensed.get(all[i][0])!;
+              const b = clusterCondensed.get(all[j][0])!;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const dz = b.z - a.z;
+              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+              if (dist < postPullMinSep) {
+                const overlap = (postPullMinSep - dist) * 0.5;
+                const nx = dx / dist;
+                const ny = dy / dist;
+                const nz = dz / dist;
+                a.x -= nx * overlap;
+                a.y -= ny * overlap;
+                a.z -= nz * overlap;
+                b.x += nx * overlap;
+                b.y += ny * overlap;
+                b.z += nz * overlap;
+              }
+            }
+          }
+        }
+
+        // Anchor intra-cluster log positions to the computed cluster centers (Tier 1 + Tier 2 composition)
+        uniqueToLabel.forEach((label, uniqueKey) => {
+          const entry = map.get(uniqueKey);
+          const clusterCenter = clusterCenterMap.get(label);
+          const condensedCenter = clusterCondensed.get(label);
+          if (!entry || !clusterCenter || !condensedCenter) return;
+
+          const dir = new THREE.Vector3(entry.log.x - clusterCenter.x, entry.log.y - clusterCenter.y, entry.log.z - clusterCenter.z);
+          const dist = dir.length();
+          if (dist === 0) {
+            entry.log = new THREE.Vector3(
+              condensedCenter.x + (Math.random() - 0.5) * 1e-3,
+              condensedCenter.y + (Math.random() - 0.5) * 1e-3,
+              condensedCenter.z + (Math.random() - 0.5) * 1e-3,
+            );
+          } else {
+            dir.normalize().multiplyScalar(dist);
+            entry.log = new THREE.Vector3(condensedCenter.x + dir.x, condensedCenter.y + dir.y, condensedCenter.z + dir.z);
+          }
+          entry.condensed = condensedCenter.clone();
+        });
+
+        // Per-cluster anti-overlap for chunk dots
+        const labelToKeys = new Map<string, string[]>();
+        uniqueToLabel.forEach((label, key) => {
+          const arr = labelToKeys.get(label) || [];
+          arr.push(key);
+          labelToKeys.set(label, arr);
+        });
+
+        const minNodeSep = Math.max(0.0065 * sceneBounds.radius, 0.42);
+        const nodeRepulseIters = 6;
+        labelToKeys.forEach((keys) => {
+          for (let iter = 0; iter < nodeRepulseIters; iter += 1) {
+            for (let i = 0; i < keys.length; i += 1) {
+              for (let j = i + 1; j < keys.length; j += 1) {
+                const a = map.get(keys[i]);
+                const b = map.get(keys[j]);
+                if (!a || !b) continue;
+
+                const dx = b.log.x - a.log.x;
+                const dy = b.log.y - a.log.y;
+                const dz = b.log.z - a.log.z;
+                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+                if (dist < minNodeSep) {
+                  const overlap = (minNodeSep - dist) * 0.5;
+                  const nx = dx / dist;
+                  const ny = dy / dist;
+                  const nz = dz / dist;
+                  a.log.x -= nx * overlap;
+                  a.log.y -= ny * overlap;
+                  a.log.z -= nz * overlap;
+                  b.log.x += nx * overlap;
+                  b.log.y += ny * overlap;
+                  b.log.z += nz * overlap;
+                }
+              }
+            }
+          }
+        });
+
+        // Global spread so islands and internal points breathe more in world space.
+        map.forEach((entry) => {
+          const expand = (vec: THREE.Vector3) =>
+            sceneBounds.center.clone().add(vec.clone().sub(sceneBounds.center).multiplyScalar(GLOBAL_LAYOUT_SPREAD));
+          entry.linear = expand(entry.linear);
+          entry.log = expand(entry.log);
+          entry.condensed = expand(entry.condensed);
+        });
       }
 
     return map;
-  }, [clusterGroups, clusterCentroids]);
-
-  const pointRenderColorMap = useMemo(() => {
-    const map = new Map<string, string>();
-    const hasSearchHits = searchResults.length > 0;
-
-    Object.keys(clusterGroups).forEach((label) => {
-      const group = clusterGroups[label];
-      const baseColor = new THREE.Color(clusterColors[label] || '#4b5563');
-
-      group.customdata.forEach((meta) => {
-        const score = searchScoreMap.get(meta.unique_key);
-        const isHit = score !== undefined;
-
-        const color = baseColor.clone();
-        if (hasSearchHits && !isHit) {
-          const hslC: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-          color.getHSL(hslC);
-          color.setHSL(hslC.h, Math.max(0, hslC.s * 0.9), Math.max(0, hslC.l * 0.28));
-        }
-        map.set(meta.unique_key, color.getStyle());
-      });
-    });
-
-    return map;
-  }, [clusterColors, clusterGroups, searchResults.length, searchScoreMap]);
+  }, [clusterGroups, clusterCentroids, sceneBounds]);
 
   const { buckets, pointLookup } = useMemo(() => {
     const bucketMap = new Map<string, PointBucket>();
     const lookup = new Map<string, VisualPoint>();
     const hasSearchHits = searchResults.length > 0;
 
-    if (visualizationMode === 'condensed') {
-      // In condensed mode, show one representative point per cluster
-      // When hideOtherClusters is enabled, unselected clusters appear greyed out
-      const labelsToShow = hideOtherClusters && hasActiveClusterFilter ? sortedLabels : visibleLabels;
+    visibleLabels.forEach((label) => {
+      const group = clusterGroups[label];
+      const clusterColorBase = clusterColors[label] || '#4b5563';
+      const clusterHasSearchHit = group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
 
-      labelsToShow.forEach((label) => {
-        const group = clusterGroups[label];
-        const positionData = pointPositionMap.get(group.customdata[0]?.unique_key);
-        const isSelected = selectedClusters.has(label);
+      group.customdata.forEach((meta, index) => {
+        const isHit = searchScoreMap.has(meta.unique_key);
 
-        // Use grey for unselected clusters when hideOtherClusters is enabled
-        let clusterColor = clusterColors[label] || '#4b5563';
-        // For hide-other mode, keep cluster hue but make it much dimmer by reducing lightness
-        if (hideOtherClusters && hasActiveClusterFilter && !isSelected) {
-          const c = new THREE.Color(clusterColor);
-          const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-          c.getHSL(hsl);
-          // Preserve hue and most saturation but reduce lightness substantially
-          c.setHSL(hsl.h, Math.max(0, hsl.s * 0.9), Math.max(0, hsl.l * 0.28));
-          clusterColor = c.getStyle();
+        // Slightly larger baseline for guaranteed visibility.
+        const size = 0.028;
+
+        // Determine per-point color when a search is active.
+        // Only the exact matching chunks (isHit) should be bright; all others should be much dimmer.
+        let dotColor = clusterColorBase;
+        if (searchResults.length > 0) {
+          if (isHit) {
+            // Keep hit color close to cluster base but slightly lifted for visibility.
+            const c = new THREE.Color(clusterColorBase);
+            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
+            c.getHSL(hsl);
+            // increase lightness a touch for emphasis
+            c.setHSL(hsl.h, Math.min(1, hsl.s * 1.0), Math.min(1, Math.max(hsl.l, hsl.l * 1.05)));
+            dotColor = c.getStyle();
+          } else {
+            // Non-hit chunks: desaturate and darken strongly so they recede visually.
+            const c = new THREE.Color(clusterColorBase);
+            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
+            c.getHSL(hsl);
+            c.setHSL(hsl.h, Math.max(0, hsl.s * 0.22), Math.max(0, hsl.l * 0.16));
+            dotColor = c.getStyle();
+          }
         }
 
-        // Create one representative point per cluster
-        // Dot sizes are constant; only brightness/glow changes with relevance
-        const size = 0.055;
-        const targetPos = positionData?.condensed || new THREE.Vector3(0, 0, 0);
-        // Brightness / glow: increase for relevant clusters, otherwise dim
-        const avgRel = clusterAverageRelevance.get(label) || 0;
-        const glowOpacity = searchResults.length > 0 ? (avgRel > 0 ? 0.38 + avgRel * 0.45 : 0.06) : 0.2;
-        // Dim cluster color if it has no search hits when search active
-        if (searchResults.length > 0 && !group.customdata.some((p) => searchScoreMap.has(p.unique_key))) {
-          const c = new THREE.Color(clusterColor);
-          const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-          c.getHSL(hsl);
-          c.setHSL(hsl.h, Math.max(0, hsl.s * 0.85), Math.max(0, hsl.l * 0.28));
-          clusterColor = c.getStyle();
-        }
-        const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
-        const bucketKey = `${quantizedSize}|${clusterColor}|${glowOpacity}`;
-
+        // Glow: strong for hits, very subtle for non-hits when searching.
+        const glowOpacity = searchResults.length > 0 ? (isHit ? 0.36 : 0.02) : 0.24;
+        const quantizedSize = Math.max(0.012, Math.round(size * 1000) / 1000);
+        const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
         if (!bucketMap.has(bucketKey)) {
           bucketMap.set(bucketKey, {
             key: bucketKey,
             sizeMetric: quantizedSize,
-            color: clusterColor,
+            color: dotColor,
             glowOpacity,
             points: [],
           });
         }
 
-        // Use first point's data as representative for the cluster
-        const firstMeta = group.customdata[0];
+        const positionData = pointPositionMap.get(meta.unique_key);
+        const targetPos = positionData
+          ? positionData.log
+          : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
+
         const visualPoint: VisualPoint = {
-          ...firstMeta,
+          ...meta,
           x: targetPos.x,
           y: targetPos.y,
           z: targetPos.z,
-          dotColor: clusterColor,
+          dotColor,
         };
-
-        // Store under cluster label for hover/selection
-        lookup.set(`cluster-${label}`, visualPoint);
-        // Also store under first point's key for backward compatibility
-        lookup.set(firstMeta.unique_key, visualPoint);
+        lookup.set(meta.unique_key, visualPoint);
 
         const bucket = bucketMap.get(bucketKey)!;
         bucket.points.push(visualPoint);
       });
-    } else {
-      // In linear and log modes, show all individual points
-      visibleLabels.forEach((label) => {
-        const group = clusterGroups[label];
-        const clusterColorBase = clusterColors[label] || '#4b5563';
-        const clusterHasSearchHit = group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
-
-        group.customdata.forEach((meta, index) => {
-          const isHit = searchScoreMap.has(meta.unique_key);
-          const isHovered = hoveredId === meta.unique_key;
-          const isHighlighted = highlightedNodeId === meta.unique_key;
-
-          // Keep dot size constant; only adjust brightness/glow for relevance.
-          let size = 0.02;
-
-          let dotColor = clusterColorBase;
-          if (searchResults.length > 0 && !clusterHasSearchHit) {
-            const c = new THREE.Color(dotColor);
-            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-            c.getHSL(hsl);
-            c.setHSL(hsl.h, Math.max(0, hsl.s * 0.9), Math.max(0, hsl.l * 0.28));
-            dotColor = c.getStyle();
-          }
-          const glowOpacity = hasSearchHits ? (isHit ? 0.24 : 0.06) : 0.2;
-          const quantizedSize = Math.max(0.008, Math.round(size * 1000) / 1000);
-          const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
-          if (!bucketMap.has(bucketKey)) {
-            bucketMap.set(bucketKey, {
-              key: bucketKey,
-              sizeMetric: quantizedSize,
-              color: dotColor,
-              glowOpacity,
-              points: [],
-            });
-          }
-
-          // Get position based on visualization mode
-          const positionData = pointPositionMap.get(meta.unique_key);
-          const targetPos = positionData
-            ? positionData.linear
-            : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
-
-          const visualPoint: VisualPoint = {
-            ...meta,
-            x: targetPos.x,
-            y: targetPos.y,
-            z: targetPos.z,
-            dotColor,
-          };
-          lookup.set(meta.unique_key, visualPoint);
-
-          const bucket = bucketMap.get(bucketKey)!;
-          bucket.points.push(visualPoint);
-        });
-      });
-    }
+    });
 
     return {
       buckets: Array.from(bucketMap.values()).sort((a, b) => a.sizeMetric - b.sizeMetric),
@@ -1580,18 +1622,157 @@ export default function NoteClusters() {
   }, [
     clusterColors,
     clusterGroups,
-    highlightedNodeId,
-    hoveredId,
-    pointRenderColorMap,
     pointPositionMap,
     searchResults.length,
     searchScoreMap,
     visibleLabels,
-    visualizationMode,
   ]);
 
   const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
   const hoveredClusterColor = hoveredPoint ? getDotSurfaceTint(hoveredPoint.dotColor) : '#ffffff';
+
+  const renderedClusterCenters = useMemo(() => {
+    const centers = new Map<string, THREE.Vector3>();
+    Object.keys(clusterGroups).forEach((label) => {
+      const group = clusterGroups[label];
+      if (!group || group.customdata.length === 0) return;
+
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      let count = 0;
+      group.customdata.forEach((meta) => {
+        const positioned = pointPositionMap.get(meta.unique_key);
+        if (!positioned) return;
+        sx += positioned.log.x;
+        sy += positioned.log.y;
+        sz += positioned.log.z;
+        count += 1;
+      });
+
+      if (count > 0) {
+        centers.set(label, new THREE.Vector3(sx / count, sy / count, sz / count));
+      }
+    });
+    return centers;
+  }, [clusterGroups, pointPositionMap]);
+
+  const ClusterHeaderCard = ({
+    baseCenter,
+    color,
+    text,
+    sceneRadius,
+  }: {
+    baseCenter: THREE.Vector3;
+    color: string;
+    text: string;
+    sceneRadius: number;
+  }) => {
+    const groupRef = useRef<THREE.Group>(null);
+    const camera = useThree((state) => state.camera);
+
+    useFrame(() => {
+      if (!groupRef.current || !groupRef.current.parent) return;
+      const parent = groupRef.current.parent;
+      const worldBase = parent.localToWorld(baseCenter.clone());
+      const cameraDir = new THREE.Vector3().subVectors(camera.position, worldBase).normalize();
+      const frontOffset = Math.max(sceneRadius * 0.055, 1.2);
+      const verticalOffset = Math.max(sceneRadius * 0.03, 0.9);
+      const worldTarget = new THREE.Vector3(
+        worldBase.x + cameraDir.x * frontOffset,
+        worldBase.y + verticalOffset,
+        worldBase.z + cameraDir.z * frontOffset,
+      );
+      const localTarget = parent.worldToLocal(worldTarget);
+      groupRef.current.position.copy(localTarget);
+    });
+
+    const brightColor = mixColorWithWhite(color, 0.58);
+    const borderColor = mixColorWithWhite(color, 0.52);
+    const maxWidth = Math.min(2.8, Math.max(0.95, sceneRadius * 0.038));
+    const widthFactor = 0.11;
+    const estimatedLines = Math.max(1, Math.ceil((text.length * widthFactor) / maxWidth));
+    const panelHeight = 0.2 + estimatedLines * 0.115;
+
+    return (
+      <group ref={groupRef}>
+        <Billboard>
+          <group>
+            {/* very subtle backing panel for readability without a heavy gray slab */}
+            <mesh>
+              <planeGeometry args={[maxWidth + 0.16, panelHeight]} />
+              <meshBasicMaterial color="#071022" transparent opacity={0.18} depthWrite={false} />
+            </mesh>
+
+            {/* clean border using 4 strips (avoids wireframe center-line artifacts) */}
+            <mesh position={[0, panelHeight / 2 + 0.006, 0.001]}>
+              <planeGeometry args={[maxWidth + 0.18, 0.02]} />
+              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
+            </mesh>
+            <mesh position={[0, -panelHeight / 2 - 0.006, 0.001]}>
+              <planeGeometry args={[maxWidth + 0.18, 0.02]} />
+              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
+            </mesh>
+            <mesh position={[-(maxWidth + 0.18) / 2, 0, 0.001]}>
+              <planeGeometry args={[0.02, panelHeight + 0.012]} />
+              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
+            </mesh>
+            <mesh position={[(maxWidth + 0.18) / 2, 0, 0.001]}>
+              <planeGeometry args={[0.02, panelHeight + 0.012]} />
+              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
+            </mesh>
+
+            <Text
+              maxWidth={maxWidth}
+              textAlign="center"
+              anchorX="center"
+              anchorY="middle"
+              color={brightColor}
+              fontSize={0.115}
+              lineHeight={1.12}
+              outlineWidth={0.0025}
+              outlineColor="#01030a"
+            >
+              {text}
+            </Text>
+          </group>
+        </Billboard>
+      </group>
+    );
+  };
+
+  // 3D cluster headers (billboarded)
+  const ClusterHeaders = ({ labels }: { labels: string[] }) => {
+    return (
+      <group>
+        {labels.map((label) => {
+          const pos = renderedClusterCenters.get(label) || new THREE.Vector3(0, 0, 0);
+          const color = clusterColors[label] || '#dddddd';
+          const text = clusterGroups[label]?.clusterLabel || label;
+          return (
+            <ClusterHeaderCard
+              key={`hdr-${label}`}
+              baseCenter={pos}
+              color={color}
+              text={text}
+              sceneRadius={sceneBounds.radius * GLOBAL_LAYOUT_SPREAD}
+            />
+          );
+        })}
+      </group>
+    );
+  };
+
+  // Auto-rotate group helper
+  const AutoRotateGroup = ({ children, speed = 0 }: { children: React.ReactNode; speed?: number }) => {
+    const ref = useRef<THREE.Group>(null);
+    useFrame(() => {
+      if (ref.current && speed !== 0) {
+        ref.current.rotation.y += speed;
+      }
+    });
+    return <group ref={ref}>{children}</group>;
+  };
 
   const selectedClusterSummaries = useMemo(() => {
     if (selectedClusters.size > 0) {
@@ -1617,6 +1798,27 @@ export default function NoteClusters() {
 
     return [] as Array<{ clusterId: string; clusterLabel: string }>;
   }, [clusterGroups, selectedClusters, selectedNode]);
+
+  const resolveClusterForUniqueKey = useCallback(
+    (uniqueKey: string) => {
+      // If the selected (open) modal corresponds to this unique key, prefer its authoritative cluster info
+      if (selectedNode && selectedNode.unique_key === uniqueKey) {
+        const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
+        return { key, label: selectedNode.cluster_label || clusterNameById.get(key) || '' };
+      }
+
+      // Otherwise, consult the initial `data` set (best-effort local authority)
+      const row = data.find((d) => d.unique_key === uniqueKey);
+      if (row) {
+        const key = row.display_topic_id || row.cluster_id || '-1';
+        return { key, label: row.cluster_label || clusterNameById.get(key) || '' };
+      }
+
+      // Fallback: empty values
+      return { key: '-1', label: '' };
+    },
+    [selectedNode, data, clusterNameById],
+  );
 
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
@@ -1691,42 +1893,19 @@ export default function NoteClusters() {
       setHoveredId(null);
       setHoverSource(null);
 
-      if (visualizationMode === 'condensed') {
-        // In condensed mode, select/deselect the cluster
-        const clusterId = point.display_topic_id || point.cluster_id || '';
-        const isShiftClick = event.shiftKey;
-
-        if (isShiftClick) {
-          // Shift+click: Add/toggle cluster to selection
-          setSelectedClusters((prev) => {
-            const next = new Set(prev);
-            if (next.has(clusterId)) {
-              next.delete(clusterId);
-            } else {
-              next.add(clusterId);
-            }
-            return next;
-          });
-        } else {
-          // Regular click: Select only this cluster
-          setSelectedClusters(new Set([clusterId]));
-        }
-      } else {
-        // In linear/log mode, open the note
-        setHighlightedNodeId(point.unique_key);
-        fetchNoteContent(
-          point.title,
-          point.chunk_index,
-          point.cluster_id,
-          point.cluster_label,
-          point.display_topic_id,
-          point.base_topic_id,
-          point.creation_date,
-          point.modification_date,
-        );
-      }
+      setHighlightedNodeId(point.unique_key);
+      fetchNoteContent(
+        point.title,
+        point.chunk_index,
+        point.cluster_id,
+        point.cluster_label,
+        point.display_topic_id,
+        point.base_topic_id,
+        point.creation_date,
+        point.modification_date,
+      );
     },
-    [visualizationMode],
+    [],
   );
 
   const tooltipStyle = useMemo(() => {
@@ -1795,10 +1974,11 @@ export default function NoteClusters() {
 
   const cameraPosition = useMemo(() => {
     const { center, radius } = sceneBounds;
+    const spreadRadius = radius * GLOBAL_LAYOUT_SPREAD;
     return [
-      center.x + radius * 1.7,
-      center.y + radius * 1.3,
-      center.z + radius * 1.7,
+      center.x + spreadRadius * 1.7,
+      center.y + spreadRadius * 1.3,
+      center.z + spreadRadius * 1.7,
     ] as [number, number, number];
   }, [sceneBounds]);
 
@@ -2036,8 +2216,7 @@ export default function NoteClusters() {
             <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={() => setVisualizationMode('linear')}
-                title="Linear"
+                title="Neural Mapping"
                 style={{
                   width: 36,
                   height: 36,
@@ -2046,30 +2225,11 @@ export default function NoteClusters() {
                   justifyContent: 'center',
                   borderRadius: 8,
                   border: 'none',
-                  cursor: 'pointer',
-                  background: visualizationMode === 'linear' ? '#dbf4ff' : 'transparent',
+                  cursor: 'default',
+                  background: '#dbf4ff',
                 }}
               >
-                <ZoomOutMapIcon style={{ color: visualizationMode === 'linear' ? '#0ea5e9' : '#9ca3af' }} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setVisualizationMode('condensed')}
-                title="Condensed"
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: visualizationMode === 'condensed' ? '#f3e8ff' : 'transparent',
-                }}
-              >
-                <ZoomInMapIcon style={{ color: visualizationMode === 'condensed' ? '#7c3aed' : '#9ca3af' }} />
+                <ZoomOutMapIcon style={{ color: '#0ea5e9' }} />
               </button>
 
               <button
@@ -2620,26 +2780,23 @@ export default function NoteClusters() {
                   overflowWrap: 'anywhere',
                 }}
               >
-                {visualizationMode === 'condensed' ? (
-                  <>
-                    <div style={{ color: '#333', fontWeight: 700 }}>
-                      Cluster {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}
-                    </div>
-                    <div style={{ color: '#333' }}>{hoveredPoint.cluster_label}</div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
-                    <div style={{ color: '#333' }}>
-                      Cluster{' '}
-                      {hoveredPoint.cluster_id && hoveredPoint.cluster_id !== '-1' ? hoveredPoint.cluster_id : '?'}:{' '}
-                      {hoveredPoint.cluster_label}
-                    </div>
-                    <div style={{ color: '#333' }}>
-                      Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
-                    </div>
-                  </>
-                )}
+                <>
+                  <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
+                  {/* Use authoritative cluster key (display_topic_id if present) and lookup label from clusterNameById */}
+                  {(() => {
+                      const resolved = resolveClusterForUniqueKey(hoveredPoint.unique_key);
+                      const displayId = resolved.key && resolved.key !== '-1' ? resolved.key : '?';
+                      const displayLabel = resolved.label || '';
+                      return (
+                        <div style={{ color: '#333' }}>
+                          Cluster {displayId}: {displayLabel}
+                        </div>
+                      );
+                    })()}
+                  <div style={{ color: '#333' }}>
+                    Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
+                  </div>
+                </>
               </div>
             )}
 
@@ -2647,7 +2804,7 @@ export default function NoteClusters() {
               camera={{
                 fov: 45,
                 near: 0.1,
-                far: Math.max(sceneBounds.radius * 15, 100),
+                far: Math.max(sceneBounds.radius * GLOBAL_LAYOUT_SPREAD * 22, 180),
                 position: cameraPosition,
               }}
               onPointerMissed={() => {
@@ -2658,7 +2815,7 @@ export default function NoteClusters() {
                 setHoveredId(null);
                 setHoverSource(null);
               }}
-              style={{ width: '100%', height: '100%', background: '#000000' }}
+              style={{ width: '100%', height: '100%', background: '#030313' }}
             >
               <ambientLight intensity={0.9} />
               <OrbitControls
@@ -2668,45 +2825,51 @@ export default function NoteClusters() {
                 enableRotate
                 target={[sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z]}
               />
+              <AutoRotateGroup>
+                {/* When hovering a point, show only that cluster's header to avoid misleading overlaps */}
+                <ClusterHeaders labels={hoveredPoint ? [resolveClusterForUniqueKey(hoveredPoint.unique_key).key] : visibleLabels} />
+                {buckets.map((bucket) => {
+                  const adaptiveBase = Math.max(DOT_RADIUS_BASE, sceneBounds.radius * 0.0018);
+                  const sphereRadius = (bucket.sizeMetric / 0.02) * adaptiveBase;
+                  return (
+                    <DotInstances
+                      key={`bucket-${bucket.key}-${bucket.points.length}`}
+                      bucket={bucket}
+                      sphereRadius={sphereRadius}
+                      hoveredId={hoveredId}
+                      highlightedId={highlightedNodeId}
+                      onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+                        const point = resolvePointFromEvent(event);
+                        if (!point) return;
+                        handleCanvasPointMove(point, event);
+                      }}
+                      onPointerMove={(event: ThreeEvent<PointerEvent>) => {
+                        const point = resolvePointFromEvent(event);
+                        if (!point) {
+                          setHoveredId(null);
+                          setHoverSource(null);
+                          return;
+                        }
 
-              {buckets.map((bucket) => {
-                const sphereRadius = (bucket.sizeMetric / 0.02) * DOT_RADIUS_BASE;
-                return (
-                  <DotInstances
-                    key={`bucket-${bucket.key}-${bucket.points.length}`}
-                    bucket={bucket}
-                    sphereRadius={sphereRadius}
-                    onPointerOver={(event: ThreeEvent<PointerEvent>) => {
-                      const point = resolvePointFromEvent(event);
-                      if (!point) return;
-                      handleCanvasPointMove(point, event);
-                    }}
-                    onPointerMove={(event: ThreeEvent<PointerEvent>) => {
-                      const point = resolvePointFromEvent(event);
-                      if (!point) {
-                        setHoveredId(null);
-                        setHoverSource(null);
-                        return;
-                      }
+                        handleCanvasPointMove(point, event);
+                      }}
+                      onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+                        event.stopPropagation();
+                        if (event.intersections.length === 0) {
+                          setHoveredId(null);
+                          setHoverSource(null);
+                        }
+                      }}
+                      onClick={(event: ThreeEvent<MouseEvent>) => {
+                        const point = resolvePointFromEvent(event);
+                        if (!point) return;
 
-                      handleCanvasPointMove(point, event);
-                    }}
-                    onPointerOut={(event: ThreeEvent<PointerEvent>) => {
-                      event.stopPropagation();
-                      if (event.intersections.length === 0) {
-                        setHoveredId(null);
-                        setHoverSource(null);
-                      }
-                    }}
-                    onClick={(event: ThreeEvent<MouseEvent>) => {
-                      const point = resolvePointFromEvent(event);
-                      if (!point) return;
-
-                      handleCanvasPointClick(point, event);
-                    }}
-                  />
-                );
-              })}
+                        handleCanvasPointClick(point, event);
+                      }}
+                    />
+                  );
+                })}
+              </AutoRotateGroup>
             </Canvas>
           </div>
 
