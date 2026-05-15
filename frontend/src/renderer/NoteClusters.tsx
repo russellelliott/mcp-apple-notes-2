@@ -1531,7 +1531,285 @@ export default function NoteClusters() {
           }
         });
 
+        // Outlier pull: use standard deviation to identify and pull in far-away dots.
+        // Use a tighter threshold and stronger iterative pull toward the cluster centroid
+        // so extreme outliers are rapidly moved into the main cloud.
+        const outlierPullStrength = 0.85; // much stronger pull per iteration
+        const stdDevMultiplier = 0.55; // tighter threshold: mean + 0.55*stdDev
+        const outlierPullIters = 40; // more iterations for extreme convergence
+
+        labelToKeys.forEach((keys) => {
+          const condensedCenter = clusterCondensed.get(uniqueToLabel.get(keys[0])!)!;
+
+          // Compute mean and standard deviation of distances
+          const distances = keys.map((key) => {
+            const entry = map.get(key)!;
+            const dx = entry.log.x - condensedCenter.x;
+            const dy = entry.log.y - condensedCenter.y;
+            const dz = entry.log.z - condensedCenter.z;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+          });
+
+          const meanDist = distances.reduce((a, b) => a + b, 0) / Math.max(distances.length, 1);
+          const variance = distances.reduce((a, d) => a + (d - meanDist) ** 2, 0) / Math.max(distances.length, 1);
+          const stdDev = Math.sqrt(variance);
+          const outlierThreshold = meanDist + stdDev * stdDevMultiplier;
+
+          // Pull outliers inward iteratively
+          for (let pullIter = 0; pullIter < outlierPullIters; pullIter += 1) {
+            keys.forEach((key) => {
+              const entry = map.get(key)!;
+              const dx = entry.log.x - condensedCenter.x;
+              const dy = entry.log.y - condensedCenter.y;
+              const dz = entry.log.z - condensedCenter.z;
+              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+
+              if (dist > outlierThreshold) {
+                // Determine a target distance: bring the point down to just inside the
+                // mean + scaled stdDev boundary, then move toward that target by
+                // a strong fraction each iteration so extreme points converge quickly.
+                const targetDist = Math.max(meanDist + stdDev * 0.2, outlierThreshold);
+                const excess = dist - targetDist;
+                // scale the per-iteration movement by outlierPullStrength and how far beyond target
+                const move = Math.min(excess, excess * outlierPullStrength);
+                const newDist = Math.max(dist - move, targetDist);
+                const scale = newDist / dist;
+                const newDx = (dx * scale);
+                const newDy = (dy * scale);
+                const newDz = (dz * scale);
+                entry.log.x = condensedCenter.x + newDx;
+                entry.log.y = condensedCenter.y + newDy;
+                entry.log.z = condensedCenter.z + newDz;
+              }
+            });
+          }
+        });
+
+        // Final light repulsion pass after outlier pull to avoid any new overlaps
+        const outlierMinNodeSep = Math.max(0.005 * sceneBounds.radius, 0.3);
+        labelToKeys.forEach((keys) => {
+          for (let iter = 0; iter < 4; iter += 1) {
+            for (let i = 0; i < keys.length; i += 1) {
+              for (let j = i + 1; j < keys.length; j += 1) {
+                const a = map.get(keys[i]);
+                const b = map.get(keys[j]);
+                if (!a || !b) continue;
+
+                const dx = b.log.x - a.log.x;
+                const dy = b.log.y - a.log.y;
+                const dz = b.log.z - a.log.z;
+                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+                if (dist < outlierMinNodeSep) {
+                  const overlap = (outlierMinNodeSep - dist) * 0.35;
+                  const nx = dx / dist;
+                  const ny = dy / dist;
+                  const nz = dz / dist;
+                  a.log.x -= nx * overlap;
+                  a.log.y -= ny * overlap;
+                  a.log.z -= nz * overlap;
+                  b.log.x += nx * overlap;
+                  b.log.y += ny * overlap;
+                  b.log.z += nz * overlap;
+                }
+              }
+            }
+          }
+        });
+
+        // Hard clamp for extreme outliers: snap any remaining very-distant points
+        // back toward the cluster condensed center with smoothing. This handles
+        // stubborn patches that survive the iterative pull above.
+        const clampStdMultiplier = 2.5; // consider anything beyond mean + 2.5*std as extreme
+        const clampTargetStd = 0.9; // bring them to mean + 0.9*std
+        const absoluteMaxFraction = 0.65; // absolute max as fraction of scene radius
+        labelToKeys.forEach((keys) => {
+          const condensedCenter = clusterCondensed.get(uniqueToLabel.get(keys[0])!)!;
+          // recompute distances for this cluster
+          const dists = keys.map((key) => {
+            const e = map.get(key)!;
+            const dx = e.log.x - condensedCenter.x;
+            const dy = e.log.y - condensedCenter.y;
+            const dz = e.log.z - condensedCenter.z;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+          });
+          const meanD = dists.reduce((a, b) => a + b, 0) / Math.max(dists.length, 1);
+          const varD = dists.reduce((a, v, i) => a + (v - meanD) ** 2, 0) / Math.max(dists.length, 1);
+          const stdD = Math.sqrt(varD) || 1e-6;
+          const extremeThreshold = meanD + stdD * clampStdMultiplier;
+          const absoluteMax = Math.max(meanD + stdD * 3.0, sceneBounds.radius * absoluteMaxFraction);
+
+          keys.forEach((key) => {
+            const entry = map.get(key)!;
+            const dx = entry.log.x - condensedCenter.x;
+            const dy = entry.log.y - condensedCenter.y;
+            const dz = entry.log.z - condensedCenter.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+
+            if (dist > extremeThreshold || dist > absoluteMax) {
+              // Target distance just inside the cluster spread
+              const targetDist = Math.max(meanD + stdD * clampTargetStd, meanD * 0.6);
+              const scale = targetDist / dist;
+              const targetX = condensedCenter.x + dx * scale;
+              const targetY = condensedCenter.y + dy * scale;
+              const targetZ = condensedCenter.z + dz * scale;
+
+              // Hard snap: immediately set to the target to remove stubborn outliers
+              entry.log.x = targetX;
+              entry.log.y = targetY;
+              entry.log.z = targetZ;
+            }
+          });
+        });
+
+        // Final absolute-cap pass: enforce a strict maximum distance from the cluster
+        // center so any stubborn points are brought well inside the scene. This is
+        // deliberately aggressive and uses strong smoothing to avoid popping.
+        const absoluteCapFraction = 0.55; // fraction of scene radius considered too far
+        const absoluteMoveSmooth = 0.95; // move 95% of the way to the target
+        labelToKeys.forEach((keys) => {
+          const condensedCenter = clusterCondensed.get(uniqueToLabel.get(keys[0])!)!;
+          const dists = keys.map((k) => {
+            const e = map.get(k)!;
+            const dx = e.log.x - condensedCenter.x;
+            const dy = e.log.y - condensedCenter.y;
+            const dz = e.log.z - condensedCenter.z;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+          });
+          const meanD = dists.reduce((a, b) => a + b, 0) / Math.max(dists.length, 1);
+          const varD = dists.reduce((a, v) => a + (v - meanD) ** 2, 0) / Math.max(dists.length, 1);
+          const stdD = Math.sqrt(varD) || 1e-6;
+          const absoluteCap = Math.max(sceneBounds.radius * absoluteCapFraction, meanD + stdD * 1.0);
+          const fallbackTarget = Math.min(meanD + stdD * 0.9, sceneBounds.radius * 0.45);
+
+          keys.forEach((k) => {
+            const entry = map.get(k)!;
+            const dx = entry.log.x - condensedCenter.x;
+            const dy = entry.log.y - condensedCenter.y;
+            const dz = entry.log.z - condensedCenter.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+              if (dist > absoluteCap) {
+                const scale = fallbackTarget / dist;
+                const tx = condensedCenter.x + dx * scale;
+                const ty = condensedCenter.y + dy * scale;
+                const tz = condensedCenter.z + dz * scale;
+                // Hard snap: set directly to the computed target
+                entry.log.x = tx;
+                entry.log.y = ty;
+                entry.log.z = tz;
+              }
+          });
+        });
+
         // Global spread so islands and internal points breathe more in world space.
+        // Extra robust outlier pass using median + MAD (no cluster-specific hardcoding):
+        // - Compute median distance per-cluster and MAD-scaled metric
+        // - Any point beyond median + 3*MAD_scaled is an outlier and will be snapped
+        //   to a safer distance (median + 1.5*MAD_scaled)
+        const MAD_SCALE = 1.4826; // approximate conversion to std
+        labelToKeys.forEach((keys) => {
+          const condensedCenter = clusterCondensed.get(uniqueToLabel.get(keys[0])!)!;
+          const dists = keys.map((k) => {
+            const e = map.get(k)!;
+            const dx = e.log.x - condensedCenter.x;
+            const dy = e.log.y - condensedCenter.y;
+            const dz = e.log.z - condensedCenter.z;
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+          }).sort((a, b) => a - b);
+
+          if (dists.length === 0) return;
+          const mid = Math.floor(dists.length / 2);
+          const median = dists.length % 2 === 1 ? dists[mid] : (dists[mid - 1] + dists[mid]) / 2;
+
+          const absDevs = keys.map((k) => {
+            const e = map.get(k)!;
+            const dx = e.log.x - condensedCenter.x;
+            const dy = e.log.y - condensedCenter.y;
+            const dz = e.log.z - condensedCenter.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            return Math.abs(dist - median);
+          }).sort((a, b) => a - b);
+          const mad = absDevs.length % 2 === 1 ? absDevs[Math.floor(absDevs.length / 2)] : (absDevs[Math.floor(absDevs.length / 2) - 1] + absDevs[Math.floor(absDevs.length / 2)]) / 2;
+          const madScaled = Math.max(mad * MAD_SCALE, 1e-6);
+
+          const outlierThreshold = median + 3 * madScaled;
+          const targetDist = Math.max(median + 1.5 * madScaled, Math.min(sceneBounds.radius * 0.45, median + 2 * madScaled));
+
+          keys.forEach((k) => {
+            const entry = map.get(k)!;
+            const dx = entry.log.x - condensedCenter.x;
+            const dy = entry.log.y - condensedCenter.y;
+            const dz = entry.log.z - condensedCenter.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+            if (dist > outlierThreshold) {
+              const scale = targetDist / dist;
+              entry.log.x = condensedCenter.x + dx * scale;
+              entry.log.y = condensedCenter.y + dy * scale;
+              entry.log.z = condensedCenter.z + dz * scale;
+            }
+          });
+        });
+
+        // KNN-based neighbor snapping pass for any remaining stubborn outliers.
+        // For each cluster, detect outliers (median + 2*MAD) then move the outlier
+        // to the mean of its nearest same-cluster neighbors (k-nearest), preserving
+        // local shape without hardcoding cluster ids.
+        labelToKeys.forEach((keys) => {
+          if (keys.length <= 4) return; // too small to compute neighbors
+          const points = keys.map((k) => {
+            const e = map.get(k)!;
+            return { key: k, x: e.log.x, y: e.log.y, z: e.log.z };
+          });
+
+          const dists = points.map((p) => {
+            const dx = p.x - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.x);
+            const dy = p.y - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.y);
+            const dz = p.z - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.z);
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+          }).sort((a, b) => a - b);
+
+          const mid = Math.floor(dists.length / 2);
+          const median = dists.length % 2 === 1 ? dists[mid] : (dists[mid - 1] + dists[mid]) / 2;
+          const absDevs = dists.map((d) => Math.abs(d - median));
+          const mad = absDevs.length % 2 === 1 ? absDevs[Math.floor(absDevs.length / 2)] : (absDevs[Math.floor(absDevs.length / 2) - 1] + absDevs[Math.floor(absDevs.length / 2)]) / 2;
+          const madScaled = Math.max(mad * 1.4826, 1e-6);
+          const knnOutlierThreshold = median + 2 * madScaled;
+
+          // For each point flagged as outlier, find k nearest neighbors (excluding itself)
+          const K = Math.min(6, Math.max(2, Math.floor(points.length * 0.12)));
+          points.forEach((p) => {
+            const dx = p.x - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.x);
+            const dy = p.y - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.y);
+            const dz = p.z - (clusterCondensed.get(uniqueToLabel.get(p.key)!)!.z);
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+            if (dist <= knnOutlierThreshold) return;
+
+            // compute distances to other points in same cluster
+            const neighbors = points
+              .map((q) => {
+                if (q.key === p.key) return null;
+                const ddx = q.x - p.x;
+                const ddy = q.y - p.y;
+                const ddz = q.z - p.z;
+                return { key: q.key, d: Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz), x: q.x, y: q.y, z: q.z };
+              })
+              .filter(Boolean) as { key: string; d: number; x: number; y: number; z: number }[];
+
+            neighbors.sort((a, b) => a.d - b.d);
+            const chosen = neighbors.slice(0, K);
+            if (chosen.length === 0) return;
+            const avgX = chosen.reduce((s, n) => s + n.x, 0) / chosen.length;
+            const avgY = chosen.reduce((s, n) => s + n.y, 0) / chosen.length;
+            const avgZ = chosen.reduce((s, n) => s + n.z, 0) / chosen.length;
+
+            const entry = map.get(p.key)!;
+            // place the outlier at the neighbor mean + small jitter
+            const jitter = (Math.random() - 0.5) * (0.002 * sceneBounds.radius);
+            entry.log.x = avgX + jitter;
+            entry.log.y = avgY + jitter;
+            entry.log.z = avgZ + jitter;
+          });
+        });
+
         map.forEach((entry) => {
           const expand = (vec: THREE.Vector3) =>
             sceneBounds.center.clone().add(vec.clone().sub(sceneBounds.center).multiplyScalar(GLOBAL_LAYOUT_SPREAD));
