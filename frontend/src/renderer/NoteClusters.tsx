@@ -383,6 +383,20 @@ export default function NoteClusters() {
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
   const notesListRef = useRef<HTMLDivElement | null>(null);
   const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string }>>(new Map());
+  // Orbit controls ref and camera tween state for focus animation
+  const controlsRef = useRef<any>(null);
+
+  const cameraTweenRef = useRef<{
+    active: boolean;
+    startTime: number;
+    duration: number;
+    fromAzimuth: number;
+    toAzimuth: number;
+    fromPolar: number;
+    toPolar: number;
+    fromRadius: number;
+    toRadius: number;
+  } | null>(null);
 
   const makePointCacheKey = useCallback(
     (uniqueKey: string, creationDate?: string, modificationDate?: string) =>
@@ -587,6 +601,90 @@ export default function NoteClusters() {
     });
     return map;
   }, [data]);
+
+  // Camera focus helpers: animate orbit to bring a cluster to the front
+  function normalizeAngle(angle: number) {
+    while (angle > Math.PI) angle -= Math.PI * 2;
+    while (angle < -Math.PI) angle += Math.PI * 2;
+    return angle;
+  }
+
+  function shortestAngleDelta(from: number, to: number) {
+    return normalizeAngle(to - from);
+  }
+
+  function focusClusterByOrbit(clusterId: string) {
+    const controls = controlsRef.current;
+    const centroid = renderedClusterCenters.get(clusterId);
+    if (!controls || !centroid) return;
+    if (cameraTweenRef.current?.active) return;
+
+    const center = sceneBounds.center;
+    const dir = new THREE.Vector3(centroid.x - center.x, centroid.y - center.y, centroid.z - center.z);
+    if (dir.lengthSq() < 1e-8) return;
+
+    const currentAzimuth = controls.getAzimuthalAngle();
+    const currentPolar = controls.getPolarAngle();
+    const currentRadius = controls.getDistance();
+
+    const desiredAzimuth = Math.atan2(dir.x, dir.z);
+    const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
+    const desiredRadius = Math.max(sceneBounds.radius * GLOBAL_LAYOUT_SPREAD * 0.9, currentRadius * 0.55);
+
+    cameraTweenRef.current = {
+      active: true,
+      startTime: performance.now(),
+      duration: 900,
+      fromAzimuth: currentAzimuth,
+      toAzimuth: currentAzimuth + shortestAngleDelta(currentAzimuth, desiredAzimuth),
+      fromPolar: currentPolar,
+      toPolar: desiredPolar,
+      fromRadius: currentRadius,
+      toRadius: desiredRadius,
+    };
+  }
+
+  const CameraOrbitAnimator = () => {
+    const { camera } = useThree();
+    useFrame(() => {
+      const controls = controlsRef.current;
+      const tween = cameraTweenRef.current;
+      if (!controls || !tween || !tween.active) return;
+
+      const now = performance.now();
+      const rawT = (now - tween.startTime) / tween.duration;
+      const t = Math.min(Math.max(rawT, 0), 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+
+      const azimuth = THREE.MathUtils.lerp(tween.fromAzimuth, tween.toAzimuth, eased);
+      const polar = THREE.MathUtils.lerp(tween.fromPolar, tween.toPolar, eased);
+      const radius = THREE.MathUtils.lerp(tween.fromRadius, tween.toRadius, eased);
+
+      const center = sceneBounds.center;
+      const sinPolar = Math.sin(polar);
+      camera.position.set(
+        center.x + radius * sinPolar * Math.sin(azimuth),
+        center.y + radius * Math.cos(polar),
+        center.z + radius * sinPolar * Math.cos(azimuth),
+      );
+
+      controls.target.copy(center);
+      controls.update();
+
+      if (t >= 1 && cameraTweenRef.current) cameraTweenRef.current.active = false;
+    });
+    return null;
+  };
+
+
+
+
+
+
+
+
+
+
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
@@ -2138,6 +2236,11 @@ export default function NoteClusters() {
                   });
                 } else {
                   setSelectedClusters(new Set([clusterId]));
+                  try {
+                    focusClusterByOrbit(clusterId);
+                  } catch (err) {
+                    // ignore
+                  }
                 }
               }}
             />
@@ -3213,8 +3316,10 @@ export default function NoteClusters() {
               }}
               style={{ width: '100%', height: '100%', background: '#030313' }}
             >
+              <CameraOrbitAnimator />
               <ambientLight intensity={0.9} />
               <OrbitControls
+                ref={controlsRef}
                 makeDefault
                 enablePan
                 enableZoom
@@ -3464,8 +3569,13 @@ export default function NoteClusters() {
                           return next;
                         });
                       } else {
-                        // Regular click: Select only this cluster
+                        // Regular click: Select only this cluster and focus it
                         setSelectedClusters(new Set([label]));
+                        try {
+                          focusClusterByOrbit(label);
+                        } catch (err) {
+                          // ignore
+                        }
                       }
                     }}
                     style={{
