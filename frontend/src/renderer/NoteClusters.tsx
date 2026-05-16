@@ -383,6 +383,12 @@ export default function NoteClusters() {
   const notesListRef = useRef<HTMLDivElement | null>(null);
   const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string }>>(new Map());
 
+  const makePointCacheKey = useCallback(
+    (uniqueKey: string, creationDate?: string, modificationDate?: string) =>
+      `${uniqueKey}__${creationDate || ''}__${modificationDate || ''}`,
+    [],
+  );
+
   const fetchNoteContent = async (
     title: string,
     chunkIndex: number,
@@ -425,8 +431,9 @@ export default function NoteClusters() {
         unique_key: newUniqueKey,
       });
       // Cache the authoritative cluster info from backend for this unique_key
-      const cacheClusId = cluster_id || display_topic_id || '-1';
-      recentClusterInfoCache.current.set(newUniqueKey, {
+      const cacheClusId = display_topic_id || cluster_id || '-1';
+      const cacheKey = makePointCacheKey(newUniqueKey, creationDate, modificationDate);
+      recentClusterInfoCache.current.set(cacheKey, {
         clusterId: cacheClusId,
         clusterLabel: cluster_label || '',
       });
@@ -1829,6 +1836,42 @@ export default function NoteClusters() {
     return map;
   }, [clusterGroups, clusterCentroids, sceneBounds]);
 
+  const authoritativeClusterByKey = useMemo(() => {
+    const map = new Map<string, { key: string; label: string }>();
+
+    data.forEach((point) => {
+      const key = point.display_topic_id || point.cluster_id || '-1';
+      const mapKey = makePointCacheKey(point.unique_key, point.creation_date, point.modification_date);
+      map.set(mapKey, {
+        key,
+        label: point.cluster_label || clusterNameById.get(key) || '',
+      });
+    });
+
+    // Backend-opened modal rows are treated as authoritative overrides.
+    recentClusterInfoCache.current.forEach((info, compositeKey) => {
+      map.set(compositeKey, {
+        key: info.clusterId || '-1',
+        label: info.clusterLabel || clusterNameById.get(info.clusterId || '-1') || '',
+      });
+    });
+
+    if (selectedNode) {
+      const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
+      const mapKey = makePointCacheKey(
+        selectedNode.unique_key,
+        selectedNode.creation_date,
+        selectedNode.modification_date,
+      );
+      map.set(mapKey, {
+        key,
+        label: selectedNode.cluster_label || clusterNameById.get(key) || '',
+      });
+    }
+
+    return map;
+  }, [data, selectedNode, clusterNameById, makePointCacheKey]);
+
   const { buckets, pointLookup } = useMemo(() => {
     const bucketMap = new Map<string, PointBucket>();
     const lookup = new Map<string, VisualPoint>();
@@ -1841,17 +1884,22 @@ export default function NoteClusters() {
 
       group.customdata.forEach((meta, index) => {
         const isHit = searchScoreMap.has(meta.unique_key);
+        const pointKey = makePointCacheKey(meta.unique_key, meta.creation_date, meta.modification_date);
+        const authoritative = authoritativeClusterByKey.get(pointKey);
+        const pointClusterKey = authoritative?.key || label;
+        const pointClusterLabel = authoritative?.label || clusterNameById.get(pointClusterKey) || meta.cluster_label;
+        const pointClusterColorBase = clusterColors[pointClusterKey] || clusterColorBase;
 
         // Slightly larger baseline for guaranteed visibility.
         const size = 0.028;
 
         // Determine per-point color when a search is active.
         // Only the exact matching chunks (isHit) should be bright; all others should be much dimmer.
-        let dotColor = clusterColorBase;
+        let dotColor = pointClusterColorBase;
         if (searchResults.length > 0) {
           if (isHit) {
             // Keep hit color close to cluster base but slightly lifted for visibility.
-            const c = new THREE.Color(clusterColorBase);
+            const c = new THREE.Color(pointClusterColorBase);
             const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
             c.getHSL(hsl);
             // increase lightness a touch for emphasis
@@ -1859,7 +1907,7 @@ export default function NoteClusters() {
             dotColor = c.getStyle();
           } else {
             // Non-hit chunks: desaturate and darken strongly so they recede visually.
-            const c = new THREE.Color(clusterColorBase);
+            const c = new THREE.Color(pointClusterColorBase);
             const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
             c.getHSL(hsl);
             c.setHSL(hsl.h, Math.max(0, hsl.s * 0.22), Math.max(0, hsl.l * 0.16));
@@ -1888,6 +1936,9 @@ export default function NoteClusters() {
 
         const visualPoint: VisualPoint = {
           ...meta,
+          cluster_id: pointClusterKey,
+          display_topic_id: pointClusterKey,
+          cluster_label: pointClusterLabel,
           x: targetPos.x,
           y: targetPos.y,
           z: targetPos.z,
@@ -1905,8 +1956,11 @@ export default function NoteClusters() {
       pointLookup: lookup,
     };
   }, [
+    authoritativeClusterByKey,
+    clusterNameById,
     clusterColors,
     clusterGroups,
+    makePointCacheKey,
     pointPositionMap,
     searchResults.length,
     searchScoreMap,
@@ -2085,7 +2139,7 @@ export default function NoteClusters() {
   }, [clusterGroups, selectedClusters, selectedNode]);
 
   const resolveClusterForUniqueKey = useCallback(
-    (uniqueKey: string) => {
+    (uniqueKey: string, creationDate?: string, modificationDate?: string) => {
       // If the selected (open) modal corresponds to this unique key, prefer its authoritative cluster info
       if (selectedNode && selectedNode.unique_key === uniqueKey) {
         const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
@@ -2094,7 +2148,8 @@ export default function NoteClusters() {
 
       // Check cache for recently loaded backend cluster info (from successfully opened modals)
       // This ensures we use fresh backend data even for points not currently in selectedNode
-      const cached = recentClusterInfoCache.current.get(uniqueKey);
+      const compositeKey = makePointCacheKey(uniqueKey, creationDate, modificationDate);
+      const cached = recentClusterInfoCache.current.get(compositeKey);
       if (cached) {
         return { key: cached.clusterId, label: cached.clusterLabel || clusterNameById.get(cached.clusterId) || '' };
       }
@@ -2109,7 +2164,7 @@ export default function NoteClusters() {
       // Fallback: empty values
       return { key: '-1', label: '' };
     },
-    [selectedNode, data, clusterNameById],
+    [selectedNode, data, clusterNameById, makePointCacheKey],
   );
 
   const selectedNodeColor = useMemo(() => {
@@ -3076,7 +3131,11 @@ export default function NoteClusters() {
                   <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
                   {/* Use authoritative cluster key (display_topic_id if present) and lookup label from clusterNameById */}
                   {(() => {
-                      const resolved = resolveClusterForUniqueKey(hoveredPoint.unique_key);
+                      const resolved = resolveClusterForUniqueKey(
+                        hoveredPoint.unique_key,
+                        hoveredPoint.creation_date,
+                        hoveredPoint.modification_date,
+                      );
                       const displayId = resolved.key && resolved.key !== '-1' ? resolved.key : '?';
                       const displayLabel = resolved.label || '';
                       return (
@@ -3119,7 +3178,17 @@ export default function NoteClusters() {
               />
               <AutoRotateGroup>
                 {/* When hovering a point, show only that cluster's header to avoid misleading overlaps */}
-                <ClusterHeaders labels={hoveredPoint ? [resolveClusterForUniqueKey(hoveredPoint.unique_key).key] : visibleLabels} />
+                <ClusterHeaders
+                  labels={hoveredPoint
+                    ? [
+                      resolveClusterForUniqueKey(
+                        hoveredPoint.unique_key,
+                        hoveredPoint.creation_date,
+                        hoveredPoint.modification_date,
+                      ).key,
+                    ]
+                    : visibleLabels}
+                />
                 {buckets.map((bucket) => {
                   const adaptiveBase = Math.max(DOT_RADIUS_BASE, sceneBounds.radius * 0.0018);
                   const sphereRadius = (bucket.sizeMetric / 0.02) * adaptiveBase;
