@@ -369,6 +369,7 @@ export default function NoteClusters() {
   const [pendingScrollTargetCluster, setPendingScrollTargetCluster] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [hoveredHeaderClusterId, setHoveredHeaderClusterId] = useState<string | null>(null);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
   const [hoverSource, setHoverSource] = useState<'canvas' | 'list' | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, containerWidth: 0 });
@@ -1997,15 +1998,25 @@ export default function NoteClusters() {
   }, [clusterGroups, pointPositionMap]);
 
   const ClusterHeaderCard = ({
+    clusterId,
     baseCenter,
     color,
     text,
     sceneRadius,
+    isHovered,
+    onHoverStart,
+    onHoverEnd,
+    onSelect,
   }: {
+    clusterId: string;
     baseCenter: THREE.Vector3;
     color: string;
     text: string;
     sceneRadius: number;
+    isHovered: boolean;
+    onHoverStart: (clusterId: string) => void;
+    onHoverEnd: () => void;
+    onSelect: (clusterId: string, shiftKey: boolean) => void;
   }) => {
     const groupRef = useRef<THREE.Group>(null);
     const camera = useThree((state) => state.camera);
@@ -2026,21 +2037,38 @@ export default function NoteClusters() {
       groupRef.current.position.copy(localTarget);
     });
 
-    const brightColor = mixColorWithWhite(color, 0.58);
-    const borderColor = mixColorWithWhite(color, 0.52);
+    const brightColor = mixColorWithWhite(color, isHovered ? 0.78 : 0.58);
+    const borderColor = mixColorWithWhite(color, isHovered ? 0.72 : 0.52);
     const maxWidth = Math.min(2.8, Math.max(0.95, sceneRadius * 0.038));
     const widthFactor = 0.11;
     const estimatedLines = Math.max(1, Math.ceil((text.length * widthFactor) / maxWidth));
     const panelHeight = 0.2 + estimatedLines * 0.115;
+    const hoverScale = isHovered ? 1.14 : 1;
+    const hoverFontSize = isHovered ? 0.19 : 0.17;
+    const panelOpacity = isHovered ? 0.28 : 0.18;
 
     return (
       <group ref={groupRef}>
         <Billboard>
-          <group>
+          <group
+            scale={hoverScale}
+            onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+              event.stopPropagation();
+              onHoverStart(clusterId);
+            }}
+            onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+              event.stopPropagation();
+              onHoverEnd();
+            }}
+            onClick={(event: ThreeEvent<MouseEvent>) => {
+              event.stopPropagation();
+              onSelect(clusterId, !!event.nativeEvent.shiftKey);
+            }}
+          >
             {/* very subtle backing panel for readability without a heavy gray slab */}
             <mesh>
               <planeGeometry args={[maxWidth + 0.16, panelHeight]} />
-              <meshBasicMaterial color="#071022" transparent opacity={0.18} depthWrite={false} />
+              <meshBasicMaterial color="#071022" transparent opacity={panelOpacity} depthWrite={false} />
             </mesh>
 
             {/* clean border using 4 strips (avoids wireframe center-line artifacts) */}
@@ -2067,7 +2095,7 @@ export default function NoteClusters() {
               anchorX="center"
               anchorY="middle"
               color={brightColor}
-              fontSize={0.115}
+              fontSize={hoverFontSize}
               lineHeight={1.12}
               outlineWidth={0.0025}
               outlineColor="#01030a"
@@ -2088,13 +2116,30 @@ export default function NoteClusters() {
           const pos = renderedClusterCenters.get(label) || new THREE.Vector3(0, 0, 0);
           const color = clusterColors[label] || '#dddddd';
           const text = clusterGroups[label]?.clusterLabel || label;
+          const isHovered = hoveredHeaderClusterId === label;
           return (
             <ClusterHeaderCard
               key={`hdr-${label}`}
+              clusterId={label}
               baseCenter={pos}
               color={color}
               text={text}
               sceneRadius={sceneBounds.radius * GLOBAL_LAYOUT_SPREAD}
+              isHovered={isHovered}
+              onHoverStart={setHoveredHeaderClusterId}
+              onHoverEnd={() => setHoveredHeaderClusterId(null)}
+              onSelect={(clusterId, shiftKey) => {
+                if (shiftKey) {
+                  setSelectedClusters((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(clusterId)) next.delete(clusterId);
+                    else next.add(clusterId);
+                    return next;
+                  });
+                } else {
+                  setSelectedClusters(new Set([clusterId]));
+                }
+              }}
             />
           );
         })}
