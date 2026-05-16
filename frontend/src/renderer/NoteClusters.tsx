@@ -629,7 +629,17 @@ export default function NoteClusters() {
 
     const desiredAzimuth = Math.atan2(dir.x, dir.z);
     const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
-    const desiredRadius = Math.max(sceneBounds.radius * GLOBAL_LAYOUT_SPREAD * 0.9, currentRadius * 0.55);
+    const desiredRadius = THREE.MathUtils.clamp(
+      dir.length() + Math.max(
+        sceneBounds.radius * 0.22,
+        ((clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
+          const positionData = pointPositionMap.get(meta.unique_key);
+          return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
+        }, 0) ?? 0) * 1.6),
+      ),
+      sceneBounds.radius * 1.25,
+      sceneBounds.radius * 2.6,
+    );
 
     cameraTweenRef.current = {
       active: true,
