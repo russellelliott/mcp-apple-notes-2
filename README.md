@@ -30,7 +30,7 @@ This script iterates through notes and stops when the limit is reached. It is pa
 To start the full application (Backend API + Frontend UI):
 
 ```bash
-./start_frontend.sh
+./start.sh
 ```
 This script will:
 - Start the Python FastAPI backend server (`backend/scripts/server.py`) in the background.

@@ -1,7 +1,8 @@
 #!/bin/bash
+set -euo pipefail
 
-# Store the root directory
-ROOT_DIR="$(pwd)"
+# Resolve the repository root from this script so the launcher works from any cwd.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Starting Backend Server..."
 # Start the backend server in the background
@@ -13,7 +14,7 @@ echo "Backend Server started with PID $BACKEND_PID"
 cleanup() {
     echo ""
     echo "Stopping backend server (PID $BACKEND_PID)..."
-    kill $BACKEND_PID
+    kill "$BACKEND_PID" 2>/dev/null || true
     exit
 }
 
@@ -56,5 +57,4 @@ while true; do
 done
 
 echo "Starting Frontend App..."
-cd "$ROOT_DIR/frontend"
-npm start
+npm start --prefix "$ROOT_DIR/frontend"

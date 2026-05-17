@@ -77,12 +77,14 @@ def load_and_process_data():
             raise RuntimeError("umap library not available. Install umap-learn to compute projections.")
         embeddings = np.stack(df['vector'].values)
         
+        # Remove `random_state` to allow UMAP to use multiple cores when available.
+        # Set `n_jobs=-1` to enable parallelism across all CPUs.
         reducer = umap.UMAP(
-            n_components=3, 
-            random_state=42,
+            n_components=3,
             n_neighbors=30,
             min_dist=0.0,
-            metric='cosine'
+            metric='cosine',
+            n_jobs=-1,
         )
         
         projections = reducer.fit_transform(embeddings)
@@ -251,10 +253,11 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     K = len(cluster_ids)
 
     spread = np.ptp(centroid_arr, axis=0).max() if K > 0 else 0.0
-    # More aggressive separation requested: increase multiplier and minimum separation
-    MIN_SEP = max(spread * 0.85, 10.0)
-    # Increase iteration count for stronger convergence
-    REPULSE_ITERS = 300
+    # Maximum separation: push clusters as far apart as possible
+    MIN_SEP = max(spread * 5.0, 150.0)
+    # Maximum iteration count for centroid repulsion convergence.
+    # Lowered to speed startup; increase if clusters still overlap.
+    REPULSE_ITERS = 400
 
     for _ in range(REPULSE_ITERS):
         for i in range(K):
@@ -266,6 +269,16 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
                     direction = delta / dist
                     centroid_arr[i] -= direction * overlap
                     centroid_arr[j] += direction * overlap
+
+    # Maximum outward radial nudge from the global centroid to push clusters to the far edges
+    try:
+        global_cent = centroid_arr.mean(axis=0)
+        radial_factor = 0.8
+        for k in range(K):
+            offset = centroid_arr[k] - global_cent
+            centroid_arr[k] = centroid_arr[k] + offset * radial_factor
+    except Exception:
+        pass
 
     # Map back to dict for fast lookup (string keys)
     spaced_centroids = {str(cluster_ids[k]): centroid_arr[k] for k in range(K)}
@@ -329,10 +342,10 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
         if centroid is None:
             centroid = centroids.loc[cid_str].values if cid_str in centroids.index else np.zeros(3)
         
-        # Increase intra-cluster radius so dots are more spread out visually.
+        # Maximum intra-cluster radius for extreme dot spread within each cluster.
         # Make cluster size scale with number of chunks: small clusters stay small,
         # larger clusters grow more strongly. Use sqrt and log to provide smooth scaling.
-        RADIUS = max(1.0, math.sqrt(n) * 0.9, math.log1p(max(1, n)) * 1.2)
+        RADIUS = max(2.5, math.sqrt(n) * 2.5, math.log1p(max(1, n)) * 2.8)
         
         # Sort indices to ensure stable positions
         indices_sorted = sorted(indices, key=lambda i: (df.at[i, 'chunk_index'], i))
