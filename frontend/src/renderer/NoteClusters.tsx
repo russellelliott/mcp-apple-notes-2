@@ -680,9 +680,13 @@ export default function NoteClusters() {
       return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
     }, 0) ?? 0;
 
-    // Adjust multiplier based on cluster size relative to scene radius
+    // Adjust multiplier based on both cluster radius and distance from center
+    // Closer clusters and smaller clusters get zoomed in more
+    const baseZoom = 0.2;
+    const distanceFromCenter = dir.length();
     const clusterToSceneRatio = clusterRadius / visualSceneRadius;
-    const radiusMultiplier = 0.3 + (clusterToSceneRatio * 0.3); // ranges from 0.3 (small) to 0.6 (large)
+    const distanceToSceneRatio = distanceFromCenter / visualSceneRadius;
+    const radiusMultiplier = baseZoom + (clusterToSceneRatio * 0.08) + (distanceToSceneRatio * 0.1); // accounts for both size and position
 
     const desiredRadius = THREE.MathUtils.clamp(
       dir.length()
