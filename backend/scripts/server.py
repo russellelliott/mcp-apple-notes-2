@@ -3,7 +3,13 @@ import sys  # Added sys
 import lancedb
 import pandas as pd
 import numpy as np
-import umap
+import math
+try:
+    import umap
+    UMAP_AVAILABLE = True
+except Exception as _e:
+    umap = None
+    UMAP_AVAILABLE = False
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -67,6 +73,8 @@ def load_and_process_data():
             
         # Compute UMAP
         print("🧮 Computing UMAP projections...")
+        if not UMAP_AVAILABLE:
+            raise RuntimeError("umap library not available. Install umap-learn to compute projections.")
         embeddings = np.stack(df['vector'].values)
         
         reducer = umap.UMAP(
@@ -114,7 +122,17 @@ def load_and_process_data():
             df['display_topic_id'] = df['base_topic_id'].astype(str)
         else:
             df['display_topic_id'] = df['display_topic_id'].astype(str).fillna(df['base_topic_id'])
-            
+
+        # Compute server-side shaped positions (Fibonacci sphere per cluster)
+        try:
+            print("🔮 Computing shaped cluster positions...")
+            df = compute_shaped_positions(df)
+            print(f"✅ Shaped positions computed. rows={len(df)} index_type={type(df.index)}")
+            if len(df) > 0:
+                print(f" first_index_sample={list(df.index[:5])}")
+        except Exception as e:
+            print(f"⚠️ Error computing shaped positions: {e}")
+
         state.df_viz = df
         print("✨ Data processing complete.")
 
@@ -158,6 +176,99 @@ class NotePoint(BaseModel):
     creation_date: Optional[Any] = None
     modification_date: Optional[Any] = None
     # We avoid sending full content or vector to keep payload light, unless requested
+
+
+class ShapedNotePoint(BaseModel):
+    unique_key: str
+    title: str
+    chunk_index: int
+    total_chunks: Optional[int] = None
+    cluster_id: Optional[str] = None
+    base_topic_id: Optional[str] = None
+    display_topic_id: Optional[str] = None
+    cluster_label: str
+    umap_x: float
+    umap_y: float
+    umap_z: float
+    display_x: float
+    display_y: float
+    display_z: float
+    creation_date: Optional[Any] = None
+    modification_date: Optional[Any] = None
+
+
+def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute display_x/y/z positions for each row by placing points on
+    a Fibonacci sphere around a repulsed cluster centroid in UMAP space.
+    """
+    # Work on a copy and ensure positional integer index for numpy indexing
+    df = df.copy().reset_index(drop=True)
+    cluster_col = 'display_topic_id' if 'display_topic_id' in df.columns else 'cluster_id'
+
+    if df.empty:
+        df['display_x'] = pd.Series(dtype=float)
+        df['display_y'] = pd.Series(dtype=float)
+        df['display_z'] = pd.Series(dtype=float)
+        return df
+
+    # --- Stage 1: UMAP-space centroids per cluster ---
+    centroids = df.groupby(cluster_col)[['umap_x', 'umap_y', 'umap_z']].mean()
+    if centroids.empty:
+        # fallback: copy UMAP coords to display
+        df['display_x'] = df['umap_x']
+        df['display_y'] = df['umap_y']
+        df['display_z'] = df['umap_z']
+        return df
+
+    # --- Stage 2: Repel cluster centroids so they don't overlap ---
+    centroid_arr = centroids.values.copy()
+    cluster_ids = centroids.index.tolist()
+    K = len(cluster_ids)
+
+    spread = np.ptp(centroid_arr, axis=0).max() if K > 0 else 0.0
+    MIN_SEP = max(spread * 0.12, 2.0)
+    REPULSE_ITERS = 20
+
+    for _ in range(REPULSE_ITERS):
+        for i in range(K):
+            for j in range(i + 1, K):
+                delta = centroid_arr[j] - centroid_arr[i]
+                dist = np.linalg.norm(delta) or 1e-9
+                if dist < MIN_SEP:
+                    overlap = (MIN_SEP - dist) * 0.5
+                    direction = delta / dist
+                    centroid_arr[i] -= direction * overlap
+                    centroid_arr[j] += direction * overlap
+
+    # Map back to dict for fast lookup (string keys)
+    spaced_centroids = {str(cluster_ids[k]): centroid_arr[k] for k in range(K)}
+
+    # --- Stage 3: Fibonacci sphere per cluster ---
+    GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
+
+    display_x = np.zeros(len(df))
+    display_y = np.zeros(len(df))
+    display_z = np.zeros(len(df))
+
+    for cid, group_idx in df.groupby(cluster_col).groups.items():
+        n = len(group_idx)
+        centroid = spaced_centroids.get(str(cid), np.zeros(3))
+
+        RADIUS = max(0.6, math.log1p(n) * 0.55)
+
+        for rank, df_idx in enumerate(group_idx):
+            y_fib = 1.0 - (rank / max(n - 1, 1)) * 2.0
+            r_fib = math.sqrt(max(0.0, 1.0 - y_fib * y_fib))
+            theta = GOLDEN_ANGLE * rank
+
+            display_x[df_idx] = centroid[0] + r_fib * math.cos(theta) * RADIUS
+            display_y[df_idx] = centroid[1] + y_fib * RADIUS
+            display_z[df_idx] = centroid[2] + r_fib * math.sin(theta) * RADIUS
+
+    df['display_x'] = display_x
+    df['display_y'] = display_y
+    df['display_z'] = display_z
+    return df
 
 class SearchResult(BaseModel):
     unique_key: str
@@ -381,6 +492,41 @@ async def get_points():
     
     return records
 
+
+@app.get("/points_shaped", response_model=List[ShapedNotePoint])
+async def get_points_shaped():
+    """
+    Get all points with server-computed Fibonacci sphere positions.
+    display_x/y/z replace raw umap_x/y/z for visualization.
+    Raw UMAP coordinates are still included for reference.
+    """
+    if state.df_viz.empty:
+        return []
+
+    required_cols = ['display_x', 'display_y', 'display_z']
+    if not all(c in state.df_viz.columns for c in required_cols):
+        raise HTTPException(
+            status_code=503,
+            detail="Shaped positions not yet computed. Data may still be loading."
+        )
+
+    valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
+    points_df = valid_df.copy()
+    points_df['cluster_id'] = points_df['display_topic_id']
+
+    records = points_df[[
+        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
+        'display_topic_id', 'cluster_label',
+        'umap_x', 'umap_y', 'umap_z',
+        'display_x', 'display_y', 'display_z',
+        'creation_date', 'modification_date'
+    ]].to_dict(orient='records')
+
+    print(f"/points_shaped returning {len(records)} records")
+    if len(records) > 0:
+        print(f" sample record keys: {list(records[0].keys())}")
+    return records
+
 @app.get("/search", response_model=SearchResponse)
 async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_distance: float = 0.8):
     """Search notes and return matches + IDs"""
@@ -471,6 +617,26 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
 @app.get("/health")
 async def health():
     return {"status": "ok", "loaded_rows": len(state.df_viz)}
+
+
+@app.get("/debug_state")
+async def debug_state():
+    """Return internal debug info: loaded rows, columns, and a small sample."""
+    try:
+        loaded = 0 if state.df_viz is None or state.df_viz.empty else len(state.df_viz)
+        cols = [] if state.df_viz is None or state.df_viz.empty else list(state.df_viz.columns)
+        sample = [] if state.df_viz is None or state.df_viz.empty else state.df_viz.head(5).to_dict(orient='records')
+        return {
+            'loaded_rows': loaded,
+            'columns': cols,
+            'sample_count': len(sample),
+            'sample': sample,
+            'table_present': state.table is not None,
+            'db_path': str(DB_PATH),
+            'table_name': TABLE_NAME,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/reload_data")
