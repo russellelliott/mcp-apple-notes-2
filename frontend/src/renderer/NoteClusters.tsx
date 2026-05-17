@@ -144,6 +144,7 @@ const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35
 
 const DOT_RADIUS_BASE = 0.016;
 const GLOBAL_LAYOUT_SPREAD = 2.45;
+const CLUSTER_POINT_SPREAD = 4.8;
 
 const compareTopicIds = (a: string, b: string) => {
   const aParts = String(a).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
@@ -204,8 +205,15 @@ const DotInstances = ({
       mesh.setMatrixAt(index, temp.matrix);
 
       if (glowMesh) {
-        // glow is larger and stronger for hovered points
-        const glowScale = isHovered ? scale * 3.0 : scale * 2.4;
+        // only show glow on the hovered/highlighted point, no glow on others
+        let glowScale = 0;
+        if (isHovered) {
+          glowScale = scale * 3.0;
+        } else if (isHighlighted) {
+          glowScale = scale * 2.2;
+        } else if (hoveredId || highlightedId) {
+          glowScale = scale * 0.08;
+        }
         temp.scale.setScalar(glowScale);
         temp.updateMatrix();
         glowMesh.setMatrixAt(index, temp.matrix);
@@ -666,15 +674,16 @@ export default function NoteClusters() {
     const desiredAzimuth = Math.atan2(dir.x, dir.z);
     const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
     const desiredRadius = THREE.MathUtils.clamp(
-      dir.length() + Math.max(
-        sceneBounds.radius * 0.22,
-        ((clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
-          const positionData = pointPositionMap.get(meta.unique_key);
-          return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
-        }, 0) ?? 0) * 1.6),
-      ),
-      sceneBounds.radius * 1.25,
-      sceneBounds.radius * 2.6,
+      dir.length()
+        + Math.max(
+          visualSceneRadius * 0.22,
+          ((clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
+            const positionData = displayPointPositionMap.get(meta.unique_key);
+            return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
+          }, 0) ?? 0) * 1.6),
+        ),
+      visualSceneRadius * 1.25,
+      visualSceneRadius * 2.6,
     );
 
     cameraTweenRef.current = {
@@ -1444,6 +1453,37 @@ export default function NoteClusters() {
     return map;
   }, [data]);
 
+  const displayPointPositionMap = useMemo(() => {
+    const map = new Map<string, { log: THREE.Vector3 }>();
+
+    Object.keys(clusterGroups).forEach((label) => {
+      const centroid = clusterCentroids.get(label);
+      const group = clusterGroups[label];
+      if (!group || group.customdata.length === 0) return;
+
+      const centroidVector = centroid ? new THREE.Vector3(centroid.x, centroid.y, centroid.z) : null;
+
+      group.customdata.forEach((meta) => {
+        const positioned = pointPositionMap.get(meta.unique_key);
+        if (!positioned) return;
+
+        if (!centroidVector) {
+          map.set(meta.unique_key, positioned);
+          return;
+        }
+
+        const offset = positioned.log.clone().sub(centroidVector);
+        map.set(meta.unique_key, {
+          log: centroidVector.clone().add(offset.multiplyScalar(CLUSTER_POINT_SPREAD)),
+        });
+      });
+    });
+
+    return map;
+  }, [clusterCentroids, clusterGroups, pointPositionMap]);
+
+  const visualSceneRadius = sceneBounds.radius * CLUSTER_POINT_SPREAD;
+
   const authoritativeClusterByKey = useMemo(() => {
     const map = new Map<string, { key: string; label: string; color?: string }>();
 
@@ -1505,8 +1545,8 @@ export default function NoteClusters() {
           ? (isHit ? mixColorWithWhite(dotColor, 0.12) : mixColorWithDark(dotColor, 0.72))
           : dotColor;
 
-        // Glow: strong for hits, very subtle for non-hits when searching.
-        const glowOpacity = isSearchMode ? (isHit ? 0.42 : 0.02) : 0.24;
+        // Glow: strong for hits in search mode, otherwise no glow by default (only on hover).
+        const glowOpacity = isSearchMode ? (isHit ? 0.42 : 0.02) : 0.0;
         const opacity = isSearchMode ? (isHit ? 0.98 : 0.18) : 0.9;
         const quantizedSize = Math.max(0.012, Math.round(size * 1000) / 1000);
         const bucketKey = `${quantizedSize}|${visualColor}|${glowOpacity}|${opacity}`;
@@ -1521,7 +1561,7 @@ export default function NoteClusters() {
           });
         }
 
-        const positionData = pointPositionMap.get(meta.unique_key);
+        const positionData = displayPointPositionMap.get(meta.unique_key);
         const targetPos = positionData
           ? positionData.log
           : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
@@ -1554,7 +1594,7 @@ export default function NoteClusters() {
     clusterGroups,
     debouncedQuery,
     makePointCacheKey,
-    pointPositionMap,
+    displayPointPositionMap,
     searchResults.length,
     searchScoreMap,
     visibleLabels,
@@ -1574,7 +1614,7 @@ export default function NoteClusters() {
       let sz = 0;
       let count = 0;
       group.customdata.forEach((meta) => {
-        const positioned = pointPositionMap.get(meta.unique_key);
+        const positioned = displayPointPositionMap.get(meta.unique_key);
         if (!positioned) return;
         sx += positioned.log.x;
         sy += positioned.log.y;
@@ -1587,7 +1627,7 @@ export default function NoteClusters() {
       }
     });
     return centers;
-  }, [clusterGroups, pointPositionMap]);
+  }, [clusterGroups, displayPointPositionMap]);
 
   // Per-cluster visual radius (max distance from centroid to any point in that cluster)
   const clusterRadii = useMemo(() => {
@@ -1601,7 +1641,7 @@ export default function NoteClusters() {
 
       let maxDist = 0;
       group.customdata.forEach((meta) => {
-        const pos = pointPositionMap.get(meta.unique_key);
+        const pos = displayPointPositionMap.get(meta.unique_key);
         if (!pos) return;
         const d = center.distanceTo(pos.log);
         if (d > maxDist) maxDist = d;
@@ -1611,7 +1651,7 @@ export default function NoteClusters() {
       radii.set(label, Math.max(maxDist, 0.6));
     });
     return radii;
-  }, [renderedClusterCenters, clusterGroups, pointPositionMap]);
+  }, [renderedClusterCenters, clusterGroups, displayPointPositionMap]);
 
   const ClusterHeaderCard = ({
     clusterId,
@@ -1745,8 +1785,8 @@ export default function NoteClusters() {
               baseCenter={pos}
               color={color}
               text={text}
-              sceneRadius={sceneBounds.radius * GLOBAL_LAYOUT_SPREAD}
-              clusterRadius={clusterRadii.get(label) || Math.max(sceneBounds.radius * 0.02, 0.35)}
+              sceneRadius={visualSceneRadius * GLOBAL_LAYOUT_SPREAD}
+              clusterRadius={clusterRadii.get(label) || Math.max(visualSceneRadius * 0.02, 0.35)}
               isHovered={isHovered}
               onHoverStart={setHoveredHeaderClusterId}
               onHoverEnd={() => setHoveredHeaderClusterId(null)}
@@ -1991,14 +2031,14 @@ export default function NoteClusters() {
   }, [tooltipPosition]);
 
   const cameraPosition = useMemo(() => {
-    const { center, radius } = sceneBounds;
-    const spreadRadius = radius * GLOBAL_LAYOUT_SPREAD;
+    const { center } = sceneBounds;
+    const spreadRadius = visualSceneRadius * GLOBAL_LAYOUT_SPREAD;
     return [
       center.x + spreadRadius * 1.7,
       center.y + spreadRadius * 1.3,
       center.z + spreadRadius * 1.7,
     ] as [number, number, number];
-  }, [sceneBounds]);
+  }, [sceneBounds, visualSceneRadius]);
 
   const openSidebarNote = useCallback(
     (note: SidebarNoteData, preferredChunkIndex?: number) => {
@@ -2825,7 +2865,7 @@ export default function NoteClusters() {
               camera={{
                 fov: 45,
                 near: 0.1,
-                far: Math.max(sceneBounds.radius * GLOBAL_LAYOUT_SPREAD * 22, 180),
+                far: Math.max(visualSceneRadius * GLOBAL_LAYOUT_SPREAD * 22, 180),
                 position: cameraPosition,
               }}
               onPointerMissed={() => {
