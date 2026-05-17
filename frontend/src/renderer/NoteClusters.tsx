@@ -676,14 +676,14 @@ export default function NoteClusters() {
     const desiredRadius = THREE.MathUtils.clamp(
       dir.length()
         + Math.max(
-          visualSceneRadius * 0.22,
+          visualSceneRadius * 0.12,
           ((clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
             const positionData = displayPointPositionMap.get(meta.unique_key);
             return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
-          }, 0) ?? 0) * 1.6),
+          }, 0) ?? 0) * 1.3),
         ),
-      visualSceneRadius * 1.25,
-      visualSceneRadius * 2.6,
+      visualSceneRadius * 0.4,
+      visualSceneRadius * 0.5,
     );
 
     cameraTweenRef.current = {
