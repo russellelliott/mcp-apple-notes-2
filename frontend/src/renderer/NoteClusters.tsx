@@ -1575,12 +1575,37 @@ export default function NoteClusters() {
     return centers;
   }, [clusterGroups, pointPositionMap]);
 
+  // Per-cluster visual radius (max distance from centroid to any point in that cluster)
+  const clusterRadii = useMemo(() => {
+    const radii = new Map<string, number>();
+    renderedClusterCenters.forEach((center, label) => {
+      const group = clusterGroups[label];
+      if (!group || !group.customdata || group.customdata.length === 0) {
+        radii.set(label, 0.5);
+        return;
+      }
+
+      let maxDist = 0;
+      group.customdata.forEach((meta) => {
+        const pos = pointPositionMap.get(meta.unique_key);
+        if (!pos) return;
+        const d = center.distanceTo(pos.log);
+        if (d > maxDist) maxDist = d;
+      });
+
+      // minimum visual radius to avoid tiny clusters
+      radii.set(label, Math.max(maxDist, 0.6));
+    });
+    return radii;
+  }, [renderedClusterCenters, clusterGroups, pointPositionMap]);
+
   const ClusterHeaderCard = ({
     clusterId,
     baseCenter,
     color,
     text,
     sceneRadius,
+    clusterRadius,
     isHovered,
     onHoverStart,
     onHoverEnd,
@@ -1591,6 +1616,7 @@ export default function NoteClusters() {
     color: string;
     text: string;
     sceneRadius: number;
+    clusterRadius: number;
     isHovered: boolean;
     onHoverStart: (clusterId: string) => void;
     onHoverEnd: () => void;
@@ -1604,12 +1630,15 @@ export default function NoteClusters() {
       const parent = groupRef.current.parent;
       const worldBase = parent.localToWorld(baseCenter.clone());
       const cameraDir = new THREE.Vector3().subVectors(camera.position, worldBase).normalize();
-      const frontOffset = Math.max(sceneRadius * 0.055, 1.2);
-      const verticalOffset = Math.max(sceneRadius * 0.03, 0.9);
+      // Compute camera-relative 'up' vector so header is placed above the cluster from the viewer's perspective
+      const viewUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      // Position header consistently close to cluster by using cluster-specific radius
+      const frontOffset = Math.max(clusterRadius * 0.9, sceneRadius * 0.02, 0.25);
+      const verticalOffset = Math.max(clusterRadius * 0.9, sceneRadius * 0.01, 0.25);
       const worldTarget = new THREE.Vector3(
-        worldBase.x + cameraDir.x * frontOffset,
-        worldBase.y + verticalOffset,
-        worldBase.z + cameraDir.z * frontOffset,
+        worldBase.x + cameraDir.x * frontOffset + viewUp.x * verticalOffset,
+        worldBase.y + cameraDir.y * frontOffset + viewUp.y * verticalOffset,
+        worldBase.z + cameraDir.z * frontOffset + viewUp.z * verticalOffset,
       );
       const localTarget = parent.worldToLocal(worldTarget);
       groupRef.current.position.copy(localTarget);
@@ -1703,6 +1732,7 @@ export default function NoteClusters() {
               color={color}
               text={text}
               sceneRadius={sceneBounds.radius * GLOBAL_LAYOUT_SPREAD}
+              clusterRadius={clusterRadii.get(label) || Math.max(sceneBounds.radius * 0.02, 0.35)}
               isHovered={isHovered}
               onHoverStart={setHoveredHeaderClusterId}
               onHoverEnd={() => setHoveredHeaderClusterId(null)}

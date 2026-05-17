@@ -251,8 +251,10 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     K = len(cluster_ids)
 
     spread = np.ptp(centroid_arr, axis=0).max() if K > 0 else 0.0
-    MIN_SEP = max(spread * 0.12, 2.0)
-    REPULSE_ITERS = 20
+    # More aggressive separation requested: increase multiplier and minimum separation
+    MIN_SEP = max(spread * 0.85, 10.0)
+    # Increase iteration count for stronger convergence
+    REPULSE_ITERS = 300
 
     for _ in range(REPULSE_ITERS):
         for i in range(K):
@@ -327,7 +329,10 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
         if centroid is None:
             centroid = centroids.loc[cid_str].values if cid_str in centroids.index else np.zeros(3)
         
-        RADIUS = max(0.6, math.log1p(max(1, n)) * 0.55)
+        # Increase intra-cluster radius so dots are more spread out visually.
+        # Make cluster size scale with number of chunks: small clusters stay small,
+        # larger clusters grow more strongly. Use sqrt and log to provide smooth scaling.
+        RADIUS = max(1.0, math.sqrt(n) * 0.9, math.log1p(max(1, n)) * 1.2)
         
         # Sort indices to ensure stable positions
         indices_sorted = sorted(indices, key=lambda i: (df.at[i, 'chunk_index'], i))
