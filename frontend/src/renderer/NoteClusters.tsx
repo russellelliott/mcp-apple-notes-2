@@ -2046,9 +2046,9 @@ export default function NoteClusters() {
     const { center } = sceneBounds;
     const spreadRadius = visualSceneRadius * GLOBAL_LAYOUT_SPREAD;
     return [
-      center.x + spreadRadius * 1.7,
-      center.y + spreadRadius * 1.3,
-      center.z + spreadRadius * 1.7,
+      center.x + spreadRadius * 0.18,
+      center.y + spreadRadius * 0.14,
+      center.z + spreadRadius * 0.18,
     ] as [number, number, number];
   }, [sceneBounds, visualSceneRadius]);
 
