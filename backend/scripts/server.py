@@ -131,19 +131,6 @@ def load_and_process_data():
             if col in df.columns:
                 df[col] = df[col].astype(str).replace(['nan', 'None', 'nan', '-1.0'], '-1')
         
-        # --- FIX 2: Cluster & Label Inheritance ---
-        # If one chunk of a note has a cluster, ensure all chunks of that note have it.
-        # This prevents chunks from "straying" out of the sphere.
-        if 'display_topic_id' in df.columns:
-            # 1. Map the ID
-            valid_clusters = df[df['display_topic_id'] != '-1'].groupby('title')['display_topic_id'].first()
-            df['display_topic_id'] = df['title'].map(valid_clusters).fillna(df['display_topic_id'])
-            
-            # 2. Map the Label
-            # This ensures the tooltip matches the sphere the chunk just moved into
-            valid_labels = df[df['display_topic_id'] != '-1'].groupby('title')['cluster_label'].first()
-            df['cluster_label'] = df['title'].map(valid_labels).fillna(df['cluster_label'])
-
         # Compute server-side shaped positions (Fibonacci sphere per cluster)
         try:
             print("🔮 Computing shaped cluster positions...")
