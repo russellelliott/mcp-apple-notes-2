@@ -1406,13 +1406,12 @@ export default function NoteClusters() {
 
   const pointPositionMap = useMemo(() => {
     const map = new Map<string, { linear: THREE.Vector3; log: THREE.Vector3; condensed: THREE.Vector3 }>();
-    const INTRA_CLUSTER_RADIUS = 1.75;
-    const INTRA_LOG_STRENGTH = 4.2;
     const CONDENSED_RADIUS_SCALE = 1.7;
     const CONDENSED_CURVE = 0.72;
 
       const clusterCondensed = new Map<string, THREE.Vector3>();
       const clusterCenterMap = new Map<string, THREE.Vector3>();
+      const clusterSphereRadii = new Map<string, number>();
       const uniqueToLabel = new Map<string, string>();
 
       Object.keys(clusterGroups).forEach((label) => {
@@ -1440,19 +1439,37 @@ export default function NoteClusters() {
         1e-6,
       );
 
+      // Per-cluster sphere radius based on cluster size and spread
+      const sphereRadius = Math.max(0.5, Math.min(2.2, maxLocalDist * 0.9));
+      clusterSphereRadii.set(label, sphereRadius);
+
+      // Generate Fibonacci sphere positions for this cluster
+      const numPoints = group.customdata.length;
+      const goldenRatio = (1 + Math.sqrt(5)) / 2;
+      const fibonacciPositions: THREE.Vector3[] = [];
+
+      for (let i = 0; i < numPoints; i += 1) {
+        // Fibonacci sphere algorithm
+        const theta = 2 * Math.PI * i / goldenRatio;
+        const phi = Math.acos(1 - 2 * i / numPoints);
+
+        // Convert spherical to Cartesian coordinates
+        const x = Math.cos(theta) * Math.sin(phi);
+        const y = Math.sin(theta) * Math.sin(phi);
+        const z = Math.cos(phi);
+
+        // Place on sphere surface at sphereRadius distance from cluster center
+        fibonacciPositions.push(
+          clusterCenter.clone().add(new THREE.Vector3(x, y, z).multiplyScalar(sphereRadius)),
+        );
+      }
+
       group.customdata.forEach((meta, index) => {
         // 1. Linear: Raw position from UMAP
         const linearPos = new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
 
-        // 2. Local Log Scale (bounded): keep cluster points compact while preserving orientation.
-        const relativePos = localOffsets[index];
-        const dist = relativePos.length();
-        const normLocal = Math.min(dist / maxLocalDist, 1);
-        const logNorm = Math.log1p(normLocal * INTRA_LOG_STRENGTH) / Math.log1p(INTRA_LOG_STRENGTH);
-        const scaledDist = logNorm * INTRA_CLUSTER_RADIUS;
-        const logPos = dist > 0
-          ? clusterCenter.clone().add(relativePos.clone().normalize().multiplyScalar(scaledDist))
-          : clusterCenter.clone();
+        // 2. Per-cluster Fibonacci sphere: uniformly distributed on sphere surface
+        const logPos = fibonacciPositions[index];
 
         // 3. Condensed: remap cluster centroids around the scene center using a bounded radial curve.
         // This increases separation for nearby clusters while keeping the overall cloud compact.
