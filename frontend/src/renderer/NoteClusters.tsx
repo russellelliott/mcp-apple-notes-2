@@ -53,6 +53,8 @@ interface NoteContent {
   base_topic_id?: string;
   display_topic_id?: string;
   cluster_label?: string;
+  dot_color?: string;
+  cluster_color?: string;
   creation_date?: string;
   modification_date?: string;
 }
@@ -117,6 +119,7 @@ interface PointBucket {
   sizeMetric: number;
   color: string;
   glowOpacity: number;
+  opacity: number;
   points: VisualPoint[];
 }
 
@@ -129,6 +132,11 @@ const colorToRgba = (color: THREE.Color, alpha: number) => {
 
 const mixColorWithWhite = (baseColor: string, whiteMix: number) => {
   const mixed = new THREE.Color(baseColor).lerp(new THREE.Color('#ffffff'), whiteMix);
+  return mixed.getStyle();
+};
+
+const mixColorWithDark = (baseColor: string, darkMix: number) => {
+  const mixed = new THREE.Color(baseColor).lerp(new THREE.Color('#101827'), darkMix);
   return mixed.getStyle();
 };
 
@@ -236,7 +244,7 @@ const DotInstances = ({
         onClick={onClick}
       >
         <sphereGeometry args={[1, 12, 12]} />
-        <meshBasicMaterial color={bucket.color} toneMapped={false} />
+        <meshBasicMaterial color={bucket.color} transparent opacity={bucket.opacity} toneMapped={false} />
       </instancedMesh>
     </>
   );
@@ -390,7 +398,7 @@ export default function NoteClusters() {
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
   const notesListRef = useRef<HTMLDivElement | null>(null);
-  const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string }>>(new Map());
+  const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string; color?: string }>>(new Map());
   // Orbit controls ref and camera tween state for focus animation
   const controlsRef = useRef<any>(null);
 
@@ -407,7 +415,7 @@ export default function NoteClusters() {
   } | null>(null);
 
   const makePointCacheKey = useCallback(
-    (uniqueKey: string) => uniqueKey, // Drop dates to ensure hits match
+    (uniqueKey: string, _creationDate?: string | null, _modificationDate?: string | null) => uniqueKey, // Drop dates to ensure hits match
     [],
   );
 
@@ -1437,7 +1445,7 @@ export default function NoteClusters() {
   }, [data]);
 
   const authoritativeClusterByKey = useMemo(() => {
-    const map = new Map<string, { key: string; label: string }>();
+    const map = new Map<string, { key: string; label: string; color?: string }>();
 
     data.forEach((point) => {
       const key = point.display_topic_id || point.cluster_id || '-1';
@@ -1473,37 +1481,42 @@ export default function NoteClusters() {
   const { buckets, pointLookup } = useMemo(() => {
     const bucketMap = new Map<string, PointBucket>();
     const lookup = new Map<string, VisualPoint>();
+    const isSearchMode = debouncedQuery.trim().length > 0;
     const hasSearchHits = searchResults.length > 0;
 
     visibleLabels.forEach((label) => {
       const group = clusterGroups[label];
       const clusterColorBase = clusterColors[label] || '#4b5563';
-      const clusterHasSearchHit = group.customdata.some((pointData) => searchScoreMap.has(pointData.unique_key));
 
       group.customdata.forEach((meta, index) => {
-        const isHit = searchScoreMap.has(meta.unique_key);
+        const isHit = hasSearchHits && searchScoreMap.has(meta.unique_key);
         const pointKey = makePointCacheKey(meta.unique_key);
         const authoritative = authoritativeClusterByKey.get(pointKey);
         const pointClusterKey = authoritative?.key || label;
         const pointClusterLabel = authoritative?.label || clusterNameById.get(pointClusterKey) || meta.cluster_label;
 
-        // Slightly larger baseline for guaranteed visibility.
-        const size = 0.028;
+        // Search hits get a larger, brighter glyph; misses get a smaller, muted one.
+        const size = isSearchMode ? (isHit ? 0.05 : 0.015) : 0.028;
 
         // SOURCE OF TRUTH: Use the color the server calculated for this specific row.
         // Fallback only if it's missing (which it shouldn't be now).
         const dotColor = authoritative?.color || meta.dot_color || clusterColors[label] || '#6b7280';
+        const visualColor = isSearchMode
+          ? (isHit ? mixColorWithWhite(dotColor, 0.12) : mixColorWithDark(dotColor, 0.72))
+          : dotColor;
 
         // Glow: strong for hits, very subtle for non-hits when searching.
-        const glowOpacity = searchResults.length > 0 ? (isHit ? 0.36 : 0.02) : 0.24;
+        const glowOpacity = isSearchMode ? (isHit ? 0.42 : 0.02) : 0.24;
+        const opacity = isSearchMode ? (isHit ? 0.98 : 0.18) : 0.9;
         const quantizedSize = Math.max(0.012, Math.round(size * 1000) / 1000);
-        const bucketKey = `${quantizedSize}|${dotColor}|${glowOpacity}`;
+        const bucketKey = `${quantizedSize}|${visualColor}|${glowOpacity}|${opacity}`;
         if (!bucketMap.has(bucketKey)) {
           bucketMap.set(bucketKey, {
             key: bucketKey,
             sizeMetric: quantizedSize,
-            color: dotColor,
+            color: visualColor,
             glowOpacity,
+            opacity,
             points: [],
           });
         }
@@ -1539,6 +1552,7 @@ export default function NoteClusters() {
     clusterNameById,
     clusterColors,
     clusterGroups,
+    debouncedQuery,
     makePointCacheKey,
     pointPositionMap,
     searchResults.length,
