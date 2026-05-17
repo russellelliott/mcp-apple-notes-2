@@ -32,6 +32,9 @@ DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 TABLE_NAME = "notes"
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
+# Server-side multiplier to push clusters further apart without changing shape/radius.
+# Hard-coded here per request (change this constant to tune spacing).
+CLUSTER_SPREAD_MULTIPLIER = 6.0
 
 # Global State Container
 class AppState:
@@ -260,7 +263,11 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     # Maximum outward radial nudge from the global centroid to push clusters to the far edges
     try:
         global_cent = centroid_arr.mean(axis=0)
-        radial_factor = 0.8
+        # Allow server-wide tuning of how far clusters are pushed outward.
+        # This only moves cluster centroids away from the global center; it
+        # does not change per-cluster Fibonacci radii (so shapes/sizes stay).
+        radial_base = 0.8
+        radial_factor = radial_base * CLUSTER_SPREAD_MULTIPLIER
         for k in range(K):
             offset = centroid_arr[k] - global_cent
             centroid_arr[k] = centroid_arr[k] + offset * radial_factor
