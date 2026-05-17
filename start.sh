@@ -23,8 +23,12 @@ trap cleanup EXIT INT TERM
 # Wait for the backend to report healthy before starting the frontend
 echo "Waiting for backend to become healthy..."
 BACKEND_URL="http://127.0.0.1:8000/health"
-MAX_RETRIES=120
-RETRY_INTERVAL=1
+BACKEND_HEALTH_TIMEOUT_SECONDS="${BACKEND_HEALTH_TIMEOUT_SECONDS:-1800}"
+RETRY_INTERVAL="${BACKEND_HEALTH_RETRY_INTERVAL:-1}"
+MAX_RETRIES=$((BACKEND_HEALTH_TIMEOUT_SECONDS / RETRY_INTERVAL))
+if [ "$MAX_RETRIES" -lt 1 ]; then
+    MAX_RETRIES=1
+fi
 retry=0
 
 while true; do
@@ -36,14 +40,14 @@ while true; do
 
     # Try to hit health endpoint
     resp=$(curl -s --fail --max-time 2 "$BACKEND_URL" 2>/dev/null || true)
-    if [ -n "$resp" ] && echo "$resp" | grep -q '"status"\s*:\s*"ok"'; then
+    if [ -n "$resp" ] && echo "$resp" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
         echo "Backend healthy."
         break
     fi
 
     retry=$((retry + 1))
     if [ "$retry" -ge "$MAX_RETRIES" ]; then
-        echo "Timed out waiting for backend to become healthy after $((MAX_RETRIES * RETRY_INTERVAL))s" >&2
+        echo "Timed out waiting for backend to become healthy after ${BACKEND_HEALTH_TIMEOUT_SECONDS}s" >&2
         kill "$BACKEND_PID" 2>/dev/null || true
         exit 1
     fi

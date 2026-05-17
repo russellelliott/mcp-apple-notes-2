@@ -203,7 +203,7 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Work on a copy and ensure positional integer index for numpy indexing
     df = df.copy().reset_index(drop=True)
-    cluster_col = 'display_topic_id' if 'display_topic_id' in df.columns else 'cluster_id'
+    cluster_col = 'cluster_id' if 'cluster_id' in df.columns else 'display_topic_id'
 
     if df.empty:
         df['display_x'] = pd.Series(dtype=float)
@@ -212,6 +212,14 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     # --- Stage 1: UMAP-space centroids per cluster ---
+    # Compute centroids in UMAP space which will be used as the
+    # cluster center for placing the Fibonacci sphere. We will
+    # also overwrite individual points' UMAP coordinates with
+    # the cluster centroid (except for unclustered/-1) so that
+    # independent UMAP noise is disregarded and all chunk points
+    # are physically assembled into the cluster sphere on the
+    # server side. Original UMAP coords are preserved in
+    # backup columns `umap_x_orig`, `umap_y_orig`, `umap_z_orig`.
     centroids = df.groupby(cluster_col)[['umap_x', 'umap_y', 'umap_z']].mean()
     if centroids.empty:
         # fallback: copy UMAP coords to display
@@ -250,13 +258,30 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     display_y = np.zeros(len(df))
     display_z = np.zeros(len(df))
 
-    for cid, group_idx in df.groupby(cluster_col).groups.items():
-        n = len(group_idx)
-        centroid = spaced_centroids.get(str(cid), np.zeros(3))
+    # Backup original UMAP coords so we don't lose them.
+    df['umap_x_orig'] = df['umap_x']
+    df['umap_y_orig'] = df['umap_y']
+    df['umap_z_orig'] = df['umap_z']
 
-        RADIUS = max(0.6, math.log1p(n) * 0.55)
+    # Place each cluster in one pass using every row in the cached DataFrame.
+    # We intentionally do not deduplicate by title or unique_key: every chunk
+    # row gets its own sphere slot, even when titles repeat.
+    for cid, group_idx in df.groupby(cluster_col, sort=False).groups.items():
+        indices_sorted = list(group_idx)
+        try:
+            indices_sorted = sorted(indices_sorted, key=lambda idx: (str(df.at[idx, 'title']), int(df.at[idx, 'chunk_index']), int(idx)))
+        except Exception:
+            indices_sorted = sorted(indices_sorted)
 
-        for rank, df_idx in enumerate(group_idx):
+        n = len(indices_sorted)
+        cid_str = str(cid)
+        centroid = spaced_centroids.get(cid_str)
+        if centroid is None:
+            centroid = centroids.loc[cid_str].values if cid_str in centroids.index else np.zeros(3)
+
+        RADIUS = max(0.6, math.log1p(max(1, n)) * 0.55)
+
+        for rank, df_idx in enumerate(indices_sorted):
             y_fib = 1.0 - (rank / max(n - 1, 1)) * 2.0
             r_fib = math.sqrt(max(0.0, 1.0 - y_fib * y_fib))
             theta = GOLDEN_ANGLE * rank
@@ -264,6 +289,21 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
             display_x[df_idx] = centroid[0] + r_fib * math.cos(theta) * RADIUS
             display_y[df_idx] = centroid[1] + y_fib * RADIUS
             display_z[df_idx] = centroid[2] + r_fib * math.sin(theta) * RADIUS
+
+        # Overwrite per-point UMAP positions with the cluster centroid
+        # so that independent UMAP positions are disregarded and all
+        # points are assembled at/around the cluster center. Skip
+        # synthetic/unclustered groups ('-1' or empty).
+        try:
+            cid_str = str(cid)
+            if cid_str not in ("-1", "Unclustered", "None", "nan"):
+                idx_arr = np.array(indices_sorted, dtype=int)
+                df.loc[idx_arr, 'umap_x'] = float(centroid[0])
+                df.loc[idx_arr, 'umap_y'] = float(centroid[1])
+                df.loc[idx_arr, 'umap_z'] = float(centroid[2])
+        except Exception:
+            # If anything goes wrong here, continue — we still have display positions.
+            pass
 
     df['display_x'] = display_x
     df['display_y'] = display_y

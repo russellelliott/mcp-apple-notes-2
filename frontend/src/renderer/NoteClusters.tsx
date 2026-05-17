@@ -1409,9 +1409,9 @@ export default function NoteClusters() {
     let maxZ = -Infinity;
 
     data.forEach((point) => {
-      const x = point.display_x ?? point.umap_x;
-      const y = point.display_y ?? point.umap_y;
-      const z = point.display_z ?? point.umap_z;
+      const x = point.display_x as number;
+      const y = point.display_y as number;
+      const z = point.display_z as number;
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
       minZ = Math.min(minZ, z);
@@ -1432,10 +1432,10 @@ export default function NoteClusters() {
   const pointPositionMap = useMemo(() => {
     const map = new Map<string, { log: THREE.Vector3 }>();
     data.forEach((point) => {
-      const x = point.display_x ?? point.umap_x;
-      const y = point.display_y ?? point.umap_y;
-      const z = point.display_z ?? point.umap_z;
-      map.set(point.unique_key, { log: new THREE.Vector3(x, y, z) });
+      if (point.display_x === undefined || point.display_y === undefined || point.display_z === undefined) {
+        return;
+      }
+      map.set(point.unique_key, { log: new THREE.Vector3(point.display_x, point.display_y, point.display_z) });
     });
     return map;
   }, [data]);
