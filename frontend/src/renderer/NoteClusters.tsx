@@ -673,17 +673,25 @@ export default function NoteClusters() {
 
     const desiredAzimuth = Math.atan2(dir.x, dir.z);
     const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
+
+    // Calculate cluster radius to dynamically adjust camera distance
+    const clusterRadius = clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
+      const positionData = displayPointPositionMap.get(meta.unique_key);
+      return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
+    }, 0) ?? 0;
+
+    // Adjust multiplier based on cluster size relative to scene radius
+    const clusterToSceneRatio = clusterRadius / visualSceneRadius;
+    const radiusMultiplier = 0.3 + (clusterToSceneRatio * 0.3); // ranges from 0.3 (small) to 0.6 (large)
+
     const desiredRadius = THREE.MathUtils.clamp(
       dir.length()
         + Math.max(
           visualSceneRadius * 0.12,
-          ((clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
-            const positionData = displayPointPositionMap.get(meta.unique_key);
-            return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
-          }, 0) ?? 0) * 1.3),
+          clusterRadius * 1.3,
         ),
-      visualSceneRadius * 0.4,
-      visualSceneRadius * 0.5,
+      visualSceneRadius * radiusMultiplier * 0.85,
+      visualSceneRadius * radiusMultiplier,
     );
 
     cameraTweenRef.current = {
