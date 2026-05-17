@@ -18,6 +18,8 @@ interface NotePoint {
   base_topic_id?: string;
   display_topic_id?: string;
   cluster_label: string;
+  cluster_color?: string;
+  dot_color?: string;
   umap_x: number;
   umap_y: number;
   umap_z: number;
@@ -86,6 +88,8 @@ interface ClusterPointMeta {
   base_topic_id?: string;
   display_topic_id?: string;
   cluster_label: string;
+  cluster_color?: string;
+  dot_color?: string;
   creation_date?: string;
   modification_date?: string;
 }
@@ -98,6 +102,7 @@ interface ClusterGroup {
   text: string[];
   clusterId?: string;
   clusterLabel?: string;
+  clusterColor?: string;
 }
 
 interface VisualPoint extends ClusterPointMeta {
@@ -402,8 +407,7 @@ export default function NoteClusters() {
   } | null>(null);
 
   const makePointCacheKey = useCallback(
-    (uniqueKey: string, creationDate?: string, modificationDate?: string) =>
-      `${uniqueKey}__${creationDate || ''}__${modificationDate || ''}`,
+    (uniqueKey: string) => uniqueKey, // Drop dates to ensure hits match
     [],
   );
 
@@ -450,10 +454,12 @@ export default function NoteClusters() {
       });
       // Cache the authoritative cluster info from backend for this unique_key
       const cacheClusId = display_topic_id || cluster_id || '-1';
-      const cacheKey = makePointCacheKey(newUniqueKey, creationDate, modificationDate);
+      const color = response.data?.dot_color || response.data?.cluster_color;
+      const cacheKey = makePointCacheKey(newUniqueKey);
       recentClusterInfoCache.current.set(cacheKey, {
         clusterId: cacheClusId,
         clusterLabel: cluster_label || '',
+        color: color, // Store the color from the backend response
       });
     } catch (err) {
       console.error(err);
@@ -720,9 +726,6 @@ export default function NoteClusters() {
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
-    let globalSumX = 0;
-    let globalSumY = 0;
-    let count = 0;
 
     if (data.length > 0) {
       data.forEach((point) => {
@@ -737,7 +740,11 @@ export default function NoteClusters() {
             text: [],
             clusterId: clusterKey,
             clusterLabel,
+            clusterColor: point.cluster_color || point.dot_color,
           };
+        }
+        if (!processingGroups[clusterKey].clusterColor && (point.cluster_color || point.dot_color)) {
+          processingGroups[clusterKey].clusterColor = point.cluster_color || point.dot_color;
         }
         processingGroups[clusterKey].x.push(point.umap_x);
         processingGroups[clusterKey].y.push(point.umap_y);
@@ -763,15 +770,8 @@ export default function NoteClusters() {
           creation_date: point.creation_date,
           modification_date: point.modification_date,
         });
-
-        globalSumX += point.umap_x;
-        globalSumY += point.umap_y;
-        count += 1;
       });
     }
-
-    const centerX = count > 0 ? globalSumX / count : 0;
-    const centerY = count > 0 ? globalSumY / count : 0;
 
     const processingColors: Record<string, string> = {};
     const processingTints: Record<string, string> = {};
@@ -780,15 +780,11 @@ export default function NoteClusters() {
 
     Object.keys(processingGroups).forEach((label) => {
       const points = processingGroups[label];
-      const cx = points.x.reduce((a, b) => a + b, 0) / points.x.length;
-      const cy = points.y.reduce((a, b) => a + b, 0) / points.y.length;
-
-      const dx = cx - centerX;
-      const dy = cy - centerY;
-      let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-      if (angle < 0) angle += 360;
-
-      processingColors[label] = `hsl(${Math.round(angle)}, 75%, 45%)`;
+      if (points.clusterColor) {
+        processingColors[label] = points.clusterColor;
+        return;
+      }
+      processingColors[label] = '#6b7280';
     });
 
     Object.entries(processingColors).forEach(([label, baseColor]) => {
@@ -1457,19 +1453,17 @@ export default function NoteClusters() {
       map.set(compositeKey, {
         key: info.clusterId || '-1',
         label: info.clusterLabel || clusterNameById.get(info.clusterId || '-1') || '',
+        color: info.color,
       });
     });
 
     if (selectedNode) {
       const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
-      const mapKey = makePointCacheKey(
-        selectedNode.unique_key,
-        selectedNode.creation_date,
-        selectedNode.modification_date,
-      );
+      const mapKey = makePointCacheKey(selectedNode.unique_key);
       map.set(mapKey, {
         key,
         label: selectedNode.cluster_label || clusterNameById.get(key) || '',
+        color: selectedNode.dot_color || selectedNode.cluster_color,
       });
     }
 
@@ -1488,36 +1482,17 @@ export default function NoteClusters() {
 
       group.customdata.forEach((meta, index) => {
         const isHit = searchScoreMap.has(meta.unique_key);
-        const pointKey = makePointCacheKey(meta.unique_key, meta.creation_date, meta.modification_date);
+        const pointKey = makePointCacheKey(meta.unique_key);
         const authoritative = authoritativeClusterByKey.get(pointKey);
         const pointClusterKey = authoritative?.key || label;
         const pointClusterLabel = authoritative?.label || clusterNameById.get(pointClusterKey) || meta.cluster_label;
-        const pointClusterColorBase = clusterColors[pointClusterKey] || clusterColorBase;
 
         // Slightly larger baseline for guaranteed visibility.
         const size = 0.028;
 
-        // Determine per-point color when a search is active.
-        // Only the exact matching chunks (isHit) should be bright; all others should be much dimmer.
-        let dotColor = pointClusterColorBase;
-        if (searchResults.length > 0) {
-          if (isHit) {
-            // Keep hit color close to cluster base but slightly lifted for visibility.
-            const c = new THREE.Color(pointClusterColorBase);
-            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-            c.getHSL(hsl);
-            // increase lightness a touch for emphasis
-            c.setHSL(hsl.h, Math.min(1, hsl.s * 1.0), Math.min(1, Math.max(hsl.l, hsl.l * 1.05)));
-            dotColor = c.getStyle();
-          } else {
-            // Non-hit chunks: desaturate and darken strongly so they recede visually.
-            const c = new THREE.Color(pointClusterColorBase);
-            const hsl: { h: number; s: number; l: number } = { h: 0, s: 0, l: 0 };
-            c.getHSL(hsl);
-            c.setHSL(hsl.h, Math.max(0, hsl.s * 0.22), Math.max(0, hsl.l * 0.16));
-            dotColor = c.getStyle();
-          }
-        }
+        // SOURCE OF TRUTH: Use the color the server calculated for this specific row.
+        // Fallback only if it's missing (which it shouldn't be now).
+        const dotColor = authoritative?.color || meta.dot_color || clusterColors[label] || '#6b7280';
 
         // Glow: strong for hits, very subtle for non-hits when searching.
         const glowOpacity = searchResults.length > 0 ? (isHit ? 0.36 : 0.02) : 0.24;
@@ -1572,7 +1547,7 @@ export default function NoteClusters() {
   ]);
 
   const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
-  const hoveredClusterColor = hoveredPoint ? getDotSurfaceTint(hoveredPoint.dotColor) : '#ffffff';
+  const hoveredClusterColor = hoveredPoint ? hoveredPoint.dotColor : '#ffffff';
 
   const renderedClusterCenters = useMemo(() => {
     const centers = new Map<string, THREE.Vector3>();
@@ -1823,8 +1798,7 @@ export default function NoteClusters() {
   const selectedNodeColor = useMemo(() => {
     if (!selectedNode) return '#ffffff';
     const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
-    const dotColor = clusterColors[selectedClusterKey] || '#ffffff';
-    return getDotSurfaceTint(dotColor);
+    return clusterColors[selectedClusterKey] || '#ffffff';
   }, [clusterColors, selectedNode]);
 
   const updateTooltipPosition = useCallback((nativeEvent: PointerEvent | MouseEvent) => {
@@ -2072,8 +2046,7 @@ export default function NoteClusters() {
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
-      const base = clusterColors[clusterId] || '#6b7280';
-      return mixColorWithWhite(base, 0.45);
+      return clusterColors[clusterId] || '#6b7280';
     },
     [clusterColors],
   );

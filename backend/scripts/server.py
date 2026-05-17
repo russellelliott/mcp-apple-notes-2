@@ -122,6 +122,25 @@ def load_and_process_data():
             df['display_topic_id'] = df['base_topic_id'].astype(str)
         else:
             df['display_topic_id'] = df['display_topic_id'].astype(str).fillna(df['base_topic_id'])
+        
+        # --- FIX 1: Ensure ID Consistency ---
+        # Convert IDs to strings and normalize NaN representations
+        for col in ['cluster_id', 'base_topic_id', 'display_topic_id']:
+            if col in df.columns:
+                df[col] = df[col].astype(str).replace(['nan', 'None', 'nan', '-1.0'], '-1')
+        
+        # --- FIX 2: Cluster & Label Inheritance ---
+        # If one chunk of a note has a cluster, ensure all chunks of that note have it.
+        # This prevents chunks from "straying" out of the sphere.
+        if 'display_topic_id' in df.columns:
+            # 1. Map the ID
+            valid_clusters = df[df['display_topic_id'] != '-1'].groupby('title')['display_topic_id'].first()
+            df['display_topic_id'] = df['title'].map(valid_clusters).fillna(df['display_topic_id'])
+            
+            # 2. Map the Label
+            # This ensures the tooltip matches the sphere the chunk just moved into
+            valid_labels = df[df['display_topic_id'] != '-1'].groupby('title')['cluster_label'].first()
+            df['cluster_label'] = df['title'].map(valid_labels).fillna(df['cluster_label'])
 
         # Compute server-side shaped positions (Fibonacci sphere per cluster)
         try:
@@ -170,6 +189,8 @@ class NotePoint(BaseModel):
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
     cluster_label: str
+    cluster_color: Optional[str] = None
+    dot_color: Optional[str] = None
     umap_x: float
     umap_y: float
     umap_z: float
@@ -187,6 +208,8 @@ class ShapedNotePoint(BaseModel):
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
     cluster_label: str
+    cluster_color: Optional[str] = None
+    dot_color: Optional[str] = None
     umap_x: float
     umap_y: float
     umap_z: float
@@ -203,7 +226,7 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Work on a copy and ensure positional integer index for numpy indexing
     df = df.copy().reset_index(drop=True)
-    cluster_col = 'cluster_id' if 'cluster_id' in df.columns else 'display_topic_id'
+    cluster_col = 'display_topic_id' if 'display_topic_id' in df.columns else 'cluster_id'
 
     if df.empty:
         df['display_x'] = pd.Series(dtype=float)
@@ -212,15 +235,9 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     # --- Stage 1: UMAP-space centroids per cluster ---
-    # Compute centroids in UMAP space which will be used as the
-    # cluster center for placing the Fibonacci sphere. We will
-    # also overwrite individual points' UMAP coordinates with
-    # the cluster centroid (except for unclustered/-1) so that
-    # independent UMAP noise is disregarded and all chunk points
-    # are physically assembled into the cluster sphere on the
-    # server side. Original UMAP coords are preserved in
-    # backup columns `umap_x_orig`, `umap_y_orig`, `umap_z_orig`.
-    centroids = df.groupby(cluster_col)[['umap_x', 'umap_y', 'umap_z']].mean()
+    # FIX 3: Only compute centroids for valid clusters (exclude -1 and Unclustered)
+    valid_mask = (df[cluster_col] != '-1') & (df[cluster_col] != 'Unclustered')
+    centroids = df[valid_mask].groupby(cluster_col)[['umap_x', 'umap_y', 'umap_z']].mean()
     if centroids.empty:
         # fallback: copy UMAP coords to display
         df['display_x'] = df['umap_x']
@@ -254,6 +271,29 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     # --- Stage 3: Fibonacci sphere per cluster ---
     GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
 
+    # --- FIX 4: Explicit Color Assignment ---
+    # Compute a stable server-side color per cluster from the centroid's
+    # position in the centroid distribution. The frontend can then reuse
+    # this exact color for the cluster and all of its chunks.
+    cluster_color_map: Dict[str, str] = {}
+    global_centroid = centroid_arr.mean(axis=0) if K > 0 else np.zeros(3)
+    for k, cid in enumerate(cluster_ids):
+        centroid = centroid_arr[k]
+        dx = float(centroid[0] - global_centroid[0])
+        dy = float(centroid[1] - global_centroid[1])
+        if not np.isfinite(dx) or not np.isfinite(dy):
+            cluster_color_map[str(cid)] = '#6b7280'
+            continue
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+            cluster_color_map[str(cid)] = 'hsl(210, 75%, 45%)'
+            continue
+        angle = math.degrees(math.atan2(dy, dx)) % 360.0
+        cluster_color_map[str(cid)] = f'hsl({int(round(angle))}, 75%, 45%)'
+    
+    # Initialize color columns with defaults
+    df['cluster_color'] = '#6b7280'
+    df['dot_color'] = '#6b7280'
+
     display_x = np.zeros(len(df))
     display_y = np.zeros(len(df))
     display_z = np.zeros(len(df))
@@ -263,44 +303,52 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     df['umap_y_orig'] = df['umap_y']
     df['umap_z_orig'] = df['umap_z']
 
+    # --- FIX 5: Full Group Inclusion ---
     # Place each cluster in one pass using every row in the cached DataFrame.
-    # We intentionally do not deduplicate by title or unique_key: every chunk
-    # row gets its own sphere slot, even when titles repeat.
+    # Explicitly assign color to EVERY row in the group.
     for cid, group_idx in df.groupby(cluster_col, sort=False).groups.items():
-        indices_sorted = list(group_idx)
-        try:
-            indices_sorted = sorted(indices_sorted, key=lambda idx: (str(df.at[idx, 'title']), int(df.at[idx, 'chunk_index']), int(idx)))
-        except Exception:
-            indices_sorted = sorted(indices_sorted)
-
-        n = len(indices_sorted)
+        indices = list(group_idx)
+        n = len(indices)
         cid_str = str(cid)
+        
+        # Assign color to EVERY row in this group
+        color = cluster_color_map.get(cid_str, '#6b7280')
+        df.loc[indices, 'cluster_color'] = color
+        df.loc[indices, 'dot_color'] = color
+        
+        # Skip Fibonacci placement for unclustered points
+        if cid_str == '-1' or cid_str == 'Unclustered':
+            display_x[indices] = df.loc[indices, 'umap_x'].values
+            display_y[indices] = df.loc[indices, 'umap_y'].values
+            display_z[indices] = df.loc[indices, 'umap_z'].values
+            continue
+        
         centroid = spaced_centroids.get(cid_str)
         if centroid is None:
             centroid = centroids.loc[cid_str].values if cid_str in centroids.index else np.zeros(3)
-
+        
         RADIUS = max(0.6, math.log1p(max(1, n)) * 0.55)
-
+        
+        # Sort indices to ensure stable positions
+        indices_sorted = sorted(indices, key=lambda i: (df.at[i, 'chunk_index'], i))
+        
         for rank, df_idx in enumerate(indices_sorted):
             y_fib = 1.0 - (rank / max(n - 1, 1)) * 2.0
             r_fib = math.sqrt(max(0.0, 1.0 - y_fib * y_fib))
             theta = GOLDEN_ANGLE * rank
-
+            
             display_x[df_idx] = centroid[0] + r_fib * math.cos(theta) * RADIUS
             display_y[df_idx] = centroid[1] + y_fib * RADIUS
             display_z[df_idx] = centroid[2] + r_fib * math.sin(theta) * RADIUS
-
+        
         # Overwrite per-point UMAP positions with the cluster centroid
         # so that independent UMAP positions are disregarded and all
-        # points are assembled at/around the cluster center. Skip
-        # synthetic/unclustered groups ('-1' or empty).
+        # points are assembled at/around the cluster center.
         try:
-            cid_str = str(cid)
-            if cid_str not in ("-1", "Unclustered", "None", "nan"):
-                idx_arr = np.array(indices_sorted, dtype=int)
-                df.loc[idx_arr, 'umap_x'] = float(centroid[0])
-                df.loc[idx_arr, 'umap_y'] = float(centroid[1])
-                df.loc[idx_arr, 'umap_z'] = float(centroid[2])
+            idx_arr = np.array(indices_sorted, dtype=int)
+            df.loc[idx_arr, 'umap_x'] = float(centroid[0])
+            df.loc[idx_arr, 'umap_y'] = float(centroid[1])
+            df.loc[idx_arr, 'umap_z'] = float(centroid[2])
         except Exception:
             # If anything goes wrong here, continue — we still have display positions.
             pass
@@ -308,6 +356,13 @@ def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
     df['display_x'] = display_x
     df['display_y'] = display_y
     df['display_z'] = display_z
+    
+    # Ensure color columns have values (should be filled by now, but add safety fallback)
+    if 'cluster_color' not in df.columns or df['cluster_color'].isna().any():
+        df['cluster_color'] = df['cluster_color'].fillna('#6b7280')
+    if 'dot_color' not in df.columns or df['dot_color'].isna().any():
+        df['dot_color'] = df['dot_color'].fillna('#6b7280')
+    
     return df
 
 class SearchResult(BaseModel):
@@ -526,7 +581,7 @@ async def get_points():
 
     records = points_df[[
         'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
-        'display_topic_id', 'cluster_label', 'umap_x', 'umap_y', 'umap_z', 'creation_date',
+        'display_topic_id', 'cluster_label', 'cluster_color', 'dot_color', 'umap_x', 'umap_y', 'umap_z', 'creation_date',
         'modification_date'
     ]].to_dict(orient='records')
     
@@ -557,6 +612,7 @@ async def get_points_shaped():
     records = points_df[[
         'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
         'display_topic_id', 'cluster_label',
+        'cluster_color', 'dot_color',
         'umap_x', 'umap_y', 'umap_z',
         'display_x', 'display_y', 'display_z',
         'creation_date', 'modification_date'
