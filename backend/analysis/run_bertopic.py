@@ -274,10 +274,10 @@ print(f"    ✓ Reassigned {outliers_before - outliers_after_p1} outliers ({outl
 
 topic_model.update_topics(docs, topics=new_topics)
 
-# === MEGA-CLUSTER SPLITTING (>=2% of corpus) ===
+# === MEGA-CLUSTER SPLITTING (>=500 notes) ===
 print("🧩 Evaluating mega-clusters for sub-splitting...")
 total_chunks = len(docs)
-mega_cluster_threshold = max(1, int(np.ceil(total_chunks * 0.02)))
+mega_cluster_threshold = 500
 topic_sizes = pd.Series(new_topics).value_counts().to_dict()
 mega_clusters = [
     int(topic_id)
@@ -302,7 +302,7 @@ def _extract_topic_name(raw_value, fallback: str) -> str:
 
 if mega_clusters:
     print(
-        f"  🎯 Found {len(mega_clusters)} mega-cluster(s) with threshold >= {mega_cluster_threshold}/{total_chunks} chunks"
+        f"  🎯 Found {len(mega_clusters)} mega-cluster(s) with threshold >= {mega_cluster_threshold} chunks"
     )
     submodel_root.mkdir(parents=True, exist_ok=True)
 
@@ -442,7 +442,7 @@ if mega_clusters:
         except Exception as e:
             print(f"  ⚠️ Failed to write submodel manifest: {e}")
 else:
-    print("  ℹ️ No mega-clusters met the 2% threshold.")
+    print(f"  ℹ️ No mega-clusters met the {mega_cluster_threshold}-note threshold.")
 
 # Pass 2: Topic representation similarity (c-TF-IDF based)
 print("  📊 Pass 2: c-TF-IDF similarity reassignment...")
@@ -664,9 +664,7 @@ def _split_oversized_cluster(
             child_count = len(child_indices)
             child_pct = (child_count / total_chunks) * 100 if total_chunks > 0 else 0.0
             if child_count >= mega_cluster_threshold:
-                print(
-                    f"      🔬 Recursively splitting child {child_display_id} ({child_count} chunks, {child_pct:.2f}%)"
-                )
+                print(f"      🔬 Recursively splitting child {child_display_id} ({child_count} chunks)")
                 _split_oversized_cluster(
                     child_display_id,
                     child_indices,
@@ -719,7 +717,7 @@ if oversized_clusters:
             print(f"    ⚠️ Skipping {display_id}: already deeply nested (depth={depth})")
             continue
 
-        print(f"    🔬 Recursively splitting {display_id} ({cluster_info['count']} chunks, {cluster_info['pct']:.2f}%)")
+        print(f"    🔬 Recursively splitting {display_id} ({cluster_info['count']} chunks)")
         _split_oversized_cluster(display_id, cluster_info['indices'], cluster_info['count'], cluster_info['pct'])
 
     if submodel_manifest:
