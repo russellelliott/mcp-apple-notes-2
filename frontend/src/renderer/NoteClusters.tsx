@@ -5,7 +5,6 @@ import { OrbitControls, Billboard, Text } from '@react-three/drei';
 import * as THREE from 'three';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 
@@ -2291,49 +2290,6 @@ export default function NoteClusters() {
               zIndex: 10,
             }}
           >
-            <div style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' }}>
-              <button
-                type="button"
-                title="Neural Mapping"
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'default',
-                  background: '#dbf4ff',
-                }}
-              >
-                <ZoomOutMapIcon style={{ color: '#0ea5e9' }} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setHideOtherClusters((value) => !value)}
-                title={hideOtherClusters ? 'Show All Clusters' : 'Show Selected (Hide Others)'}
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: hideOtherClusters ? '#fff1f2' : '#eef6ec',
-                }}
-              >
-                {hideOtherClusters ? (
-                  <VisibilityOffIcon style={{ color: '#dc2626' }} />
-                ) : (
-                  <VisibilityIcon style={{ color: '#16a34a' }} />
-                )}
-              </button>
-            </div>
-
             {/* removed Peak Recency / Momentum UI as requested */}
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
@@ -3039,9 +2995,34 @@ export default function NoteClusters() {
                 flex-shrink: 0;
               }
             `}</style>
-            <h3 style={{ margin: '0 0 10px 0', color: '#333', userSelect: 'none' }}>
-              Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
-            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, width: '100%' }}>
+              <h3 style={{ margin: 0, color: '#333', userSelect: 'none' }}>
+                Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setHideOtherClusters((value) => !value)}
+                title={hideOtherClusters ? 'Show All Clusters' : 'Show Selected (Hide Others)'}
+                style={{
+                  width: 36,
+                  height: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 8,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: hideOtherClusters ? '#fff1f2' : '#eef6ec',
+                  marginLeft: 'auto',
+                }}
+              >
+                {hideOtherClusters ? (
+                  <VisibilityOffIcon style={{ color: '#dc2626' }} />
+                ) : (
+                  <VisibilityIcon style={{ color: '#16a34a' }} />
+                )}
+              </button>
+            </div>
             <div style={{ minHeight: '30px', marginBottom: '8px', userSelect: 'none' }}>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: 11, flexWrap: 'wrap' }}>
