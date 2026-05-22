@@ -141,6 +141,7 @@ const mixColorWithDark = (baseColor: string, darkMix: number) => {
 };
 
 const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35);
+const NOTE_SURFACE_SATURATION = 0.5;
 
 const DOT_RADIUS_BASE = 0.016;
 const GLOBAL_LAYOUT_SPREAD = 2.45;
@@ -1614,6 +1615,9 @@ export default function NoteClusters() {
 
   const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
   const hoveredClusterColor = hoveredPoint ? hoveredPoint.dotColor : '#ffffff';
+  const hoveredClusterSurfaceColor = hoveredPoint
+    ? mixColorWithWhite(hoveredClusterColor, 1 - NOTE_SURFACE_SATURATION)
+    : hoveredClusterColor;
 
   const renderedClusterCenters = useMemo(() => {
     const centers = new Map<string, THREE.Vector3>();
@@ -1896,6 +1900,11 @@ export default function NoteClusters() {
     const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
     return clusterColors[selectedClusterKey] || '#ffffff';
   }, [clusterColors, selectedNode]);
+
+  const selectedNodeSurfaceColor = useMemo(() => {
+    if (!selectedNode) return '#ffffff';
+    return mixColorWithWhite(selectedNodeColor, 1 - NOTE_SURFACE_SATURATION);
+  }, [selectedNode, selectedNodeColor]);
 
   const updateTooltipPosition = useCallback((nativeEvent: PointerEvent | MouseEvent) => {
     if (!plotAreaRef.current) return;
@@ -2665,7 +2674,7 @@ export default function NoteClusters() {
               <div
                 style={{
                   ...modalStyle.base,
-                  backgroundColor: selectedNodeColor,
+                  backgroundColor: selectedNodeSurfaceColor,
                 }}
               >
                 <div style={modalStyle.header}>
@@ -2836,7 +2845,7 @@ export default function NoteClusters() {
                   top: tooltipStyle.top,
                   pointerEvents: 'none',
                   zIndex: 120,
-                  backgroundColor: hoveredClusterColor,
+                  backgroundColor: hoveredClusterSurfaceColor,
                   border: '1px solid rgba(0, 0, 0, 0.2)',
                   borderRadius: '6px',
                   boxShadow: '0 2px 6px rgba(0,0,0,0.14)',
