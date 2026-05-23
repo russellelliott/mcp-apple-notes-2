@@ -1261,45 +1261,37 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
     
     console.log(`\n📦 Processing batch ${batchNum}/${totalBatches} (${batch.length} notes):`);
     
-    // Step 3a: Fetch batch content in parallel
-    console.log(`   📥 Fetching content for batch ${batchNum}... (timeout: 5min per note)`);
-    const batchResults = await Promise.all(
-      batch.map(async ({ title, creation_date, modification_date }, index) => {
-        try {
-          console.log(`     📄 [${batchNum}.${index + 1}] Fetching: "${title}"`);
-          const start = performance.now();
-          const result = await getNoteByTitleAndDate(title, creation_date);
-          const duration = (performance.now() - start) / 1000;
-          
-          if (result) {
-            console.log(`     ✅ [${batchNum}.${index + 1}] Success: "${title}" (${duration.toFixed(1)}s)`);
-            return {
-              title: result.title,
-              content: result.content,
-              creation_date: result.creation_date,
-              modification_date: modification_date, // Use the fresh modification date
-              _fetchDuration: duration
-            };
-          } else {
-            // Check if this was likely a timeout (took close to 5 minute timeout)
-            if (duration >= 299) { // Close to 300 second timeout
-              console.log(`     ⏰ [${batchNum}.${index + 1}] Likely timeout: "${title}" (${duration.toFixed(1)}s, will retry)`);
-              timedOutNotes.push({
-                title,
-                creation_date,
-                modification_date,
-                attempt: 1
-              });
-              totalTimeouts++;
-            } else {
-              console.log(`     ⚠️ [${batchNum}.${index + 1}] Empty result: "${title}" (${duration.toFixed(1)}s)`);
-            }
-          }
-          return null;
-        } catch (error) {
-          const errorMsg = (error as Error).message;
-          if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
-            console.log(`     ⏰ [${batchNum}.${index + 1}] Timeout: "${title}" (will retry later with longer timeout after 5min)`);
+    // Step 3a: Fetch batch content sequentially (one at a time, each with its own timeout)
+    console.log(`   📥 Fetching content for batch ${batchNum} sequentially... (timeout: 5min per note)`);
+    const batchResults: Array<{
+      title: string;
+      content: string;
+      creation_date: string;
+      modification_date: string;
+      _fetchDuration: number;
+    } | null> = [];
+
+    for (let index = 0; index < batch.length; index++) {
+      const { title, creation_date, modification_date } = batch[index];
+      try {
+        console.log(`     📄 [${batchNum}.${index + 1}/${batch.length}] Fetching: "${title}"`);
+        const start = performance.now();
+        const result = await getNoteByTitleAndDate(title, creation_date);
+        const duration = (performance.now() - start) / 1000;
+
+        if (result) {
+          console.log(`     ✅ [${batchNum}.${index + 1}/${batch.length}] Success: "${title}" (${duration.toFixed(1)}s)`);
+          batchResults.push({
+            title: result.title,
+            content: result.content,
+            creation_date: result.creation_date,
+            modification_date: modification_date, // Use the fresh modification date
+            _fetchDuration: duration
+          });
+        } else {
+          // Check if this was likely a timeout (took close to 5 minute timeout)
+          if (duration >= 299) { // Close to 300 second timeout
+            console.log(`     ⏰ [${batchNum}.${index + 1}/${batch.length}] Likely timeout: "${title}" (${duration.toFixed(1)}s, will retry)`);
             timedOutNotes.push({
               title,
               creation_date,
@@ -1308,12 +1300,27 @@ export const fetchAndIndexAllNotes = async (notesTable: any, maxNotes?: number, 
             });
             totalTimeouts++;
           } else {
-            console.log(`     ❌ [${batchNum}.${index + 1}] Failed: "${title}" - ${errorMsg}`);
+            console.log(`     ⚠️ [${batchNum}.${index + 1}/${batch.length}] Empty result: "${title}" (${duration.toFixed(1)}s)`);
           }
-          return null;
+          batchResults.push(null);
         }
-      })
-    );
+      } catch (error) {
+        const errorMsg = (error as Error).message;
+        if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
+          console.log(`     ⏰ [${batchNum}.${index + 1}/${batch.length}] Timeout: "${title}" (will retry later with longer timeout after 5min)`);
+          timedOutNotes.push({
+            title,
+            creation_date,
+            modification_date,
+            attempt: 1
+          });
+          totalTimeouts++;
+        } else {
+          console.log(`     ❌ [${batchNum}.${index + 1}/${batch.length}] Failed: "${title}" - ${errorMsg}`);
+        }
+        batchResults.push(null);
+      }
+    }
     
     const successfulNotes = batchResults.filter(note => note !== null);
     console.log(`   📊 Fetched: ${successfulNotes.length}/${batch.length} notes successfully`);
