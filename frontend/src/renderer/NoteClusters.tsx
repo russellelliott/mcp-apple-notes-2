@@ -144,8 +144,8 @@ const NOTE_SURFACE_SATURATION = 0.5;
 
 const DOT_RADIUS_BASE = 0.016;
 const GLOBAL_LAYOUT_SPREAD = 2.45;
-const CLUSTER_CENTROID_SPREAD = 2.0;
-const CLUSTER_POINT_SPREAD = 4.8;
+const CLUSTER_CENTROID_SPREAD = 2.4;
+const CLUSTER_POINT_SPREAD = 6.0;
 
 const compareTopicIds = (a: string, b: string) => {
   const aParts = String(a).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
