@@ -1945,6 +1945,7 @@ export default function NoteClusters() {
       } else {
         // normal click -> select sole cluster
         setSelectedClusters(new Set([chunk.cluster_id]));
+        focusClusterByOrbit(chunk.cluster_id);
       }
 
       setPendingScrollNoteKey(note.note_key);
