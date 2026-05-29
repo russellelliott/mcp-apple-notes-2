@@ -144,6 +144,7 @@ const NOTE_SURFACE_SATURATION = 0.5;
 
 const DOT_RADIUS_BASE = 0.016;
 const GLOBAL_LAYOUT_SPREAD = 2.45;
+const CLUSTER_CENTROID_SPREAD = 2.0;
 const CLUSTER_POINT_SPREAD = 4.8;
 
 const compareTopicIds = (a: string, b: string) => {
@@ -413,6 +414,7 @@ export default function NoteClusters() {
     active: boolean;
     startTime: number;
     duration: number;
+    target: THREE.Vector3;
     fromAzimuth: number;
     toAzimuth: number;
     fromPolar: number;
@@ -658,10 +660,11 @@ export default function NoteClusters() {
 
   function focusClusterByOrbit(clusterId: string) {
     const controls = controlsRef.current;
-    const centroid = renderedClusterCenters.get(clusterId);
-    if (!controls || !centroid) return;
+    const focusMetrics = getClusterFocusMetrics(clusterId);
+    if (!controls || !focusMetrics) return;
     if (cameraTweenRef.current?.active) return;
 
+    const { center: centroid, radius: clusterRadius } = focusMetrics;
     const center = sceneBounds.center;
     const dir = new THREE.Vector3(centroid.x - center.x, centroid.y - center.y, centroid.z - center.z);
     if (dir.lengthSq() < 1e-8) return;
@@ -673,34 +676,17 @@ export default function NoteClusters() {
     const desiredAzimuth = Math.atan2(dir.x, dir.z);
     const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
 
-    // Calculate cluster radius to dynamically adjust camera distance
-    const clusterRadius = clusterGroups[clusterId]?.customdata?.reduce((max, meta) => {
-      const positionData = displayPointPositionMap.get(meta.unique_key);
-      return positionData ? Math.max(max, positionData.log.distanceTo(centroid)) : max;
-    }, 0) ?? 0;
-
-    // Adjust multiplier based on both cluster radius and distance from center
-    // Closer clusters and smaller clusters get zoomed in more
-    const baseZoom = 0.2;
-    const distanceFromCenter = dir.length();
-    const clusterToSceneRatio = clusterRadius / visualSceneRadius;
-    const distanceToSceneRatio = distanceFromCenter / visualSceneRadius;
-    const radiusMultiplier = baseZoom + (clusterToSceneRatio * 0.08) + (distanceToSceneRatio * 0.1); // accounts for both size and position
-
-    const desiredRadius = THREE.MathUtils.clamp(
-      dir.length()
-        + Math.max(
-          visualSceneRadius * 0.12,
-          clusterRadius * 1.3,
-        ),
-      visualSceneRadius * radiusMultiplier * 0.85,
-      visualSceneRadius * radiusMultiplier,
-    );
+    // Keep the focus distance tied to the cluster's own rendered size.
+    // Smaller clusters are shown more tightly; larger clusters get a bit more space.
+    const minFocusDistance = visualSceneRadius * 0.06;
+    const clusterFocusDistance = clusterRadius * 1.1;
+    const desiredRadius = Math.max(minFocusDistance, clusterFocusDistance);
 
     cameraTweenRef.current = {
       active: true,
       startTime: performance.now(),
       duration: 900,
+      target: centroid.clone(),
       fromAzimuth: currentAzimuth,
       toAzimuth: currentAzimuth + shortestAngleDelta(currentAzimuth, desiredAzimuth),
       fromPolar: currentPolar,
@@ -726,15 +712,14 @@ export default function NoteClusters() {
       const polar = THREE.MathUtils.lerp(tween.fromPolar, tween.toPolar, eased);
       const radius = THREE.MathUtils.lerp(tween.fromRadius, tween.toRadius, eased);
 
-      const center = sceneBounds.center;
       const sinPolar = Math.sin(polar);
       camera.position.set(
-        center.x + radius * sinPolar * Math.sin(azimuth),
-        center.y + radius * Math.cos(polar),
-        center.z + radius * sinPolar * Math.cos(azimuth),
+        tween.target.x + radius * sinPolar * Math.sin(azimuth),
+        tween.target.y + radius * Math.cos(polar),
+        tween.target.z + radius * sinPolar * Math.cos(azimuth),
       );
 
-      controls.target.copy(center);
+      controls.target.copy(tween.target);
       controls.update();
 
       if (t >= 1 && cameraTweenRef.current) cameraTweenRef.current.active = false;
@@ -1466,6 +1451,7 @@ export default function NoteClusters() {
 
   const displayPointPositionMap = useMemo(() => {
     const map = new Map<string, { log: THREE.Vector3 }>();
+    const sceneCenter = sceneBounds.center;
 
     Object.keys(clusterGroups).forEach((label) => {
       const centroid = clusterCentroids.get(label);
@@ -1483,15 +1469,53 @@ export default function NoteClusters() {
           return;
         }
 
+        const scaledCentroid = sceneCenter.clone().lerp(centroidVector, CLUSTER_CENTROID_SPREAD);
         const offset = positioned.log.clone().sub(centroidVector);
         map.set(meta.unique_key, {
-          log: centroidVector.clone().add(offset.multiplyScalar(CLUSTER_POINT_SPREAD)),
+          log: scaledCentroid.clone().add(offset.multiplyScalar(CLUSTER_POINT_SPREAD)),
         });
       });
     });
 
     return map;
-  }, [clusterCentroids, clusterGroups, pointPositionMap]);
+  }, [clusterCentroids, clusterGroups, pointPositionMap, sceneBounds.center]);
+
+  const getClusterFocusMetrics = useCallback(
+    (clusterId: string) => {
+      const group = clusterGroups[clusterId];
+      if (!group || group.customdata.length === 0) return null;
+
+      const points = group.customdata
+        .map((meta) => displayPointPositionMap.get(meta.unique_key)?.log)
+        .filter((point): point is THREE.Vector3 => !!point);
+
+      if (points.length === 0) return null;
+      if (points.length === 1) {
+        return { center: points[0].clone(), radius: 0 };
+      }
+
+      const initialCenter = points.reduce(
+        (acc, point) => acc.add(point),
+        new THREE.Vector3(0, 0, 0),
+      ).divideScalar(points.length);
+
+      const rankedPoints = points
+        .map((point) => ({ point, distance: point.distanceTo(initialCenter) }))
+        .sort((a, b) => a.distance - b.distance);
+
+      const keepCount = Math.max(3, Math.ceil(rankedPoints.length * 0.8));
+      const focusPoints = rankedPoints.slice(0, keepCount).map((entry) => entry.point);
+
+      const center = focusPoints
+        .reduce((acc, point) => acc.add(point), new THREE.Vector3(0, 0, 0))
+        .divideScalar(focusPoints.length);
+
+      const radius = focusPoints.reduce((max, point) => Math.max(max, point.distanceTo(center)), 0);
+
+      return { center, radius };
+    },
+    [clusterGroups, displayPointPositionMap],
+  );
 
   const visualSceneRadius = sceneBounds.radius * CLUSTER_POINT_SPREAD;
 
@@ -1620,28 +1644,13 @@ export default function NoteClusters() {
   const renderedClusterCenters = useMemo(() => {
     const centers = new Map<string, THREE.Vector3>();
     Object.keys(clusterGroups).forEach((label) => {
-      const group = clusterGroups[label];
-      if (!group || group.customdata.length === 0) return;
-
-      let sx = 0;
-      let sy = 0;
-      let sz = 0;
-      let count = 0;
-      group.customdata.forEach((meta) => {
-        const positioned = displayPointPositionMap.get(meta.unique_key);
-        if (!positioned) return;
-        sx += positioned.log.x;
-        sy += positioned.log.y;
-        sz += positioned.log.z;
-        count += 1;
-      });
-
-      if (count > 0) {
-        centers.set(label, new THREE.Vector3(sx / count, sy / count, sz / count));
+      const focusMetrics = getClusterFocusMetrics(label);
+      if (focusMetrics) {
+        centers.set(label, focusMetrics.center);
       }
     });
     return centers;
-  }, [clusterGroups, displayPointPositionMap]);
+  }, [clusterGroups, getClusterFocusMetrics]);
 
   // Auto-rotate group helper
   const AutoRotateGroup = ({ children, speed = 0 }: { children: React.ReactNode; speed?: number }) => {
