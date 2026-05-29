@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Billboard, Text } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -393,7 +393,6 @@ export default function NoteClusters() {
   const [pendingScrollTargetCluster, setPendingScrollTargetCluster] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [hoveredHeaderClusterId, setHoveredHeaderClusterId] = useState<string | null>(null);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
   const [hoverSource, setHoverSource] = useState<'canvas' | 'list' | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, containerWidth: 0 });
@@ -1644,191 +1643,6 @@ export default function NoteClusters() {
     return centers;
   }, [clusterGroups, displayPointPositionMap]);
 
-  // Per-cluster visual radius (max distance from centroid to any point in that cluster)
-  const clusterRadii = useMemo(() => {
-    const radii = new Map<string, number>();
-    renderedClusterCenters.forEach((center, label) => {
-      const group = clusterGroups[label];
-      if (!group || !group.customdata || group.customdata.length === 0) {
-        radii.set(label, 0.5);
-        return;
-      }
-
-      let maxDist = 0;
-      group.customdata.forEach((meta) => {
-        const pos = displayPointPositionMap.get(meta.unique_key);
-        if (!pos) return;
-        const d = center.distanceTo(pos.log);
-        if (d > maxDist) maxDist = d;
-      });
-
-      // minimum visual radius to avoid tiny clusters
-      radii.set(label, Math.max(maxDist, 0.6));
-    });
-    return radii;
-  }, [renderedClusterCenters, clusterGroups, displayPointPositionMap]);
-
-  const ClusterHeaderCard = ({
-    clusterId,
-    baseCenter,
-    color,
-    text,
-    sceneRadius,
-    clusterRadius,
-    isHovered,
-    onHoverStart,
-    onHoverEnd,
-    onSelect,
-  }: {
-    clusterId: string;
-    baseCenter: THREE.Vector3;
-    color: string;
-    text: string;
-    sceneRadius: number;
-    clusterRadius: number;
-    isHovered: boolean;
-    onHoverStart: (clusterId: string) => void;
-    onHoverEnd: () => void;
-    onSelect: (clusterId: string, shiftKey: boolean) => void;
-  }) => {
-    const groupRef = useRef<THREE.Group>(null);
-    const camera = useThree((state) => state.camera);
-
-    useFrame(() => {
-      if (!groupRef.current || !groupRef.current.parent) return;
-      const parent = groupRef.current.parent;
-      const worldBase = parent.localToWorld(baseCenter.clone());
-      const cameraDir = new THREE.Vector3().subVectors(camera.position, worldBase).normalize();
-      // Compute camera-relative 'up' vector so header is placed above the cluster from the viewer's perspective
-      const viewUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
-      // Position header consistently close to cluster by using cluster-specific radius
-      const frontOffset = Math.max(clusterRadius * 0.9, sceneRadius * 0.02, 0.25);
-      const verticalOffset = Math.max(clusterRadius * 0.9, sceneRadius * 0.01, 0.25);
-      const worldTarget = new THREE.Vector3(
-        worldBase.x + cameraDir.x * frontOffset + viewUp.x * verticalOffset,
-        worldBase.y + cameraDir.y * frontOffset + viewUp.y * verticalOffset,
-        worldBase.z + cameraDir.z * frontOffset + viewUp.z * verticalOffset,
-      );
-      const localTarget = parent.worldToLocal(worldTarget);
-      groupRef.current.position.copy(localTarget);
-    });
-
-    const brightColor = mixColorWithWhite(color, isHovered ? 0.78 : 0.58);
-    const borderColor = mixColorWithWhite(color, isHovered ? 0.72 : 0.52);
-    const maxWidth = Math.min(2.8, Math.max(0.95, sceneRadius * 0.038));
-    const widthFactor = 0.11;
-    const estimatedLines = Math.max(1, Math.ceil((text.length * widthFactor) / maxWidth));
-    const panelHeight = 0.2 + estimatedLines * 0.115;
-    const hoverScale = isHovered ? 1.14 : 1;
-    const hoverFontSize = isHovered ? 0.19 : 0.17;
-    const panelOpacity = isHovered ? 0.28 : 0.18;
-
-    return (
-      <group ref={groupRef}>
-        <Billboard>
-          <group
-            scale={hoverScale}
-            onPointerOver={(event: ThreeEvent<PointerEvent>) => {
-              event.stopPropagation();
-              onHoverStart(clusterId);
-            }}
-            onPointerOut={(event: ThreeEvent<PointerEvent>) => {
-              event.stopPropagation();
-              onHoverEnd();
-            }}
-            onClick={(event: ThreeEvent<MouseEvent>) => {
-              event.stopPropagation();
-              onSelect(clusterId, !!event.nativeEvent.shiftKey);
-            }}
-          >
-            {/* very subtle backing panel for readability without a heavy gray slab */}
-            <mesh>
-              <planeGeometry args={[maxWidth + 0.16, panelHeight]} />
-              <meshBasicMaterial color="#071022" transparent opacity={panelOpacity} depthWrite={false} />
-            </mesh>
-
-            {/* clean border using 4 strips (avoids wireframe center-line artifacts) */}
-            <mesh position={[0, panelHeight / 2 + 0.006, 0.001]}>
-              <planeGeometry args={[maxWidth + 0.18, 0.02]} />
-              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
-            </mesh>
-            <mesh position={[0, -panelHeight / 2 - 0.006, 0.001]}>
-              <planeGeometry args={[maxWidth + 0.18, 0.02]} />
-              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
-            </mesh>
-            <mesh position={[-(maxWidth + 0.18) / 2, 0, 0.001]}>
-              <planeGeometry args={[0.02, panelHeight + 0.012]} />
-              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
-            </mesh>
-            <mesh position={[(maxWidth + 0.18) / 2, 0, 0.001]}>
-              <planeGeometry args={[0.02, panelHeight + 0.012]} />
-              <meshBasicMaterial color={borderColor} transparent opacity={0.98} depthWrite={false} />
-            </mesh>
-
-            <Text
-              maxWidth={maxWidth}
-              textAlign="center"
-              anchorX="center"
-              anchorY="middle"
-              color={brightColor}
-              fontSize={hoverFontSize}
-              lineHeight={1.12}
-              outlineWidth={0.0025}
-              outlineColor="#01030a"
-            >
-              {text}
-            </Text>
-          </group>
-        </Billboard>
-      </group>
-    );
-  };
-
-  // 3D cluster headers (billboarded)
-  const ClusterHeaders = ({ labels }: { labels: string[] }) => {
-    return (
-      <group>
-        {labels.map((label) => {
-          const pos = renderedClusterCenters.get(label) || new THREE.Vector3(0, 0, 0);
-          const color = clusterColors[label] || '#dddddd';
-          const text = clusterGroups[label]?.clusterLabel || label;
-          const isHovered = hoveredHeaderClusterId === label;
-          return (
-            <ClusterHeaderCard
-              key={`hdr-${label}`}
-              clusterId={label}
-              baseCenter={pos}
-              color={color}
-              text={text}
-              sceneRadius={visualSceneRadius * GLOBAL_LAYOUT_SPREAD}
-              clusterRadius={clusterRadii.get(label) || Math.max(visualSceneRadius * 0.02, 0.35)}
-              isHovered={isHovered}
-              onHoverStart={setHoveredHeaderClusterId}
-              onHoverEnd={() => setHoveredHeaderClusterId(null)}
-              onSelect={(clusterId, shiftKey) => {
-                if (shiftKey) {
-                  setSelectedClusters((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(clusterId)) next.delete(clusterId);
-                    else next.add(clusterId);
-                    return next;
-                  });
-                } else {
-                  setSelectedClusters(new Set([clusterId]));
-                  try {
-                    focusClusterByOrbit(clusterId);
-                  } catch (err) {
-                    // ignore
-                  }
-                }
-              }}
-            />
-          );
-        })}
-      </group>
-    );
-  };
-
   // Auto-rotate group helper
   const AutoRotateGroup = ({ children, speed = 0 }: { children: React.ReactNode; speed?: number }) => {
     const ref = useRef<THREE.Group>(null);
@@ -2866,18 +2680,6 @@ export default function NoteClusters() {
                 target={[sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z]}
               />
               <AutoRotateGroup>
-                {/* When hovering a point, show only that cluster's header to avoid misleading overlaps */}
-                <ClusterHeaders
-                  labels={hoveredPoint
-                    ? [
-                      resolveClusterForUniqueKey(
-                        hoveredPoint.unique_key,
-                        hoveredPoint.creation_date,
-                        hoveredPoint.modification_date,
-                      ).key,
-                    ]
-                    : visibleLabels}
-                />
                 {buckets.map((bucket) => {
                   const adaptiveBase = Math.max(DOT_RADIUS_BASE, sceneBounds.radius * 0.0018);
                   const sphereRadius = (bucket.sizeMetric / 0.02) * adaptiveBase;
