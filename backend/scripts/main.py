@@ -57,7 +57,7 @@ class EmbeddingModel:
             texts,
             batch_size=batch_size,
             show_progress_bar=show_progress,
-            normalize_embeddings=True,   # Important for cosine similarity
+            normalize_embeddings=True,
             convert_to_numpy=True
         )
         return embeddings
@@ -87,7 +87,6 @@ class NotesDatabase:
             pa.field("total_chunks", pa.int32()),
             pa.field("chunk_content", pa.string()),
             pa.field("vector", pa.list_(pa.float32(), EMBEDDING_DIM)),
-            # Clustering fields
             pa.field("base_topic_id", pa.string()),
             pa.field("display_topic_id", pa.string()),
             pa.field("is_split_child", pa.bool_()),
@@ -102,79 +101,88 @@ class NotesDatabase:
     def get_or_create_table(self, fresh: bool = False) -> lancedb.table.Table:
         """Get existing table or create new one"""
         table_name = "notes"
-        
         if fresh and table_name in self.db.table_names():
             self.db.drop_table(table_name)
-            print(f"🗑️ Dropped existing '{table_name}' table")
         
         if table_name not in self.db.table_names():
-            self.table = self.db.create_table(
-                table_name,
-                schema=self.create_schema()
-            )
-            print(f"✅ Created new '{table_name}' table")
+            self.table = self.db.create_table(table_name, schema=self.create_schema())
         else:
             self.table = self.db.open_table(table_name)
-            print(f"📂 Opened existing '{table_name}' table")
-        
         return self.table
-    
-    def add_chunks(self, chunks_data: List[Dict[str, Any]], batch_size: int = 100) -> None:
-        """Add chunks to the database in batches"""
-        total = len(chunks_data)
-        print(f"💾 Adding {total} chunks to database...")
-        
-        for i in range(0, total, batch_size):
-            batch = chunks_data[i:i + batch_size]
-            self.table.add(batch)
-            print(f"  ✓ Added batch {i//batch_size + 1}/{(total-1)//batch_size + 1}")
-        
-        row_count = self.table.count_rows()
-        print(f"✅ Database now has {row_count} chunks")
-    
-    def delete_note_chunks(self, title: str) -> None:
-        """Delete all chunks for a specific note"""
+
+    def get_interactions_db(self) -> Tuple[Any, Any]:
+        """Get the interactions table from the existing DB connection"""
+        table_name = "notes_interactions"
         try:
-            safe_title = title.replace("'", "''")
-            self.table.delete(f"title = '{safe_title}'")
-            print(f"  🗑️ Deleted chunks for '{title}'")
-        except Exception as e:
-            print(f"  ⚠️ Could not delete chunks for '{title}': {e}")
-    
-    def get_interactions_db(self) -> Tuple[Optional[lancedb.DBConnection], Optional[lancedb.table.Table]]:
-        """Get or create the interactions database"""
-        try:
-            interactions_path = self.db_path.parent / "interactions_data"
-            interactions_path.mkdir(parents=True, exist_ok=True)
-            interactions_db = lancedb.connect(str(interactions_path))
+            # 1. Try to open it directly first (most efficient)
+            if table_name in self.db.table_names():
+                return self.db, self.db.open_table(table_name)
             
-            table_name = "notes_interactions"
-            if table_name not in interactions_db.table_names():
-                interactions_schema = pa.schema([
-                    pa.field("title", pa.string()),
-                    pa.field("last_opened", pa.string()),
-                    pa.field("interaction_log", pa.string()),  # JSON string
-                ])
-                interactions_db.create_table(table_name, schema=interactions_schema)
-                print(f"   ✅ Created {table_name} table")
+            # 2. If not found in list, try creating it
+            interactions_schema = pa.schema([
+                pa.field("title", pa.string()),
+                pa.field("last_opened", pa.string()),
+                pa.field("interaction_log", pa.string()),
+            ])
+            table = self.db.create_table(table_name, schema=interactions_schema)
+            return self.db, table
             
-            interactions_table = interactions_db.open_table(table_name)
-            return interactions_db, interactions_table
         except Exception as e:
-            print(f"   ⚠️ Interactions DB error: {e}")
+            # 3. If creation fails because it exists, just open it
+            if "already exists" in str(e).lower():
+                try:
+                    return self.db, self.db.open_table(table_name)
+                except Exception:
+                    pass
+            
+            print(f"⚠️ Interactions DB access error: {e}")
             return None, None
-    
+
+    def list_all_interactions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve all interaction records from the DB"""
+        try:
+            _, table = self.get_interactions_db()
+            if table is None:
+                print("DEBUG: Interactions table is None")
+                return []
+            
+            # Fetch all rows
+            df = table.to_pandas()
+
+            if df.empty:
+                print("DEBUG: Interaction table found but it is empty")
+                return []
+
+            # Optional: Sort by last_opened
+            if "last_opened" in df.columns:
+                df = df.sort_values(by="last_opened", ascending=False)
+
+            results = df.head(limit).to_dict(orient='records')
+            
+            # Convert JSON string log back to Python list
+            for row in results:
+                log_data = row.get("interaction_log")
+                if isinstance(log_data, str):
+                    try:
+                        row["interaction_log"] = json.loads(log_data)
+                    except:
+                        row["interaction_log"] = []
+            return results
+        except Exception as e:
+            print(f"❌ Error listing interactions: {e}")
+            return []
+
     def log_interaction(self, title: str, event_type: str) -> None:
         """Log an interaction event (opened/modified) for a note"""
         try:
-            interactions_db, interactions_table = self.get_interactions_db()
+            _, interactions_table = self.get_interactions_db()
             if interactions_table is None:
                 return
-            
+
             now = datetime.utcnow().isoformat() + "Z"
             event = {"dt": now, "type": event_type}
-            
             safe_title = title.replace("'", "''")
+            
             existing = interactions_table.search().where(f"title = '{safe_title}'").limit(1).to_list()
             
             if len(existing) > 0:
@@ -186,66 +194,48 @@ class NotesDatabase:
                     where=f"title = '{safe_title}'",
                     values={"last_opened": now, "interaction_log": json.dumps(log)}
                 )
-                print(f"   ✏️ Updated interaction for '{title}' ({event_type})")
             else:
                 interactions_table.add([{
                     "title": title,
                     "last_opened": now,
                     "interaction_log": json.dumps([event])
                 }])
-                print(f"   ➕ Created new interaction record for '{title}' ({event_type})")
         except Exception as e:
-            print(f"   ⚠️ Failed to log interaction for '{title}': {e}")
+            print(f"⚠️ Failed to log interaction for '{title}': {e}")
 
     def log_note_opened(self, title: str) -> None:
-        """Log a note open event"""
         self.log_interaction(title, "opened")
 
     def log_note_modified(self, title: str) -> None:
-        """Log a note modification event"""
         self.log_interaction(title, "modified")
 
     def get_last_opened(self, title: str) -> Optional[str]:
-        """Get the last_opened timestamp for a note"""
         try:
-            _, interactions_table = self.get_interactions_db()
-            if interactions_table is None:
-                return None
-            
+            _, table = self.get_interactions_db()
+            if table is None: return None
             safe_title = title.replace("'", "''")
-            results = interactions_table.search().where(f"title = '{safe_title}'").limit(1).to_list()
-            
-            if len(results) > 0:
-                return results[0].get("last_opened")
-            return None
-        except Exception as e:
-            print(f"   ⚠️ Error getting last_opened for '{title}': {e}")
+            results = table.search().where(f"title = '{safe_title}'").limit(1).to_list()
+            return results[0].get("last_opened") if results else None
+        except:
             return None
     
     def get_interaction_log(self, title: str) -> Optional[List[Dict]]:
-        """Get the full interaction log for a note"""
         try:
-            _, interactions_table = self.get_interactions_db()
-            if interactions_table is None:
-                return None
-            
+            _, table = self.get_interactions_db()
+            if table is None: return None
             safe_title = title.replace("'", "''")
-            results = interactions_table.search().where(f"title = '{safe_title}'").limit(1).to_list()
-            
-            if len(results) > 0:
+            results = table.search().where(f"title = '{safe_title}'").limit(1).to_list()
+            if results:
                 return json.loads(results[0].get("interaction_log", "[]") or "[]")
             return None
-        except Exception as e:
-            print(f"   ⚠️ Error getting log for '{title}': {e}")
+        except:
             return None
-
 
 # ============================================================================
 # Main Entry Point
 # ============================================================================
 
 def main():
-    """Demo script to show interaction tracking functionality"""
     print("🚀 Apple Notes Interaction Tracking Demo")
     print("=" * 60)
     
@@ -255,32 +245,20 @@ def main():
     print(f"📝 Notes table rows: {notes_table.count_rows()}")
     
     try:
-        # Get some sample note titles from the main table to demo with
         all_notes = notes_table.to_pandas()
         if not all_notes.empty:
             sample_titles = all_notes['title'].unique()[:3]
-            
-            print("\n📝 Demo: Logging interactions for sample notes...")
             for title in sample_titles:
-                # 1. Log events
                 db.log_note_opened(title)
                 db.log_note_modified(title)
                 
-                # 2. Retrieve data
                 last_opened = db.get_last_opened(title)
-                interaction_log = db.get_interaction_log(title)
-                
-                print(f"\n   📖 Note: '{title}'")
-                print(f"      Last interaction: {last_opened}")
-                print(f"      Events in log: {len(interaction_log) if interaction_log else 0}")
+                log = db.get_interaction_log(title)
+                print(f"📖 '{title}' | Last: {last_opened} | Events: {len(log) if log else 0}")
         else:
-            print("\n⚠️ No notes found in the main database. Run an import first.")
-            
+            print("⚠️ No notes found in database.")
     except Exception as e:
-        print(f"\n⚠️ Error during demo: {e}")
-    
-    print("\n✅ Demo complete!")
-
+        print(f"⚠️ Demo Error: {e}")
 
 if __name__ == "__main__":
     main()

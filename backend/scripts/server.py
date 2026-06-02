@@ -840,27 +840,11 @@ async def list_interactions(limit: int = 50):
     """Get a list of all notes with their last_opened timestamps"""
     try:
         db = NotesDatabase(db_path=DB_PATH)
-        interactions_db, interactions_table = db.get_interactions_db()
-        
-        if not interactions_table:
-            return {"interactions": [], "count": 0}
-        
-        all_interactions = interactions_table.to_pandas()
-        
-        if interactions_db:
-            interactions_db.close()
-        
-        if not all_interactions.empty:
-            all_interactions = all_interactions.sort_values(
-                'last_opened', 
-                ascending=False
-            ).head(limit)
-        else:
-            all_interactions = pd.DataFrame()
+        interactions = db.list_all_interactions(limit=limit)
         
         return {
-            "interactions": all_interactions.to_dict('records'),
-            "count": len(all_interactions)
+            "interactions": interactions,
+            "count": len(interactions)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list interactions: {str(e)}")
