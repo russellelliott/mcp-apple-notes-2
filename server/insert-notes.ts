@@ -2,6 +2,12 @@
 /**
  * Insert Open Notes into notes_interactions Table
  *
+ * Behavior:
+ * - Reads currently open Apple Notes window titles via JXA
+ * - Uses note title as the logical key / bucket
+ * - If multiple notes have the same title, they collapse into one row
+ * - Replaces existing matching rows using delete + add
+ *
  * Usage:
  *   bun server/insert-notes.ts
  */
@@ -13,6 +19,11 @@ import { join } from "path";
 import * as lancedb from "@lancedb/lancedb";
 import { LanceSchema } from "@lancedb/lancedb/embedding";
 import { Utf8 } from "apache-arrow";
+
+type NoteInteraction = {
+  dt: string;
+  type: "opened";
+};
 
 type NoteInteractionRow = {
   title: string;
@@ -86,52 +97,65 @@ async function getOrCreateInteractionsTable(db: any) {
     console.log("   ✅ notes_interactions table created");
   }
 
-  return db.openTable("notes_interactions");
+  return await db.openTable("notes_interactions");
 }
 
-function buildInteractionLog(existingLog: string | null | undefined, now: string) {
-  let parsed: Array<{ dt: string; type: string }> = [];
-
+function parseInteractionLog(existingLog: string | null | undefined): NoteInteraction[] {
   try {
-    const maybeParsed = JSON.parse(existingLog || "[]");
-    if (Array.isArray(maybeParsed)) {
-      parsed = maybeParsed;
-    }
-  } catch {}
-
-  parsed.push({ dt: now, type: "opened" });
-  return JSON.stringify(parsed);
+    const parsed = JSON.parse(existingLog || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof item.dt === "string" &&
+        typeof item.type === "string"
+    ) as NoteInteraction[];
+  } catch {
+    return [];
+  }
 }
 
 async function upsertOpenNotes(table: any, titles: string[]) {
   console.log("\n📝 Inserting notes into notes_interactions...\n");
 
-  for (const title of titles) {
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+
+  const uniqueTitles = [...new Set(titles)];
+
+  for (const title of uniqueTitles) {
     const now = new Date().toISOString();
     const escapedTitle = escapeSqlString(title);
+    const whereClause = `title = '${escapedTitle}'`;
 
     try {
-      const existing = await table
+      const existingRows = await table
         .query()
-        .where(`title = '${escapedTitle}'`)
-        .limit(1)
+        .where(whereClause)
         .toArray();
 
-      if (existing.length > 0) {
-        const record = existing[0] as NoteInteractionRow;
-        const interaction_log = buildInteractionLog(record.interaction_log, now);
+      let mergedLog: NoteInteraction[] = [];
 
-        await table.update(
+      for (const row of existingRows as NoteInteractionRow[]) {
+        mergedLog.push(...parseInteractionLog(row.interaction_log));
+      }
+
+      mergedLog.push({ dt: now, type: "opened" });
+
+      if (existingRows.length > 0) {
+        await table.delete(whereClause);
+        await table.add([
           {
+            title,
             last_opened: now,
-            interaction_log,
+            interaction_log: JSON.stringify(mergedLog),
           },
-          {
-            where: `title = '${escapedTitle}'`,
-          }
-        );
+        ]);
 
-        console.log(`   ✏️ Updated: ${title}`);
+        console.log(`   ✏️ Updated bucket: ${title} (${existingRows.length} prior row(s))`);
+        updated += 1;
       } else {
         await table.add([
           {
@@ -141,12 +165,16 @@ async function upsertOpenNotes(table: any, titles: string[]) {
           },
         ]);
 
-        console.log(`   ➕ Created: ${title}`);
+        console.log(`   ➕ Created bucket: ${title}`);
+        created += 1;
       }
     } catch (error: any) {
       console.log(`   ❌ Error for "${title}": ${error.message}`);
+      failed += 1;
     }
   }
+
+  return { created, updated, failed, uniqueCount: uniqueTitles.length };
 }
 
 async function main() {
@@ -174,11 +202,23 @@ async function main() {
 
     const table = await getOrCreateInteractionsTable(db);
 
-    await upsertOpenNotes(table, titles);
-
+    const result = await upsertOpenNotes(table, titles);
     const count = await table.countRows();
-    console.log("\n✅ Done! All open notes processed.");
-    console.log(`📊 Total rows in notes_interactions: ${count}`);
+
+    console.log("\n📈 Results:");
+    console.log(`   Open windows seen: ${titles.length}`);
+    console.log(`   Unique title buckets: ${result.uniqueCount}`);
+    console.log(`   Created: ${result.created}`);
+    console.log(`   Updated: ${result.updated}`);
+    console.log(`   Failed: ${result.failed}`);
+    console.log(`   Total rows in notes_interactions: ${count}`);
+
+    if (result.failed === 0) {
+      console.log("\n✅ Done! All open notes processed successfully.");
+    } else {
+      console.log("\n⚠️ Done, but some notes failed to process.");
+      process.exitCode = 1;
+    }
   } catch (error: any) {
     if (error?.status === 124) {
       console.error("⏰ JXA execution timed out after 10 seconds");
