@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from contextlib import asynccontextmanager
+from backend.scripts.main import NotesDatabase
 
 # Add repo root to path so we can import from backend
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -761,10 +762,9 @@ async def reload_data():
 # ============================================================================
 # Interaction Tracking Endpoints
 # ============================================================================
-
 class InteractionRequest(BaseModel):
     title: str
-    event_type: str  # "opened" or "modified"
+    event_type: str
 
 class InteractionResponse(BaseModel):
     success: bool
@@ -786,7 +786,6 @@ async def log_interaction(request: InteractionRequest):
         db = NotesDatabase(db_path=DB_PATH)
         notes_table = db.get_or_create_table()
         
-        # Get the note title from the database
         chunks = notes_table.to_pandas()
         note_titles = chunks[chunks['title'] == request.title]['title'].tolist()
         
@@ -796,7 +795,6 @@ async def log_interaction(request: InteractionRequest):
                 message=f"Note '{request.title}' not found in database"
             )
         
-        # Log the interaction
         if request.event_type == "opened":
             db.log_note_opened(request.title)
         else:
@@ -815,7 +813,7 @@ async def log_interaction(request: InteractionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to log interaction: {str(e)}")
 
 @app.get("/interaction/{title}")
-async def get_interaction(title: str = Query(..., description="Note title to get interaction data for")):
+async def get_interaction(title: str):
     """Get interaction data for a specific note"""
     try:
         db = NotesDatabase(db_path=DB_PATH)
@@ -835,7 +833,7 @@ async def get_interaction(title: str = Query(..., description="Note title to get
         raise HTTPException(status_code=500, detail=f"Failed to get interaction data: {str(e)}")
 
 @app.get("/interactions/list")
-async def list_interactions(limit: int = Query(50, description="Maximum number of interactions to return")):
+async def list_interactions(limit: int = 50):
     """Get a list of all notes with their last_opened timestamps"""
     try:
         db = NotesDatabase(db_path=DB_PATH)
@@ -844,13 +842,11 @@ async def list_interactions(limit: int = Query(50, description="Maximum number o
         if not interactions_table:
             return {"interactions": [], "count": 0}
         
-        # Get all interactions
         all_interactions = interactions_table.to_pandas()
         
         if interactions_db:
             interactions_db.close()
         
-        # Sort by last_opened (most recent first)
         if not all_interactions.empty:
             all_interactions = all_interactions.sort_values(
                 'last_opened', 
@@ -868,5 +864,4 @@ async def list_interactions(limit: int = Query(50, description="Maximum number o
 
 if __name__ == "__main__":
     import uvicorn
-    # Use standard port 8000
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
