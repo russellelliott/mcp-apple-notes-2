@@ -27,6 +27,10 @@ const db = await lancedb.connect(
 // Path for notes cache file
 const NOTES_CACHE_PATH = path.join(os.homedir(), ".mcp-apple-notes", "notes-cache.json");
 
+// Path for interactions database (separate from main notes table)
+const INTERACTIONS_DB_PATH = path.join(os.homedir(), ".mcp-apple-notes", "data");
+const INTERACTIONS_TABLE_NAME = "notes_interactions";
+
 // Types for note metadata
 interface NoteMetadata {
   title: string;
@@ -579,7 +583,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["query"],
         },
       },
-// Clustering tools removed
       {
         name: "create-note",
         description:
@@ -592,19 +595,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["title", "content"],
         },
-      }
-    ],
-  };
+       },
+       {
+        name: "open-in-apple-notes",
+        description:
+           "Open a specific Apple Note by title and creation date. Handles duplicate titles by using creation date for precise targeting. Automatically logs the interaction in the notes_interactions table.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: { 
+              type: "string",
+              description: "The title of the note to open"
+             },
+            creation_date: { 
+              type: "string",
+              description: "The creation date of the note (used to disambiguate duplicate titles)"
+             }
+           },
+required: ["title"]
+            }
+          }
+        ]
+      };
 });
 
 const getNotes = async function* (maxNotes?: number) {
   console.log("   Requesting notes list from Apple Notes...");
   try {
-    const BATCH_SIZE = 50; // Increased from 25 to 50 for faster note fetching
+    const BATCH_SIZE = 50;
     let startIndex = 1;
     let hasMore = true;
 
-    // Get total count or use the limit
+      // Get total count or use the limit
     let totalCount: number;
     
     if (maxNotes) {
@@ -1826,6 +1848,144 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
       const { query } = QueryNotesSchema.parse(args);
       const combinedResults = await searchAndCombineResults(notesTable, query);
       return createTextResponse(JSON.stringify(combinedResults, null, 2));
+    } else if (name === "open-in-apple-notes") {
+      try {
+        const { title, creation_date } = z.object({
+          title: z.string(),
+          creation_date: z.string().optional(),
+        }).parse(args);
+        
+        console.log(`📖 Opening note: "${title}"${creation_date ? ` (creation date: ${creation_date})` : ""}`);
+        
+        // JXA script to open a specific note
+        const creationDateParam = creation_date ? `"${creation_date}"` : "null";
+        const jxaScript = `
+(function(title, creationDateStr) {
+  const Notes = Application("Notes");
+  Notes.includeStandardAdditions = true;
+  
+  try {
+    const matches = Notes.notes.whose({ name: title })();
+    let noteToOpen = null;
+    
+    for (let i = 0; i < matches.length; i++) {
+      const note = matches[i];
+      if (!creationDateStr || note.creationDate().toLocaleString() === creationDateStr) {
+        noteToOpen = note;
+        break;
+      }
+    }
+    
+    if (noteToOpen) {
+      Notes.activate();
+      Notes.show(noteToOpen);
+      return JSON.stringify({ status: "success", title: title });
+    }
+    return JSON.stringify({ status: "not_found", title: title });
+  } catch (error) {
+    return JSON.stringify({ status: "error", message: error.message });
+  }
+})("${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}", ${creationDateParam});
+`;
+        
+        const result = await runJxa(jxaScript);
+        const parsedResult = JSON.parse(result as string) as {
+          status: "success" | "not_found" | "error";
+          title?: string;
+          message?: string;
+        };
+        
+        if (parsedResult.status === "success") {
+          // Log the interaction in notes_interactions table
+          try {
+            const interactionsDb = await lancedb.connect(INTERACTIONS_DB_PATH);
+            let interactionsTable;
+            
+            const tableNames = await interactionsDb.tableNames();
+            if (tableNames.includes(INTERACTIONS_TABLE_NAME)) {
+              interactionsTable = await interactionsDb.openTable(INTERACTIONS_TABLE_NAME);
+              
+              const now = new Date().toISOString();
+              const event = { dt: now, type: "opened" as const };
+              
+              try {
+                 // Check if title exists
+                const existing = await interactionsTable
+                     .query()
+                     .where(`title = '${title.replace(/'/g, "''")}'`)
+                     .limit(1)
+                     .toArray();
+                
+                if (existing.length > 0) {
+                  // Update existing record
+                  const record = existing[0];
+                  const log = JSON.parse(record.interaction_log || "[]");
+                  log.push(event);
+                  
+                  await interactionsTable.update(
+                      { last_opened: now, interaction_log: JSON.stringify(log) },
+                      { where: `title = '${title.replace(/'/g, "''")}'` }
+                    );
+                  await interactionsTable.update(
+                      { last_opened: now, interaction_log: JSON.stringify(log) },
+                      { where: `title = '${title.replace(/'/g, "''")}'` }
+                    );
+                  await interactionsTable.update(
+                      { last_opened: now, interaction_log: JSON.stringify(log) },
+                      { where: `title = '${title.replace(/'/g, "''")}'` }
+                    );
+                  await interactionsTable.update(
+                      { last_opened: now, interaction_log: JSON.stringify(log) },
+                      { where: `title = '${title.replace(/'/g, "''")}'` }
+                    );
+                  console.log(`  ✏️ Logged "opened" event for "${title}"`);
+                } else {
+                  // Insert new record
+                  await interactionsTable.add([{
+                    title,
+                    last_opened: now,
+                    interaction_log: JSON.stringify([event])
+                  }]);
+                  console.log(`  ➕ Created new interaction record for "${title}"`);
+                }
+                
+                await interactionsDb.close();
+              } catch (logError) {
+                console.log(`  ⚠️ Could not log interaction: ${(logError as Error).message}`);
+              }
+            } else {
+              console.log(`  ℹ️ notes_interactions table doesn't exist yet. Tracker script needs to be run first.`);
+            }
+          } catch (logError) {
+            console.log(`  ⚠️ Interaction logging failed: ${(logError as Error).message}`);
+          }
+          
+          return createTextResponse(
+            `Successfully opened note "${title}" in Apple Notes.\n\n` +
+            `📊 Status: ${parsedResult.status}\n` +
+            `📅 Title: ${title}${creation_date ? `\n📅 Creation Date: ${creation_date}` : ""}`
+          );
+        } else if (parsedResult.status === "not_found") {
+          return createTextResponse(
+            `Note "${title}" not found in Apple Notes.\n\n` +
+            `💡 Tip: If you have multiple notes with the same title, try providing the creation_date parameter to disambiguate.`
+          );
+        } else {
+          return createTextResponse(
+            `Failed to open note: ${parsedResult.message || "Unknown error"}\n\n` +
+            `📝 Title: ${title}`
+          );
+        }
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          throw new Error(
+            `Invalid arguments: ${error.errors
+              .map((e) => `${e.path.join(".")}: ${e.message}`)
+              .join(", ")}`
+          );
+        }
+        return createTextResponse(`Error opening note: ${(error as Error).message}`);
+      }
     } else {
       throw new Error(`Unknown tool: ${name}`);
     }

@@ -758,6 +758,114 @@ async def reload_data():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# Interaction Tracking Endpoints
+# ============================================================================
+
+class InteractionRequest(BaseModel):
+    title: str
+    event_type: str  # "opened" or "modified"
+
+class InteractionResponse(BaseModel):
+    success: bool
+    message: str
+    last_opened: Optional[str] = None
+
+class InteractionLogResponse(BaseModel):
+    title: str
+    last_opened: Optional[str]
+    interaction_log: List[Dict[str, str]]
+
+@app.post("/interaction/log")
+async def log_interaction(request: InteractionRequest):
+    """Log an interaction event for a note (opened/modified)"""
+    try:
+        if request.event_type not in ["opened", "modified"]:
+            raise HTTPException(status_code=400, detail="event_type must be 'opened' or 'modified'")
+        
+        db = NotesDatabase(db_path=DB_PATH)
+        notes_table = db.get_or_create_table()
+        
+        # Get the note title from the database
+        chunks = notes_table.to_pandas()
+        note_titles = chunks[chunks['title'] == request.title]['title'].tolist()
+        
+        if not note_titles:
+            return InteractionResponse(
+                success=False,
+                message=f"Note '{request.title}' not found in database"
+            )
+        
+        # Log the interaction
+        if request.event_type == "opened":
+            db.log_note_opened(request.title)
+        else:
+            db.log_note_modified(request.title)
+        
+        last_opened = db.get_last_opened(request.title)
+        
+        return InteractionResponse(
+            success=True,
+            message=f"Successfully logged {request.event_type} event for '{request.title}'",
+            last_opened=last_opened
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to log interaction: {str(e)}")
+
+@app.get("/interaction/{title}")
+async def get_interaction(title: str = Query(..., description="Note title to get interaction data for")):
+    """Get interaction data for a specific note"""
+    try:
+        db = NotesDatabase(db_path=DB_PATH)
+        
+        last_opened = db.get_last_opened(title)
+        interaction_log = db.get_interaction_log(title)
+        
+        if interaction_log is None:
+            interaction_log = []
+        
+        return InteractionLogResponse(
+            title=title,
+            last_opened=last_opened,
+            interaction_log=interaction_log
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get interaction data: {str(e)}")
+
+@app.get("/interactions/list")
+async def list_interactions(limit: int = Query(50, description="Maximum number of interactions to return")):
+    """Get a list of all notes with their last_opened timestamps"""
+    try:
+        db = NotesDatabase(db_path=DB_PATH)
+        interactions_db, interactions_table = db.get_interactions_db()
+        
+        if not interactions_table:
+            return {"interactions": [], "count": 0}
+        
+        # Get all interactions
+        all_interactions = interactions_table.to_pandas()
+        
+        if interactions_db:
+            interactions_db.close()
+        
+        # Sort by last_opened (most recent first)
+        if not all_interactions.empty:
+            all_interactions = all_interactions.sort_values(
+                'last_opened', 
+                ascending=False
+            ).head(limit)
+        else:
+            all_interactions = pd.DataFrame()
+        
+        return {
+            "interactions": all_interactions.to_dict('records'),
+            "count": len(all_interactions)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list interactions: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     # Use standard port 8000

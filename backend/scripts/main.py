@@ -139,7 +139,165 @@ class NotesDatabase:
         except Exception as e:
             print(f"  ⚠️ Could not delete chunks for '{title}': {e}")
     
-    def search(self, query_vector: np.ndarray, limit: int = 10) -> List[Dict[str, Any]]:
-        """Vector search for similar chunks"""
-        results = self.table.search(query_vector).limit(limit).to_list()
-        return results
+    def get_interactions_db(self) -> tuple[lancedb.LanceDB, lancedb.table.Table | None]:
+         """Get or create the interactions database (separate from main notes table)"""
+        try:
+            interactions_path = self.db_path.parent / "data"
+            interactions_db = lancedb.connect(str(interactions_path))
+            
+            if "notes_interactions" not in interactions_db.table_names():
+                # Create interactions table schema
+                interactions_schema = pa.schema([
+                    pa.field("title", pa.string()),
+                    pa.field("last_opened", pa.string()),
+                    pa.field("interaction_log", pa.string()),  # JSON string
+                ])
+                interactions_db.create_table("notes_interactions", schema=interactions_schema)
+                print(f"   ✅ Created notes_interactions table")
+            
+            interactions_table = interactions_db.open_table("notes_interactions")
+            return (interactions_db, interactions_table)
+        except Exception as e:
+            print(f"   ⚠️ Interactions DB error: {e}")
+            return (None, None)
+    
+    def log_interaction(self, title: str, event_type: str) -> None:
+         """Log an interaction event (opened/modified) for a note"""
+        try:
+            interactions_db, interactions_table = self.get_interactions_db()
+            if not interactions_table:
+                print(f"   ⚠️ Could not access interactions table for '{title}'")
+                return
+            
+            import json
+            from datetime import datetime
+            
+            now = datetime.utcnow().isoformat() + "Z"
+            event = {"dt": now, "type": event_type}
+            
+            # Check if title exists
+            existing = interactions_table.search().where(f"title = '{title.replace(chr(39), chr(39)+chr(39))}'").limit(1).to_list()
+            
+            if len(existing) > 0:
+                # Update existing record
+                record = existing[0]
+                log = json.loads(record.get("interaction_log", "[]") or "[]")
+                log.append(event)
+                
+                interactions_table.update(
+                    where=f"title = '{title.replace(chr(39), chr(39)+chr(39))}'",
+                    values={"last_opened": now, "interaction_log": json.dumps(log)}
+                )
+                print(f"   ✏️ Updated interaction for '{title}' ({event_type})")
+            else:
+                # Insert new record
+                interactions_table.add([{
+                    "title": title,
+                    "last_opened": now,
+                    "interaction_log": json.dumps([event])
+                }])
+                print(f"   ➕ Created new interaction record for '{title}' ({event_type})")
+            
+            interactions_db.close()
+        except Exception as e:
+            print(f"   ⚠️ Failed to log interaction for '{title}': {e}")
+    
+    def log_note_opened(self, title: str) -> None:
+         """Log a note open event"""
+        self.log_interaction(title, "opened")
+    
+    def log_note_modified(self, title: str) -> None:
+         """Log a note modification event"""
+        self.log_interaction(title, "modified")
+    
+    def get_last_opened(self, title: str) -> Optional[str]:
+         """Get the last_opened timestamp for a note"""
+        try:
+            interactions_db, interactions_table = self.get_interactions_db()
+            if not interactions_table:
+                return None
+            
+            results = interactions_table.search().where(f"title = '{title.replace(chr(39), chr(39)+chr(39))}'").limit(1).to_list()
+            
+            if len(results) > 0:
+                last_opened = results[0].get("last_opened")
+                interactions_db.close()
+                return last_opened
+            
+            interactions_db.close()
+            return None
+        except Exception as e:
+            print(f"   ⚠️ Error getting last_opened for '{title}': {e}")
+            return None
+    
+    def get_interaction_log(self, title: str) -> Optional[list[dict]]:
+         """Get the full interaction log for a note"""
+        try:
+            interactions_db, interactions_table = self.get_interactions_db()
+            if not interactions_table:
+                return None
+            
+            results = interactions_table.search().where(f"title = '{title.replace(chr(39), chr(39)+chr(39))}'").limit(1).to_list()
+            
+            if len(results) > 0:
+                log = json.loads(results[0].get("interaction_log", "[]") or "[]")
+                interactions_db.close()
+                return log
+            
+            interactions_db.close()
+            return None
+        except Exception as e:
+            print(f"   ⚠️ Error getting interaction log for '{title}': {e}")
+            return None
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+def main():
+    """Demo script to show interaction tracking functionality"""
+    print("🚀 Apple Notes Interaction Tracking Demo")
+    print("=" * 60)
+    
+    # Initialize database
+    db = NotesDatabase()
+    notes_table = db.get_or_create_table()
+    
+    print(f"\n📊 Database path: {DB_PATH}")
+    print(f"📝 Notes table rows: {notes_table.count_rows()}")
+    
+    # Demo: Log some interactions for existing notes
+    print("\n📝 Demo: Logging interactions for sample notes...")
+    
+    # Get some sample note titles
+    try:
+        sample_notes = notes_table.to_pandas()
+        if not sample_notes.empty:
+            sample_titles = sample_notes['title'].unique()[:5]
+            print(f"\n📋 Sample notes: {list(sample_titles)}")
+            
+            for title in sample_titles:
+                # Log an "opened" event
+                db.log_note_opened(title)
+                
+                # Log a "modified" event
+                db.log_note_modified(title)
+                
+                # Get the interaction log
+                last_opened = db.get_last_opened(title)
+                interaction_log = db.get_interaction_log(title)
+                
+                print(f"\n   📖 Note: '{title}'")
+                print(f"      Last opened: {last_opened}")
+                print(f"      Interaction log: {interaction_log}")
+        else:
+            print("\n⚠️ No notes in database to demo with")
+    except Exception as e:
+        print(f"\n⚠️ Error during demo: {e}")
+    
+    print("\n✅ Demo complete!")
+
+
+if __name__ == "__main__":
+    main()
