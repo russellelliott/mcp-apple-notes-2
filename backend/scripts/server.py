@@ -1,5 +1,13 @@
 import os
 import sys  # Added sys
+from pathlib import Path
+
+# ── PATH FIX: must happen before any `backend.*` import ──────────────────────
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+# ─────────────────────────────────────────────────────────────────────────────
+
 import lancedb
 import pandas as pd
 import numpy as np
@@ -17,14 +25,9 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from contextlib import asynccontextmanager
-from backend.scripts.main import NotesDatabase
-
-# Add repo root to path so we can import from backend
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 # Import search logic
+from backend.scripts.main import NotesDatabase
 from backend.analysis.search_notes import search_and_combine_results
 
 # Configuration
