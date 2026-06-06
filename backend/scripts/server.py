@@ -836,10 +836,11 @@ async def get_interaction(title: str):
         raise HTTPException(status_code=500, detail=f"Failed to get interaction data: {str(e)}")
 
 @app.get("/interactions/list")
-async def list_interactions(limit: int = 50):
-    """Get a list of all notes with their last_opened timestamps"""
+async def list_interactions(limit: Optional[int] = None):
+    """Get a list of all notes with their last_opened timestamps. Default is no limit."""
     try:
         db = NotesDatabase(db_path=DB_PATH)
+        # Passing None to the DB method typically fetches all records
         interactions = db.list_all_interactions(limit=limit)
         
         return {
