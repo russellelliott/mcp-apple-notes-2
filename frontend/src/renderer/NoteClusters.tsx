@@ -87,7 +87,7 @@ type SidebarMode = 'global' | 'history';
 type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size' | 'search';
 type SortDirection = 'desc' | 'asc';
-type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size' | 'search' | 'similarity';
+type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size' | 'search' | 'history' | 'similarity';
 
 interface ClusterPointMeta {
   unique_key: string;
@@ -612,6 +612,17 @@ export default function NoteClusters() {
   const historyTitleSet = useMemo(() => new Set(historySidebarNotes.map((note) => note.title)), [historySidebarNotes]);
   const canGoBackHistory = historyDates.length > 0 && selectedHistoryDateIndex > 0;
   const canGoForwardHistory = historyDates.length > 0 && selectedHistoryDateIndex >= 0 && selectedHistoryDateIndex < historyDates.length - 1;
+  const historyClusterFirstSeenRank = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    historySidebarNotes.forEach((note, noteIndex) => {
+      note.chunks.forEach((chunk) => {
+        if (!rankMap.has(chunk.cluster_id)) {
+          rankMap.set(chunk.cluster_id, noteIndex);
+        }
+      });
+    });
+    return rankMap;
+  }, [historySidebarNotes]);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -1252,6 +1263,21 @@ export default function NoteClusters() {
         const idB = clusterGroups[b].clusterId || b;
         return compareTopicIds(String(idA), String(idB));
       });
+    } else if (clusterSortMetric === 'history') {
+      list = list.slice().sort((a, b) => {
+        const rankA = historyClusterFirstSeenRank.get(a);
+        const rankB = historyClusterFirstSeenRank.get(b);
+
+        if (rankA !== undefined && rankB !== undefined) {
+          return clusterSortDirection === 'asc' ? rankB - rankA : rankA - rankB;
+        }
+        if (rankA !== undefined) return -1;
+        if (rankB !== undefined) return 1;
+
+        const idA = clusterGroups[a].clusterId || a;
+        const idB = clusterGroups[b].clusterId || b;
+        return compareTopicIds(String(idA), String(idB));
+      });
     } else if (clusterSortMetric === 'similarity') {
       list = list.slice().sort((a, b) => {
         const centroid = selectedClustersCentroid;
@@ -1287,7 +1313,7 @@ export default function NoteClusters() {
     }
 
     return list;
-  }, [sortedLabels, clusterGroups, clusterSortMetric, clusterSortDirection, clusterOrderScores, clusterAverageRelevance, clusterCentroids, selectedClustersCentroid]);
+  }, [sortedLabels, clusterGroups, clusterSortMetric, clusterSortDirection, clusterOrderScores, clusterAverageRelevance, clusterCentroids, selectedClustersCentroid, historyClusterFirstSeenRank]);
 
   const displayedSearchResults = useMemo(() => {
     const sorted = searchResults.slice();
@@ -1370,10 +1396,13 @@ export default function NoteClusters() {
     if (clusterSortMetric === 'search' && searchResults.length === 0) {
       setClusterSortMetric('momentum');
     }
+    if (clusterSortMetric === 'history' && historySidebarNotes.length === 0) {
+      setClusterSortMetric('momentum');
+    }
     if (clusterSortMetric === 'similarity' && selectedClusters.size === 0) {
       setClusterSortMetric('momentum');
     }
-  }, [clusterSortMetric, searchResults.length, selectedClusters.size]);
+  }, [clusterSortMetric, historySidebarNotes.length, searchResults.length, selectedClusters.size]);
 
 
   const hasActiveClusterFilter = selectedClusters.size > 0;
@@ -3177,7 +3206,8 @@ export default function NoteClusters() {
                     { key: 'az', label: 'A–Z' },
                     { key: 'size', label: 'Size' },
                     ...(searchResults.length > 0 ? [{ key: 'search', label: 'Search Relevance' }] : []),
-                    ...(selectedClusters.size > 0 ? [{ key: 'similarity', label: 'Cluster Similarity' }] : []),
+                    ...(isHistoryMode && historySidebarNotes.length > 0 ? [{ key: 'history', label: 'History Order' }] : []),
+                    ...(!isHistoryMode && selectedClusters.size > 0 ? [{ key: 'similarity', label: 'Cluster Similarity' }] : []),
                   ] as Array<{ key: ClusterSortMetric; label: string }>).map((opt, idx, arr) => (
                     <span key={opt.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <button
@@ -3221,13 +3251,17 @@ export default function NoteClusters() {
                 const hasHits = group.customdata.some((pointData) =>
                   searchScoreMap.has(pointData.unique_key),
                 );
+                const hasHistoryHits = group.customdata.some((pointData) =>
+                  historyTitleSet.has(pointData.title),
+                );
                 const color = clusterColors[label];
                 const isSelected = selectedClusters.has(label);
                 const isSearchDimmed = searchResults.length > 0 && !hasHits;
+                const isHistoryDimmed = isHistoryMode && !hasHistoryHits;
                 // Don't let the hide-other filter dim clusters that actually have search hits
                 const isFilterDimmed = false;
-                const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
-                const isSoftDimmed = isSearchDimmed && isSelected;
+                const isHardDimmed = isFilterDimmed || ((isSearchDimmed || isHistoryDimmed) && !isSelected);
+                const isSoftDimmed = (isSearchDimmed || isHistoryDimmed) && isSelected;
                 const isDimmed = isHardDimmed || isSoftDimmed;
                 const rowOpacity = isHardDimmed ? 0.5 : isSoftDimmed ? 0.76 : 1;
                 const dotOpacity = isHardDimmed ? 0.55 : isSoftDimmed ? 0.78 : 1;
