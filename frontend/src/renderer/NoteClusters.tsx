@@ -2495,10 +2495,10 @@ export default function NoteClusters() {
                         padding: '10px',
                         marginBottom: '8px',
                         borderRadius: '8px',
-                        border: '1px solid #fde68a',
-                        backgroundColor: '#fffdf2',
+                        border: '1px solid #e5e7eb',
+                        backgroundColor: '#ffffff',
                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      }}
+                       }}
                     >
                       <div
                         style={{
