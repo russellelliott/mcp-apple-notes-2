@@ -8,6 +8,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # ─────────────────────────────────────────────────────────────────────────────
 
+import json
+import re
+
 import lancedb
 import pandas as pd
 import numpy as np
@@ -849,6 +852,228 @@ async def list_interactions(limit: Optional[int] = None):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list interactions: {str(e)}")
+
+# ============================================================================
+# Daily History Endpoints
+# ============================================================================
+
+class DayResponse(BaseModel):
+    date: str
+    titles: List[str]  # Distinct note titles opened on this date
+    notes: List[Dict[str, Any]]  # Full note metadata for those titles
+
+
+def _parse_interaction_events(raw_log: Any) -> List[Dict[str, Any]]:
+    if raw_log is None:
+        return []
+
+    try:
+        events = json.loads(raw_log) if isinstance(raw_log, str) else raw_log
+    except Exception:
+        return []
+
+    if isinstance(events, dict):
+        events = [events]
+
+    return events if isinstance(events, list) else []
+
+
+def _event_date(dt_str: Any) -> Optional[str]:
+    if not dt_str:
+        return None
+
+    dt_value = str(dt_str)
+    if len(dt_value) < 10:
+        return None
+
+    date_only = dt_value[:10]
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_only):
+        return date_only
+    return None
+
+
+def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:
+    history_by_title: Dict[str, Dict[str, Any]] = {}
+
+    db = NotesDatabase(db_path=DB_PATH)
+    _, interactions_table = db.get_interactions_db()
+    if interactions_table is None:
+        return history_by_title
+
+    interactions_df = interactions_table.to_pandas()
+    if interactions_df.empty:
+        return history_by_title
+
+    if "interaction_log" not in interactions_df.columns:
+        return history_by_title
+
+    for _, row in interactions_df.iterrows():
+        title = str(row.get("title", "")).strip()
+        if not title:
+            continue
+
+        events = _parse_interaction_events(row.get("interaction_log", "[]"))
+        if not events:
+            continue
+
+        matching_timestamps = [str(ev.get("dt", "")) for ev in events if _event_date(ev.get("dt")) == date_str]
+        if not matching_timestamps:
+            continue
+
+        matching_timestamps.sort()
+        title_info = history_by_title.setdefault(
+            title,
+            {
+                "title": title,
+                "opened_at": matching_timestamps[0],
+                "last_opened_at": matching_timestamps[-1],
+                "opened_count": 0,
+            },
+        )
+        title_info["opened_count"] += len(matching_timestamps)
+        title_info["opened_at"] = min(title_info["opened_at"], matching_timestamps[0])
+        title_info["last_opened_at"] = max(title_info["last_opened_at"], matching_timestamps[-1])
+
+    return history_by_title
+
+
+@app.get("/history/dates")
+async def get_history_dates():
+    """Return a sorted list of all dates (YYYY-MM-DD) with interaction data."""
+    try:
+        db = NotesDatabase(db_path=DB_PATH)
+        _, interactions_table = db.get_interactions_db()
+        if interactions_table is None:
+            return {"dates": []}
+
+        interactions_df = interactions_table.to_pandas()
+        if interactions_df.empty or "interaction_log" not in interactions_df.columns:
+            return {"dates": []}
+
+        dates_set = set()
+        for log_json in interactions_df["interaction_log"].dropna():
+            for event in _parse_interaction_events(log_json):
+                date_only = _event_date(event.get("dt", ""))
+                if date_only:
+                    dates_set.add(date_only)
+
+        return {"dates": sorted(list(dates_set))}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch dates: {str(e)}")
+
+
+@app.get("/history/day/{date_str}")
+async def get_history_for_day(date_str: str):
+    """Get all distinct note titles and their full metadata opened on a given date.
+
+    date_str format: YYYY-MM-DD
+    Returns:
+      - titles: list of distinct note titles open that day
+      - notes: full note metadata from the main notes table for those titles
+    """
+    try:
+        # Validate date format
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+        history_by_title = _collect_history_by_title(date_str)
+        active_titles = sorted(history_by_title.keys())
+
+        if not active_titles:
+            return {"date": date_str, "titles": [], "notes": []}
+
+        print(f"📅 Found {len(active_titles)} titles for {date_str}")
+
+        if state.df_viz.empty:
+            load_and_process_data()
+
+        if not state.df_viz.empty:
+            working_df = state.df_viz.copy()
+            working_df['title'] = working_df['title'].astype(str)
+            if 'creation_date' not in working_df.columns:
+                working_df['creation_date'] = ''
+            if 'modification_date' not in working_df.columns:
+                working_df['modification_date'] = ''
+            if 'cluster_label' not in working_df.columns:
+                working_df['cluster_label'] = 'Unclustered'
+            if 'cluster_id' not in working_df.columns:
+                working_df['cluster_id'] = '-1'
+            if 'display_topic_id' not in working_df.columns:
+                working_df['display_topic_id'] = working_df['cluster_id']
+
+            working_df['creation_date'] = working_df['creation_date'].astype(str).fillna('')
+            working_df['modification_date'] = working_df['modification_date'].astype(str).fillna('')
+            working_df['cluster_label'] = working_df['cluster_label'].astype(str).fillna('Unclustered')
+            working_df['cluster_id'] = working_df['cluster_id'].astype(str).fillna('-1')
+            working_df['display_topic_id'] = working_df['display_topic_id'].astype(str).fillna('-1')
+
+            notes_df = working_df[working_df['title'].isin(active_titles)].copy()
+            note_identity_cols = ['title', 'creation_date', 'modification_date']
+            note_keys_df = notes_df[note_identity_cols].drop_duplicates().copy()
+            note_keys_df['note_key'] = (
+                note_keys_df['title']
+                + '|||' + note_keys_df['creation_date']
+                + '|||' + note_keys_df['modification_date']
+            )
+
+            merged = working_df.merge(
+                note_keys_df,
+                on=note_identity_cols,
+                how='inner',
+            )
+
+            merged = merged.sort_values(['note_key', 'chunk_index'])
+            notes_list = []
+            for note_key, group in merged.groupby('note_key', sort=False):
+                title = str(group.iloc[0].get('title', ''))
+                history_info = history_by_title.get(title, {})
+                creation_date = str(group.iloc[0].get('creation_date', ''))
+                modification_date = str(group.iloc[0].get('modification_date', ''))
+
+                chunks = []
+                seen_chunk_indexes = set()
+                for _, row in group.iterrows():
+                    chunk_index_val = int(row.get('chunk_index', 0))
+                    if chunk_index_val in seen_chunk_indexes:
+                        continue
+                    seen_chunk_indexes.add(chunk_index_val)
+
+                    chunk_text = row.get('chunk_content', '')
+                    if pd.isna(chunk_text) or chunk_text == '':
+                        chunk_text = row.get('text', '')
+                    if pd.isna(chunk_text):
+                        chunk_text = ''
+
+                    chunks.append({
+                        "chunk_index": chunk_index_val,
+                        "cluster_id": str(row.get('display_topic_id', row.get('cluster_id', '-1'))),
+                        "cluster_name": str(row.get('cluster_label', 'Unclustered')),
+                        "in_cluster": True,
+                        "text": str(chunk_text),
+                    })
+
+                notes_list.append({
+                    "note_key": str(note_key),
+                    "title": title,
+                    "creation_date": creation_date,
+                    "modification_date": modification_date,
+                    "opened_at": history_info.get("opened_at"),
+                    "last_opened_at": history_info.get("last_opened_at"),
+                    "opened_count": history_info.get("opened_count", 0),
+                    "chunks": chunks,
+                })
+
+            notes_list.sort(key=lambda item: item.get("opened_at") or "", reverse=True)
+            return {"date": date_str, "titles": active_titles, "notes": notes_list}
+
+        return {"date": date_str, "titles": active_titles, "notes": []}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch day history: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn

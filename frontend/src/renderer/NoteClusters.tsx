@@ -3,8 +3,10 @@ import axios from 'axios';
 import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import LanguageIcon from '@mui/icons-material/Language';
+import HistoryIcon from '@mui/icons-material/History';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 
@@ -74,7 +76,14 @@ interface SidebarNoteData {
   chunks: SidebarChunkData[];
 }
 
+interface HistorySidebarNoteData extends SidebarNoteData {
+  opened_at?: string;
+  last_opened_at?: string;
+  opened_count?: number;
+}
+
 type ClusterOrderMode = 'spike' | 'momentum';
+type SidebarMode = 'global' | 'history';
 type SearchLegendOrderMode = 'results' | 'similarity';
 type NotesSortMetric = 'modified' | 'size' | 'search';
 type SortDirection = 'desc' | 'asc';
@@ -378,7 +387,11 @@ export default function NoteClusters() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [hideOtherClusters, setHideOtherClusters] = useState(false);
+  const [viewMode, setViewMode] = useState<SidebarMode>('global');
+  const [historyDates, setHistoryDates] = useState<string[]>([]);
+  const [selectedHistoryDateIndex, setSelectedHistoryDateIndex] = useState<number>(-1);
+  const [historySidebarNotes, setHistorySidebarNotes] = useState<HistorySidebarNoteData[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [clusterOrderMode, setClusterOrderMode] = useState<ClusterOrderMode>('spike');
   const [clusterSortMetric, setClusterSortMetric] = useState<ClusterSortMetric>('recency');
   const [clusterSortDirection, setClusterSortDirection] = useState<SortDirection>('desc');
@@ -519,6 +532,16 @@ export default function NoteClusters() {
 
   const closePopup = () => setSelectedNode(null);
 
+  const formatTimeHHMM = (iso?: string | number | null) => {
+    if (!iso) return '';
+    const t = typeof iso === 'number' ? new Date(iso) : new Date(String(iso));
+    if (Number.isNaN(t.getTime())) return '';
+    return new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(t);
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -552,6 +575,43 @@ export default function NoteClusters() {
 
     fetchData();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const fetchHistoryDates = async () => {
+      try {
+        const response = await axios.get('http://127.0.0.1:8000/history/dates');
+        const dates = Array.isArray(response.data?.dates) ? response.data.dates.filter((value: unknown) => typeof value === 'string') : [];
+        if (!active) return;
+
+        setHistoryDates(dates);
+        setSelectedHistoryDateIndex((current) => {
+          if (dates.length === 0) return -1;
+          if (current >= 0 && current < dates.length) return current;
+          return dates.length - 1;
+        });
+      } catch (error) {
+        console.error('Error loading history dates:', error);
+        if (active) {
+          setHistoryDates([]);
+          setSelectedHistoryDateIndex(-1);
+        }
+      }
+    };
+
+    fetchHistoryDates();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const selectedHistoryDate = selectedHistoryDateIndex >= 0 ? historyDates[selectedHistoryDateIndex] || null : null;
+  const isHistoryMode = viewMode === 'history';
+  const historyTitleSet = useMemo(() => new Set(historySidebarNotes.map((note) => note.title)), [historySidebarNotes]);
+  const canGoBackHistory = historyDates.length > 0 && selectedHistoryDateIndex > 0;
+  const canGoForwardHistory = historyDates.length > 0 && selectedHistoryDateIndex >= 0 && selectedHistoryDateIndex < historyDates.length - 1;
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -617,6 +677,14 @@ export default function NoteClusters() {
 
   // Manage cluster selection in search mode
   useEffect(() => {
+    if (viewMode !== 'global') {
+      if (savedClustersBeforeSearch.size > 0) {
+        setSelectedClusters(new Set(savedClustersBeforeSearch));
+        setSavedClustersBeforeSearch(new Set());
+      }
+      return;
+    }
+
     if (searchResults.length > 0) {
       // Search is active - save current selection and clear it
       if (selectedClusters.size > 0 && savedClustersBeforeSearch.size === 0) {
@@ -1309,14 +1377,20 @@ export default function NoteClusters() {
 
 
   const hasActiveClusterFilter = selectedClusters.size > 0;
-  const visibleLabels = hideOtherClusters && hasActiveClusterFilter
-    ? displayedClusterLabels.filter((label) => selectedClusters.has(label))
-    : displayedClusterLabels;
+  const visibleLabels = displayedClusterLabels;
 
   useEffect(() => {
     let active = true;
 
     const fetchSidebar = async () => {
+      if (viewMode === 'history') {
+        if (active) {
+          setSidebarNotes([]);
+          setLoadedSidebarCluster(null);
+        }
+        return;
+      }
+
       // Fetch notes for all selected clusters
       if (selectedClusters.size === 0) {
         if (active) {
@@ -1366,7 +1440,44 @@ export default function NoteClusters() {
     return () => {
       active = false;
     };
-  }, [selectedClusters]);
+  }, [selectedClusters, viewMode]);
+
+  useEffect(() => {
+    let active = true;
+
+    const fetchHistorySidebar = async () => {
+      if (!isHistoryMode || !selectedHistoryDate) {
+        if (active) {
+          setHistorySidebarNotes([]);
+          setIsLoadingHistory(false);
+        }
+        return;
+      }
+
+      setIsLoadingHistory(true);
+      try {
+        const response = await axios.get(`http://127.0.0.1:8000/history/day/${encodeURIComponent(selectedHistoryDate)}`);
+        const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
+
+        if (active) {
+          setHistorySidebarNotes(notes);
+        }
+      } catch (error) {
+        console.error('Error loading day history:', error);
+        if (active) {
+          setHistorySidebarNotes([]);
+        }
+      } finally {
+        if (active) setIsLoadingHistory(false);
+      }
+    };
+
+    fetchHistorySidebar();
+
+    return () => {
+      active = false;
+    };
+  }, [isHistoryMode, selectedHistoryDate]);
 
   useEffect(() => {
     if (!pendingScrollNoteKey) return;
@@ -1556,33 +1667,34 @@ export default function NoteClusters() {
   const { buckets, pointLookup } = useMemo(() => {
     const bucketMap = new Map<string, PointBucket>();
     const lookup = new Map<string, VisualPoint>();
-    const isSearchMode = debouncedQuery.trim().length > 0;
-    const hasSearchHits = searchResults.length > 0;
+    const isSearchMode = !isHistoryMode && debouncedQuery.trim().length > 0;
+    const hasSearchHits = !isHistoryMode && searchResults.length > 0;
 
     visibleLabels.forEach((label) => {
       const group = clusterGroups[label];
       const clusterColorBase = clusterColors[label] || '#4b5563';
 
       group.customdata.forEach((meta, index) => {
-        const isHit = hasSearchHits && searchScoreMap.has(meta.unique_key);
+        const isHistoryHit = isHistoryMode && historyTitleSet.has(meta.title);
+        const isHit = isHistoryMode ? isHistoryHit : hasSearchHits && searchScoreMap.has(meta.unique_key);
         const pointKey = makePointCacheKey(meta.unique_key);
         const authoritative = authoritativeClusterByKey.get(pointKey);
         const pointClusterKey = authoritative?.key || label;
         const pointClusterLabel = authoritative?.label || clusterNameById.get(pointClusterKey) || meta.cluster_label;
 
-        // Search hits get a larger, brighter glyph; misses get a smaller, muted one.
-        const size = isSearchMode ? (isHit ? 0.05 : 0.015) : 0.028;
+        // Search/history hits get a larger, brighter glyph; misses get a smaller, muted one.
+        const size = isSearchMode || isHistoryMode ? (isHit ? 0.05 : 0.015) : 0.028;
 
         // SOURCE OF TRUTH: Use the color the server calculated for this specific row.
         // Fallback only if it's missing (which it shouldn't be now).
         const dotColor = authoritative?.color || meta.dot_color || clusterColors[label] || '#6b7280';
-        const visualColor = isSearchMode
+        const visualColor = (isSearchMode || isHistoryMode)
           ? (isHit ? mixColorWithWhite(dotColor, 0.12) : mixColorWithDark(dotColor, 0.72))
           : dotColor;
 
-        // Glow: strong for hits in search mode, otherwise no glow by default (only on hover).
-        const glowOpacity = isSearchMode ? (isHit ? 0.42 : 0.02) : 0.0;
-        const opacity = isSearchMode ? (isHit ? 0.98 : 0.18) : 0.9;
+        // Glow: strong for hits in search/history mode, otherwise no glow by default (only on hover).
+        const glowOpacity = (isSearchMode || isHistoryMode) ? (isHit ? 0.42 : 0.02) : 0.0;
+        const opacity = (isSearchMode || isHistoryMode) ? (isHit ? 0.98 : 0.18) : 0.9;
         const quantizedSize = Math.max(0.012, Math.round(size * 1000) / 1000);
         const bucketKey = `${quantizedSize}|${visualColor}|${glowOpacity}|${opacity}`;
         if (!bucketMap.has(bucketKey)) {
@@ -1630,6 +1742,8 @@ export default function NoteClusters() {
     debouncedQuery,
     makePointCacheKey,
     displayPointPositionMap,
+    historyTitleSet,
+    isHistoryMode,
     searchResults.length,
     searchScoreMap,
     visibleLabels,
@@ -1890,7 +2004,9 @@ export default function NoteClusters() {
       const chunkIndex = preferredChunkIndex ?? inClusterChunk?.chunk_index ?? fallbackChunk?.chunk_index ?? 0;
 
       // Use the first selected cluster or the note's cluster
-      const targetCluster = Array.from(selectedClusters)[0] || inClusterChunk?.cluster_id || fallbackChunk?.cluster_id;
+      const targetCluster = isHistoryMode
+        ? inClusterChunk?.cluster_id || fallbackChunk?.cluster_id
+        : Array.from(selectedClusters)[0] || inClusterChunk?.cluster_id || fallbackChunk?.cluster_id;
       const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
 
       fetchNoteContent(
@@ -1904,7 +2020,7 @@ export default function NoteClusters() {
         note.modification_date,
       );
     },
-    [selectedClusters, clusterGroups],
+    [clusterGroups, isHistoryMode, selectedClusters],
   );
 
   const handleActiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
@@ -2036,6 +2152,30 @@ export default function NoteClusters() {
     return sorted;
   }, [notesSortDirection, notesSortMetric, sidebarNotes]);
 
+  const displayedHistorySidebarNotes = useMemo(() => {
+    const deduped = historySidebarNotes.map((note) => {
+      const seen = new Set<number>();
+      const chunks = note.chunks
+        .slice()
+        .sort((a, b) => a.chunk_index - b.chunk_index)
+        .filter((chunk) => {
+          if (seen.has(chunk.chunk_index)) return false;
+          seen.add(chunk.chunk_index);
+          return true;
+        });
+      return { ...note, chunks };
+    });
+
+    return deduped.slice().sort((a, b) => {
+      const leftTs = Date.parse(String(a.opened_at || a.modification_date || ''));
+      const rightTs = Date.parse(String(b.opened_at || b.modification_date || ''));
+      const safeLeft = Number.isFinite(leftTs) ? leftTs : Number.NEGATIVE_INFINITY;
+      const safeRight = Number.isFinite(rightTs) ? rightTs : Number.NEGATIVE_INFINITY;
+      if (safeRight !== safeLeft) return safeRight - safeLeft;
+      return a.title.localeCompare(b.title, undefined, { numeric: true });
+    });
+  }, [historySidebarNotes]);
+
   const modalRailChunks = useMemo(() => {
     if (!selectedNode) return [] as SidebarChunkData[];
 
@@ -2116,7 +2256,74 @@ export default function NoteClusters() {
           >
             {/* removed Peak Recency / Momentum UI as requested */}
 
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                marginBottom: '10px',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: '1px solid #e5e7eb',
+                background: '#fff',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (!canGoBackHistory) return;
+                  setSelectedHistoryDateIndex((current) => Math.max(0, current - 1));
+                  setViewMode('history');
+                }}
+                disabled={!canGoBackHistory}
+                title="Previous day"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  background: '#f9fafb',
+                  cursor: canGoBackHistory ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <ArrowForwardIcon style={{ transform: 'rotate(180deg)' }} />
+              </button>
+              <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px' }}>Day</div>
+                <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {selectedHistoryDate || 'No history dates'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!canGoForwardHistory) return;
+                  setSelectedHistoryDateIndex((current) => Math.min(historyDates.length - 1, Math.max(0, current + 1)));
+                  setViewMode('history');
+                }}
+                disabled={!canGoForwardHistory}
+                title="Next day"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  background: '#f9fafb',
+                  cursor: canGoForwardHistory ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <ArrowForwardIcon />
+              </button>
+            </div>
+
+            {!isHistoryMode && <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
                   Sort Notes By
@@ -2154,9 +2361,9 @@ export default function NoteClusters() {
                   {notesSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
                 </button>
               </div>
-            </div>
+            </div>}
 
-            <div style={{ marginBottom: '15px' }}>
+            {!isHistoryMode && <div style={{ marginBottom: '15px' }}>
               <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
               <input
                 type="text"
@@ -2211,9 +2418,128 @@ export default function NoteClusters() {
                   </div>
                 </div>
               )}
-            </div>
+            </div>}
 
-            <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto' }}>
+            {isHistoryMode && (
+              <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto' }}>
+                <div style={{ color: '#6b7280', fontSize: '12px', marginBottom: '10px', lineHeight: 1.4 }}>
+                  {isLoadingHistory
+                    ? 'Loading notes opened on this day...'
+                    : selectedHistoryDate
+                      ? `Notes opened on ${selectedHistoryDate}`
+                      : 'No daily history available.'}
+                </div>
+
+                {displayedHistorySidebarNotes.length === 0 && !isLoadingHistory && (
+                  <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>
+                    No notes were opened on this day.
+                  </div>
+                )}
+
+                {displayedHistorySidebarNotes.map((note) => {
+                  const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
+                  const chunkClusterIds = new Set(note.chunks.map((chunk) => chunk.cluster_id));
+                  const isSelectedNote = !!selectedNode
+                    && selectedNode.title === note.title
+                    && selectedNode.creation_date === note.creation_date
+                    && selectedNode.modification_date === note.modification_date;
+                  const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
+                  return (
+                    <div
+                      key={note.note_key}
+                      ref={(el) => {
+                        sidebarCardRefs.current[note.note_key] = el;
+                      }}
+                      style={{
+                        padding: '10px',
+                        marginBottom: '8px',
+                        borderRadius: '8px',
+                        border: '1px solid #fde68a',
+                        backgroundColor: '#fffdf2',
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: 0,
+                          margin: 0,
+                          fontWeight: 700,
+                          color: '#111827',
+                          textAlign: 'left',
+                          width: '100%',
+                          overflowWrap: 'anywhere',
+                          userSelect: 'none',
+                        }}
+                        title={note.title}
+                      >
+                        <span>{note.title}</span>
+                        {note.creation_date && (
+                          <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
+                            {formatDateMMDDYYYY(note.creation_date)}
+                          </span>
+                        )}
+                        {openLabel && (
+                          <span style={{ marginLeft: 8, fontWeight: 600, color: '#92400e', fontSize: '0.85em' }}>
+                            Open at {openLabel}
+                          </span>
+                        )}
+                        {note.opened_count ? (
+                          <span style={{ marginLeft: 8, fontWeight: 500, color: '#a16207', fontSize: '0.82em' }}>
+                            {note.opened_count}x
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {note.chunks.length > 1 && (
+                        <SegmentedRail
+                          chunks={note.chunks}
+                          activeClusterIds={chunkClusterIds}
+                          currentChunkIndex={currentChunkIndex}
+                          getClusterColor={getClusterColor}
+                          onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
+                          onInactiveDashClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
+                        />
+                      )}
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {note.chunks.map((chunk) => {
+                          const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                          const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                          const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                          return (
+                            <button
+                              type="button"
+                              key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
+                              onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                              style={{
+                                border: `1px solid ${chunkClusterColor}`,
+                                background: lightenedColor,
+                                borderRadius: '6px',
+                                padding: '6px 8px',
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                color: '#374151',
+                                fontSize: '12px',
+                                lineHeight: 1.35,
+                                whiteSpace: 'normal',
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                              title={`Open chunk ${chunk.chunk_index + 1}`}
+                            >
+                              <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                              {preview.length > 180 ? '...' : ''}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto', display: isHistoryMode ? 'none' : 'block' }}>
               {searchResults.length === 0 && searchQuery && (
                 <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
               )}
@@ -2364,7 +2690,10 @@ export default function NoteClusters() {
 
                   {note.chunks.length > 1 && (
                     (() => {
-                      const isSameAsSelected = selectedNode && selectedNode.title === note.title;
+                      const isSameAsSelected = !!selectedNode
+                        && selectedNode.title === note.title
+                        && selectedNode.creation_date === note.creation_date
+                        && selectedNode.modification_date === note.modification_date;
                       const activeClusterIds = isSameAsSelected
                         ? new Set([selectedNode!.display_topic_id || selectedNode!.cluster_id || ''])
                         : selectedClusters;
@@ -2579,7 +2908,7 @@ export default function NoteClusters() {
                           }}
                           aria-label="Previous chunk"
                         >
-                          &#8592;
+                          <ArrowBackIcon />
                         </button>
                         <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap', justifySelf: 'center' }}>
                           Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}
@@ -2601,7 +2930,7 @@ export default function NoteClusters() {
                           }}
                           aria-label="Next chunk"
                         >
-                          &#8594;
+                          <ArrowForwardIcon />
                         </button>
                       </div>
                     </div>
@@ -2813,8 +3142,8 @@ export default function NoteClusters() {
               </h3>
               <button
                 type="button"
-                onClick={() => setHideOtherClusters((value) => !value)}
-                title={hideOtherClusters ? 'Show All Clusters' : 'Show Selected (Hide Others)'}
+                onClick={() => setViewMode((mode) => (mode === 'global' ? 'history' : 'global'))}
+                title={viewMode === 'global' ? 'Switch to History' : 'Switch to Global'}
                 style={{
                   width: 36,
                   height: 36,
@@ -2824,14 +3153,14 @@ export default function NoteClusters() {
                   borderRadius: 8,
                   border: 'none',
                   cursor: 'pointer',
-                  background: hideOtherClusters ? '#fff1f2' : '#eef6ec',
+                  background: viewMode === 'global' ? '#eef6ec' : '#fef3c7',
                   marginLeft: 'auto',
                 }}
               >
-                {hideOtherClusters ? (
-                  <VisibilityOffIcon style={{ color: '#dc2626' }} />
+                {viewMode === 'global' ? (
+                  <LanguageIcon style={{ color: '#16a34a' }} />
                 ) : (
-                  <VisibilityIcon style={{ color: '#16a34a' }} />
+                  <HistoryIcon style={{ color: '#ca8a04' }} />
                 )}
               </button>
             </div>
@@ -2892,7 +3221,7 @@ export default function NoteClusters() {
                 const isSelected = selectedClusters.has(label);
                 const isSearchDimmed = searchResults.length > 0 && !hasHits;
                 // Don't let the hide-other filter dim clusters that actually have search hits
-                const isFilterDimmed = hideOtherClusters && hasActiveClusterFilter && !isSelected && !hasHits;
+                const isFilterDimmed = false;
                 const isHardDimmed = isFilterDimmed || (isSearchDimmed && !isSelected);
                 const isSoftDimmed = isSearchDimmed && isSelected;
                 const isDimmed = isHardDimmed || isSoftDimmed;
