@@ -2903,8 +2903,10 @@ export default function NoteClusters() {
                             borderRadius: '4px',
                             border: '1px solid #ccc',
                             backgroundColor: '#fff',
-                            fontSize: '18px',
-                            lineHeight: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
                           }}
                           aria-label="Previous chunk"
                         >
@@ -2925,8 +2927,10 @@ export default function NoteClusters() {
                             borderRadius: '4px',
                             border: '1px solid #ccc',
                             backgroundColor: '#fff',
-                            fontSize: '18px',
-                            lineHeight: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
                           }}
                           aria-label="Next chunk"
                         >
