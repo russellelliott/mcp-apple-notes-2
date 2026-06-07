@@ -2066,9 +2066,17 @@ export default function NoteClusters() {
     openSidebarNote(note, chunk.chunk_index);
   }, [openSidebarNote]);
 
+  const handleInactiveRailClickForHistory = useCallback(
+     (chunk: SidebarChunkData) => {
+       // In history mode, clicking a dash selects that cluster instead of opening the note
+      setSelectedClusters(new Set([chunk.cluster_id]));
+     },
+     [],
+   );
+
   const handleInactiveRailClick = useCallback(
-    (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
-      // Immediately scroll the note to the top of the notes list
+     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
+       // Immediately scroll the note to the top of the notes list
       const leftContainer = notesListRef.current;
       const cardEl = sidebarCardRefs.current[note.note_key];
       if (leftContainer && cardEl) {
@@ -2076,28 +2084,28 @@ export default function NoteClusters() {
         const containerRect = leftContainer.getBoundingClientRect();
         const offsetFromTop = cardRect.top - containerRect.top;
         leftContainer.scrollTop += offsetFromTop;
-      }
+       }
 
       const shift = !!(e && e.shiftKey);
       if (shift) {
-        // add to selection (toggle)
+         // add to selection (toggle)
         setSelectedClusters((prev) => {
           const next = new Set(prev);
           if (next.has(chunk.cluster_id)) next.delete(chunk.cluster_id);
           else next.add(chunk.cluster_id);
           return next;
-        });
-      } else {
-        // normal click -> select sole cluster
+         });
+       } else {
+         // normal click -> select sole cluster
         setSelectedClusters(new Set([chunk.cluster_id]));
         focusClusterByOrbit(chunk.cluster_id);
-      }
+       }
 
       setPendingScrollNoteKey(note.note_key);
       setPendingScrollNoteTitle(note.title);
       setPendingScrollTargetCluster(chunk.cluster_id);
 
-      // After state updates, scroll legend cluster into view (centered)
+       // After state updates, scroll legend cluster into view (centered)
       setTimeout(() => {
         const legendEl = legendClusterRefs.current[chunk.cluster_id];
         const legendContainer = legendContainerRef.current;
@@ -2108,14 +2116,14 @@ export default function NoteClusters() {
           const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
           try {
             legendContainer.scrollTo({ top: target, behavior: 'smooth' });
-          } catch (err) {
+           } catch (err) {
             legendContainer.scrollTop = target;
-          }
-        }
-      }, 60);
-    },
-    [],
-  );
+           }
+         }
+       }, 60);
+     },
+     [],
+   );
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
@@ -2465,15 +2473,19 @@ export default function NoteClusters() {
                   </div>
                 )}
 
-                {displayedHistorySidebarNotes.map((note) => {
-                  const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
-                  const chunkClusterIds = new Set(note.chunks.map((chunk) => chunk.cluster_id));
-                  const isSelectedNote = !!selectedNode
-                    && selectedNode.title === note.title
-                    && selectedNode.creation_date === note.creation_date
-                    && selectedNode.modification_date === note.modification_date;
-                  const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
-                  return (
+                 {displayedHistorySidebarNotes.map((note) => {
+                   const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
+                   // Use selectedClusters for dots/dashes logic (same as regular mode)
+                   // If no clusters selected, show all chunks as dots
+                   const historyActiveClusterIds = selectedClusters.size > 0
+                     ? selectedClusters
+                     : new Set(note.chunks.map((chunk) => chunk.cluster_id));
+                   const isSelectedNote = !!selectedNode
+                     && selectedNode.title === note.title
+                     && selectedNode.creation_date === note.creation_date
+                     && selectedNode.modification_date === note.modification_date;
+                   const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
+                   return (
                     <div
                       key={note.note_key}
                       ref={(el) => {
@@ -2519,49 +2531,118 @@ export default function NoteClusters() {
                         ) : null}
                       </div>
 
-                      {note.chunks.length > 1 && (
-                        <SegmentedRail
-                          chunks={note.chunks}
-                          activeClusterIds={chunkClusterIds}
-                          currentChunkIndex={currentChunkIndex}
-                          getClusterColor={getClusterColor}
-                          onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
-                          onInactiveDashClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
-                        />
-                      )}
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {note.chunks.map((chunk) => {
-                          const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                          const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                          const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
-                          return (
-                            <button
-                              type="button"
-                              key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
-                              onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                              style={{
-                                border: `1px solid ${chunkClusterColor}`,
-                                background: lightenedColor,
-                                borderRadius: '6px',
-                                padding: '6px 8px',
-                                cursor: 'pointer',
-                                textAlign: 'left',
-                                color: '#374151',
-                                fontSize: '12px',
-                                lineHeight: 1.35,
-                                whiteSpace: 'normal',
-                                overflowWrap: 'anywhere',
-                                wordBreak: 'break-word',
+                          {note.chunks.length >= 1 && (
+                            <SegmentedRail
+                              chunks={note.chunks}
+                              activeClusterIds={historyActiveClusterIds}
+                              currentChunkIndex={currentChunkIndex}
+                              getClusterColor={getClusterColor}
+                              onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
+                              onInactiveDashClick={(chunk, _e) => {
+                                // In history mode, clicking a dash selects that cluster instead of opening the note
+                                handleInactiveRailClickForHistory(chunk);
                               }}
-                              title={`Open chunk ${chunk.chunk_index + 1}`}
-                            >
-                              <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                              {preview.length > 180 ? '...' : ''}
-                            </button>
-                          );
-                        })}
-                      </div>
+                            />
+                          )}
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {(() => {
+                           const rows: React.ReactNode[] = [];
+                           let i = 0;
+                           while (i < note.chunks.length) {
+                             const chunk = note.chunks[i];
+                             const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
+
+                             if (isActiveChunk) {
+                               // Show dot chunk - only if we have a selection, or show all if no selection
+                               if (selectedClusters.size > 0) {
+                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                                 const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                 const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                 rows.push(
+                                    <button
+                                     type="button"
+                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
+                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                                     style={{
+                                       border: `1px solid ${chunkClusterColor}`,
+                                       background: lightenedColor,
+                                       borderRadius: '6px',
+                                       padding: '6px 8px',
+                                       cursor: 'pointer',
+                                       textAlign: 'left',
+                                       color: '#374151',
+                                       fontSize: '12px',
+                                       lineHeight: 1.35,
+                                       whiteSpace: 'normal',
+                                       overflowWrap: 'anywhere',
+                                       wordBreak: 'break-word',
+                                      }}
+                                    title={`Open chunk ${chunk.chunk_index + 1}`}
+                                   >
+                                     <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                                     {preview.length > 180 ? '...' : ''}
+                                   </button>,
+                                 );
+                               } else {
+                                 // No selection - show all chunks
+                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                                 const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                 const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                 rows.push(
+                                    <button
+                                     type="button"
+                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
+                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                                     style={{
+                                       border: `1px solid ${chunkClusterColor}`,
+                                       background: lightenedColor,
+                                       borderRadius: '6px',
+                                       padding: '6px 8px',
+                                       cursor: 'pointer',
+                                       textAlign: 'left',
+                                       color: '#374151',
+                                       fontSize: '12px',
+                                       lineHeight: 1.35,
+                                       whiteSpace: 'normal',
+                                       overflowWrap: 'anywhere',
+                                       wordBreak: 'break-word',
+                                      }}
+                                    title={`Open chunk ${chunk.chunk_index + 1}`}
+                                   >
+                                     <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                                     {preview.length > 180 ? '...' : ''}
+                                   </button>,
+                                 );
+                               }
+                               i += 1;
+                               continue;
+                              }
+
+                             // Chunk is not in selected cluster - show as gap
+                             let gapCount = 0;
+                             while (i < note.chunks.length && !historyActiveClusterIds.has(note.chunks[i].cluster_id)) {
+                               gapCount += 1;
+                               i += 1;
+                              }
+
+                              rows.push(
+                                <div
+                                 key={`history-gap-${note.note_key}-${i}-${gapCount}`}
+                                 style={{
+                                   fontSize: '11px',
+                                   color: '#6b7280',
+                                   fontStyle: 'italic',
+                                   padding: '2px 4px',
+                                  }}
+                                >
+                                  --- {gapCount} Chunks ---
+                                </div>,
+                              );
+                            }
+                           return rows;
+                          })()}
+                        </div>
                     </div>
                   );
                 })}

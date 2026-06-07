@@ -1031,6 +1031,23 @@ async def get_history_for_day(date_str: str):
                 creation_date = str(group.iloc[0].get('creation_date', ''))
                 modification_date = str(group.iloc[0].get('modification_date', ''))
 
+                cluster_counts: Dict[str, int] = {}
+                cluster_first_seen: Dict[str, int] = {}
+                for position, (_, row) in enumerate(group.iterrows()):
+                    cluster_key = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
+                    if not cluster_key or cluster_key == 'nan':
+                        cluster_key = '-1'
+                    cluster_counts[cluster_key] = cluster_counts.get(cluster_key, 0) + 1
+                    if cluster_key not in cluster_first_seen:
+                        cluster_first_seen[cluster_key] = position
+
+                primary_cluster_id = '-1'
+                if cluster_counts:
+                    primary_cluster_id = sorted(
+                        cluster_counts.items(),
+                        key=lambda item: (-item[1], cluster_first_seen.get(item[0], 0)),
+                    )[0][0]
+
                 chunks = []
                 seen_chunk_indexes = set()
                 for _, row in group.iterrows():
@@ -1045,11 +1062,15 @@ async def get_history_for_day(date_str: str):
                     if pd.isna(chunk_text):
                         chunk_text = ''
 
+                    chunk_cluster_id = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
+                    if not chunk_cluster_id or chunk_cluster_id == 'nan':
+                        chunk_cluster_id = '-1'
+
                     chunks.append({
                         "chunk_index": chunk_index_val,
-                        "cluster_id": str(row.get('display_topic_id', row.get('cluster_id', '-1'))),
+                        "cluster_id": chunk_cluster_id,
                         "cluster_name": str(row.get('cluster_label', 'Unclustered')),
-                        "in_cluster": True,
+                        "in_cluster": chunk_cluster_id == primary_cluster_id,
                         "text": str(chunk_text),
                     })
 
@@ -1058,6 +1079,7 @@ async def get_history_for_day(date_str: str):
                     "title": title,
                     "creation_date": creation_date,
                     "modification_date": modification_date,
+                    "primary_cluster_id": primary_cluster_id,
                     "opened_at": history_info.get("opened_at"),
                     "last_opened_at": history_info.get("last_opened_at"),
                     "opened_count": history_info.get("opened_count", 0),
