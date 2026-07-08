@@ -134,40 +134,39 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         const isSelected = selectedClusterId === child.cluster_id;
         const dotColor = child.color || 'hsl(210, 75%, 45%)';
         return (
-          <div
-            key={child.cluster_id}
-            onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              padding: '3px 6px',
-              borderRadius: 4,
-              fontSize: 11,
-              color: isSelected ? '#fff' : '#374151',
-              background: isSelected ? '#3b82f6' : 'transparent',
-              marginLeft: 18,
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                backgroundColor: dotColor,
-                flex: '0 0 8px',
+            <div
+             key={child.cluster_id}
+             onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
+             style={{
+               display: 'flex',
+               alignItems: 'center',
+               cursor: 'pointer',
+               padding: '3px 6px',
+               borderRadius: 4,
+               fontSize: 11,
+               color: isSelected ? '#fff' : '#374151',
+               background: isSelected ? '#3b82f6' : 'transparent',
+               marginLeft: 18,
               }}
-            />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                {child.cluster_id}
-              </span>
-              <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {child.label}
-              </span>
-              <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0 }}>
-                {child.chunk_count}
-              </span>
+            >
+              <span
+               style={{
+                 width: 8,
+                 height: 8,
+                 borderRadius: '50%',
+                 backgroundColor: dotColor,
+                 flex: '0 0 8px',
+                }}
+              />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0 }}>
+                  {child.cluster_id}
+                </span>
+                <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {child.label}
+                </span>
+                <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, marginLeft: 4 }}>
+                  {child.chunk_count}
+                </span>
           </div>
         );
       })}

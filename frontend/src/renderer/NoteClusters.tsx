@@ -2256,21 +2256,25 @@ export default function NoteClusters() {
   }, [clusterNameById, data, selectedNode]);
 
   const handleModalChunkJump = useCallback(
-    (chunkIndex: number) => {
-      if (!selectedNode) return;
-      fetchNoteContent(
-        selectedNode.title,
-        chunkIndex,
-        selectedNode.cluster_id,
-        selectedNode.cluster_label,
-        selectedNode.display_topic_id,
-        selectedNode.base_topic_id,
-        selectedNode.creation_date,
-        selectedNode.modification_date,
-      );
-    },
-    [selectedNode],
-  );
+      (chunkIndexOrChunk: number | SidebarChunkData) => {
+        if (!selectedNode) return;
+        // Handle both number and chunk object for backward compatibility
+        const idx = typeof chunkIndexOrChunk === 'number'
+          ? chunkIndexOrChunk
+          : chunkIndexOrChunk.chunk_index;
+        fetchNoteContent(
+          selectedNode.title,
+          idx,
+          selectedNode.cluster_id,
+          selectedNode.cluster_label,
+          selectedNode.display_topic_id,
+          selectedNode.base_topic_id,
+          selectedNode.creation_date,
+          selectedNode.modification_date,
+        );
+      },
+      [selectedNode, fetchNoteContent],
+    );
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -2899,30 +2903,34 @@ export default function NoteClusters() {
           </div>
 
 
-           {/* Center column: RadialSimilarityHub */}
-           <div style={{
-            width: '420px',
+            {/* Center column: RadialSimilarityHub */}
+            <div style={{
+            width: '35%',
+            minWidth: '300px',
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
             borderLeft: '1px solid #e0e0e0',
+            borderRight: '1px solid #e0e0e0',
             backgroundColor: '#f9f9f9',
             padding: '10px',
             boxSizing: 'border-box',
-           }}>
-             <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
-             <RadialSimilarityHub
+            }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
+              <RadialSimilarityHub
               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
               onNodeClick={(clusterId) => {
                 setSelectedClusters(new Set([clusterId]));
                 try { focusClusterByOrbit(clusterId); } catch (_) { }
-              }}
-             />
-           </div>
+               }}
+              clusterColors={clusterColors}
+              />
+            </div>
 
-           {/* Right column: MetaClusterTree */}
-           <div style={{
-            width: '400px',
+            {/* Right column: MetaClusterTree */}
+            <div style={{
+            width: '28%',
+            minWidth: '250px',
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
@@ -2932,7 +2940,7 @@ export default function NoteClusters() {
             boxSizing: 'border-box',
             fontSize: '11px',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-           }}>
+            }}>
              <MetaClusterTree
               onClusterSelect={(clusterId) => {
                 setSelectedClusters(new Set([clusterId]));
@@ -3006,15 +3014,15 @@ export default function NoteClusters() {
                    ×
                  </button>
 
-                 {/* Header with cluster color accent */}
-                 <div style={{
+                  {/* Header with cluster color accent */}
+                  <div style={{
                    padding: '16px 16px 12px 16px',
                    borderBottom: '1px solid #e5e7eb',
                    backgroundColor: selectedNode.cluster_color
-                     ? mixColorWithWhite(selectedNode.cluster_color, 0.85)
-                     : '#f9fafb',
-                 }}>
-                   <div style={{
+                      ? mixColorWithWhite(selectedNode.cluster_color, 0.85)
+                      : '#f9fafb',
+                  }}>
+                    <div style={{
                      fontWeight: 700,
                      fontSize: '15px',
                      color: '#111827',
@@ -3022,27 +3030,53 @@ export default function NoteClusters() {
                      overflow: 'hidden',
                      textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap',
-                   }}>
-                     {selectedNode.title}
-                   </div>
-                   <div style={{
+                    }}>
+                      {selectedNode.title}
+                    </div>
+                    <div style={{
                      fontSize: '12px',
                      color: '#6b7280',
                      display: 'flex',
                      alignItems: 'center',
                      gap: '8px',
-                   }}>
-                     <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
-                     {selectedNode.cluster_label && (
-                       <span style={{
+                    }}>
+                      {selectedNode.cluster_label && (
+                        <span style={{
                          color: selectedNode.cluster_color || '#4b5563',
                          fontWeight: 600,
-                       }}>
-                         | {selectedNode.cluster_label}
-                       </span>
-                     )}
-                   </div>
-                 </div>
+                        }}>
+                          {selectedNode.cluster_label}
+                        </span>
+                      )}
+                      <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
+                    </div>
+
+                    {/* Dot/Dash Segmented Rail for cluster navigation in modal */}
+                    {modalRailChunks.length > 0 && (
+                      <SegmentedRail
+                       chunks={modalRailChunks}
+                       activeClusterIds={new Set([selectedNode.display_topic_id || selectedNode.cluster_id || ''])}
+                       currentChunkIndex={selectedNode.chunk_index}
+                       getClusterColor={(clusterId) => clusterColors[clusterId] || '#6b7280'}
+                      onActiveDotClick={(chunk) => handleModalChunkJump(chunk.chunk_index)}
+                       onInactiveDashClick={(chunk) => {
+                         // Clicking a dash: select that cluster, navigate to its chunk
+                         const chunkIdx = Number(chunk.cluster_id);
+                         setSelectedClusters(new Set([String(chunkIdx)]));
+                         fetchNoteContent(
+                           selectedNode.title,
+                           chunkIdx,
+                           selectedNode.cluster_id,
+                           selectedNode.cluster_label,
+                           String(chunkIdx),
+                           selectedNode.base_topic_id,
+                           selectedNode.creation_date,
+                           selectedNode.modification_date,
+                         );
+                       }}
+                      />
+                    )}
+                  </div>
 
                  {/* Navigation and Content */}
                  <div style={{
