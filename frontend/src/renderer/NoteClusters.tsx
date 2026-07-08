@@ -2103,7 +2103,7 @@ export default function NoteClusters() {
 
   const handleInactiveRailClick = useCallback(
     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
-      // Immediately scroll the note to the top of the notes list
+       // Immediately scroll the note to the top of the notes list
       const leftContainer = notesListRef.current;
       const cardEl = sidebarCardRefs.current[note.note_key];
       if (leftContainer && cardEl) {
@@ -2111,46 +2111,35 @@ export default function NoteClusters() {
         const containerRect = leftContainer.getBoundingClientRect();
         const offsetFromTop = cardRect.top - containerRect.top;
         leftContainer.scrollTop += offsetFromTop;
-      }
+       }
 
-      const shift = !!(e && e.shiftKey);
-      if (shift) {
-        // add to selection (toggle)
-        setSelectedClusters((prev) => {
-          const next = new Set(prev);
-          if (next.has(chunk.cluster_id)) next.delete(chunk.cluster_id);
-          else next.add(chunk.cluster_id);
-          return next;
-        });
-      } else {
-        // normal click -> select sole cluster
-        setSelectedClusters(new Set([chunk.cluster_id]));
-        focusClusterByOrbit(chunk.cluster_id);
-      }
+       // Always select sole cluster — no multi-select
+       setSelectedClusters(new Set([chunk.cluster_id]));
+       focusClusterByOrbit(chunk.cluster_id);
 
-      setPendingScrollNoteKey(note.note_key);
-      setPendingScrollNoteTitle(note.title);
-      setPendingScrollTargetCluster(chunk.cluster_id);
+       setPendingScrollNoteKey(note.note_key);
+       setPendingScrollNoteTitle(note.title);
+       setPendingScrollTargetCluster(chunk.cluster_id);
 
-      // After state updates, scroll legend cluster into view (centered)
-      setTimeout(() => {
-        const legendEl = legendClusterRefs.current[chunk.cluster_id];
-        const legendContainer = legendContainerRef.current;
-        if (legendEl && legendContainer) {
-          const parentRect = legendContainer.getBoundingClientRect();
-          const elRect = legendEl.getBoundingClientRect();
-          const offset = elRect.top - parentRect.top;
-          const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
-          try {
-            legendContainer.scrollTo({ top: target, behavior: 'smooth' });
-          } catch (err) {
-            legendContainer.scrollTop = target;
+        // After state updates, scroll legend cluster into view (centered)
+       setTimeout(() => {
+         const legendEl = legendClusterRefs.current[chunk.cluster_id];
+         const legendContainer = legendContainerRef.current;
+         if (legendEl && legendContainer) {
+           const parentRect = legendContainer.getBoundingClientRect();
+           const elRect = legendEl.getBoundingClientRect();
+           const offset = elRect.top - parentRect.top;
+           const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
+           try {
+             legendContainer.scrollTo({ top: target, behavior: 'smooth' });
+            } catch (err) {
+             legendContainer.scrollTop = target;
+            }
           }
-        }
-      }, 60);
-    },
-    [],
-  );
+        }, 60);
+       },
+       [],
+     );
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
@@ -2952,10 +2941,10 @@ export default function NoteClusters() {
               }}>
                 <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
                 <RadialSimilarityHub
-               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
                onNodeClick={(clusterId) => {
                  setSelectedClusters(new Set([clusterId]));
-                 try { focusClusterByOrbit(clusterId); } catch (_) { }
+                 try { focusClusterByOrbit(clusterId); } catch (_ignore) { }
                 }}
                clusterColors={clusterColorsFromAPI}
                 />
@@ -2977,9 +2966,9 @@ export default function NoteClusters() {
                <MetaClusterTree
                onClusterSelect={(clusterId) => {
                  setSelectedClusters(new Set([clusterId]));
-                 try { focusClusterByOrbit(clusterId); } catch (_) { }
+                 try { focusClusterByOrbit(clusterId); } catch (_ignore) { }
                 }}
-               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
                sortMetric={clusterSortMetric}
                clusterColors={clusterColorsFromAPI}
                />
