@@ -26,6 +26,8 @@ interface Props {
   sortMetric: ClusterSortMetric;
   /**Optional search filter to narrow visible children */
   filterText?: string;
+  /**Map of cluster_id → hex color (from /cluster_colors API) */
+  clusterColors?: Record<string, string>;
 }
 
 // ── Sort helpers ─────────────────────────────────────────────────────────────
@@ -57,6 +59,14 @@ const sortChildren = (children: MetaChildCluster[], metric: ClusterSortMetric): 
   }
 };
 
+// ── Helper: hex to rgba with alpha ───────────────────────────────────────────
+const hexToRgba = (hex: string, alpha: number): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 // ── TreeNode component ───────────────────────────────────────────────────────
 interface TreeNodeProps {
   meta: MetaClusterInfo;
@@ -67,6 +77,7 @@ interface TreeNodeProps {
   selectedClusterId?: string | null;
   sortMetric: ClusterSortMetric;
   filterText?: string;
+  clusterColors?: Record<string, string>;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -78,6 +89,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   selectedClusterId,
   sortMetric,
   filterText,
+  clusterColors,
 }) => {
   const isExpanded = expandedMetaIds.has(meta.meta_cluster_id);
 
@@ -88,7 +100,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
       children = children.filter(
         (c) =>
           c.cluster_id.toLowerCase().includes(lower) ||
-          c.label.toLowerCase().includes(lower)
+          c.label.toLowerCase().includes(lower),
       );
     }
     return sortChildren(children, sortMetric);
@@ -132,41 +144,48 @@ const TreeNode: React.FC<TreeNodeProps> = ({
       {/* Child clusters */}
       {currentlyExpanded && filteredChildren.map((child) => {
         const isSelected = selectedClusterId === child.cluster_id;
-        const dotColor = child.color || 'hsl(210, 75%, 45%)';
+        const dotColor = child.color || clusterColors?.[child.cluster_id] || '#6b7280';
+        const rowBg = isSelected
+          ? '#3b82f6'
+          : hexToRgba(dotColor, 0.12);
+
         return (
-            <div
-             key={child.cluster_id}
-             onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
-             style={{
-               display: 'flex',
-               alignItems: 'center',
-               cursor: 'pointer',
-               padding: '3px 6px',
-               borderRadius: 4,
-               fontSize: 11,
-               color: isSelected ? '#fff' : '#374151',
-               background: isSelected ? '#3b82f6' : 'transparent',
-               marginLeft: 18,
+          <div
+            key={child.cluster_id}
+            onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              cursor: 'pointer',
+              padding: '3px 6px',
+              borderRadius: 4,
+              fontSize: 11,
+              color: isSelected ? '#fff' : '#374151',
+              background: rowBg,
+              marginLeft: 18,
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: dotColor,
+                flex: '0 0 8px',
               }}
-            >
-              <span
-               style={{
-                 width: 8,
-                 height: 8,
-                 borderRadius: '50%',
-                 backgroundColor: dotColor,
-                 flex: '0 0 8px',
-                }}
-              />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0 }}>
-                  {child.cluster_id}
-                </span>
-                <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {child.label}
-                </span>
-                <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, marginLeft: 4 }}>
-                  {child.chunk_count}
-                </span>
+            />
+            {/* cluster_id */}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0, minWidth: 0, fontFamily: 'monospace', fontSize: 10 }}>
+              {child.cluster_id}
+            </span>
+            {/* cluster name / label */}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 1, minWidth: 0 }}>
+              {child.label}
+            </span>
+            {/* chunk count */}
+            <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, marginLeft: 2 }}>
+              {child.chunk_count}
+            </span>
           </div>
         );
       })}
@@ -180,6 +199,7 @@ export const MetaClusterTree: React.FC<Props> = ({
   selectedClusterId,
   sortMetric,
   filterText,
+  clusterColors,
 }) => {
   const [metaData, setMetaData] = useState<MetaClusterInfo[]>([]);
   const [expandedMetaIds, setExpandedMetaIds] = useState<Set<string>>(new Set());
@@ -199,7 +219,7 @@ export const MetaClusterTree: React.FC<Props> = ({
         // Auto-expand the meta-cluster containing the selected cluster (if any)
         if (selectedClusterId && data.length > 0) {
           const targetMeta = data.find((m) =>
-            m.child_clusters.some((c) => c.cluster_id === selectedClusterId)
+            m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
           );
           if (targetMeta) {
             setExpandedMetaIds(new Set([targetMeta.meta_cluster_id]));
@@ -231,7 +251,7 @@ export const MetaClusterTree: React.FC<Props> = ({
   useEffect(() => {
     if (!selectedClusterId || metaData.length === 0) return;
     const target = metaData.find((m) =>
-      m.child_clusters.some((c) => c.cluster_id === selectedClusterId)
+      m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
     );
     if (target && !expandedMetaIds.has(target.meta_cluster_id)) {
       setExpandedMetaIds(new Set([target.meta_cluster_id]));
@@ -253,7 +273,7 @@ export const MetaClusterTree: React.FC<Props> = ({
   const totalClusters = metaData.reduce((sum, m) => sum + m.child_clusters.length, 0);
   const totalChunks = metaData.reduce(
     (sum, m) => sum + m.child_clusters.reduce((s, c) => s + c.chunk_count, 0),
-    0
+    0,
   );
 
   return (
@@ -264,6 +284,7 @@ export const MetaClusterTree: React.FC<Props> = ({
           <span style={{ fontSize: 13, fontWeight: 700, color: '#1f2937' }}>Meta-Clusters</span>
           <div style={{ display: 'flex', gap: 4 }}>
             <button
+              type="button"
               onClick={handleExpandAll}
               style={{
                 fontSize: 10, padding: '2px 6px', cursor: 'pointer',
@@ -271,6 +292,7 @@ export const MetaClusterTree: React.FC<Props> = ({
               }}
             >Expand All</button>
             <button
+              type="button"
               onClick={handleCollapseAll}
               style={{
                 fontSize: 10, padding: '2px 6px', cursor: 'pointer',
@@ -313,6 +335,7 @@ export const MetaClusterTree: React.FC<Props> = ({
             selectedClusterId={selectedClusterId}
             sortMetric={sortMetric}
             filterText={filterText}
+            clusterColors={clusterColors}
           />
         ))}
       </div>

@@ -414,8 +414,9 @@ export default function NoteClusters() {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, containerWidth: 0 });
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
-  const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
-  const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
+   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
+   const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
+   const [clusterColorsFromAPI, setClusterColorsFromAPI] = useState<Record<string, string>>({});
   const plotAreaRef = useRef<HTMLDivElement>(null);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -552,39 +553,55 @@ export default function NoteClusters() {
     }).format(t);
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Try shaped points first, fall back to raw points if unavailable
+   useEffect(() => {
+     const fetchData = async () => {
+       try {
+          // Try shaped points first, fall back to raw points if unavailable
         let response = null;
         try {
           response = await axios.get('http://127.0.0.1:8000/points_shaped');
-        } catch (err) {
+         } catch (err) {
           console.warn('points_shaped fetch failed, will try /points', err);
-        }
+         }
 
         if (!response || !Array.isArray(response.data) || response.data.length === 0) {
-          // fallback to legacy endpoint
+           // fallback to legacy endpoint
           try {
             response = await axios.get('http://127.0.0.1:8000/points');
-          } catch (err) {
+           } catch (err) {
             console.error('Fallback /points fetch failed', err);
             response = null;
-          }
-        }
+           }
+         }
 
         const points = response && Array.isArray(response.data) ? response.data : [];
         console.info(`Fetched ${points.length} points from backend`);
         setData(points);
-      } catch (error) {
+       } catch (error) {
         console.error('Error fetching data:', error);
-      } finally {
+       } finally {
         setLoading(false);
-      }
-    };
+       }
+     };
 
-    fetchData();
-  }, []);
+     fetchData();
+   }, []);
+
+   // Fetch cluster colors once from the single source of truth
+   useEffect(() => {
+     let active = true;
+     (async () => {
+       try {
+         const res = await axios.get('http://127.0.0.1:8000/cluster_colors');
+         if (active && res.data) {
+           setClusterColorsFromAPI(res.data as Record<string, string>);
+         }
+       } catch (err) {
+         console.warn('Failed to fetch cluster_colors:', err);
+       }
+     })();
+     return () => { active = false; };
+   }, []);
 
   useEffect(() => {
     let active = true;
@@ -2292,9 +2309,11 @@ export default function NoteClusters() {
         </div>
       ) : (
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+          {/* Left column: Notes list */}
           <div
             style={{
-              width: '400px',
+              width: '35%',
+              minWidth: '280px',
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -2343,7 +2362,8 @@ export default function NoteClusters() {
               >
                 <ArrowForwardIcon style={{ transform: 'rotate(180deg)' }} />
               </button>
-              <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+               {/* Day header hidden for now — will be dealt with later */}
+               <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
                 <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px' }}>Day</div>
                 <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {selectedHistoryDate || 'No history dates'}
@@ -2903,52 +2923,51 @@ export default function NoteClusters() {
           </div>
 
 
-            {/* Center column: RadialSimilarityHub */}
-            <div style={{
-            width: '35%',
-            minWidth: '300px',
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            borderLeft: '1px solid #e0e0e0',
-            borderRight: '1px solid #e0e0e0',
-            backgroundColor: '#f9f9f9',
-            padding: '10px',
-            boxSizing: 'border-box',
-            }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
-              <RadialSimilarityHub
-              selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
-              onNodeClick={(clusterId) => {
-                setSelectedClusters(new Set([clusterId]));
-                try { focusClusterByOrbit(clusterId); } catch (_) { }
-               }}
-              clusterColors={clusterColors}
-              />
-            </div>
+              {/* Center column: RadialSimilarityHub */}
+              <div style={{
+             flex: 1,
+             minWidth: '200px',
+             display: 'flex',
+             flexDirection: 'column',
+             borderLeft: '1px solid #e0e0e0',
+             borderRight: '1px solid #e0e0e0',
+             backgroundColor: '#f9f9f9',
+             padding: '10px',
+             boxSizing: 'border-box',
+              }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
+                <RadialSimilarityHub
+               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+               onNodeClick={(clusterId) => {
+                 setSelectedClusters(new Set([clusterId]));
+                 try { focusClusterByOrbit(clusterId); } catch (_) { }
+                }}
+               clusterColors={clusterColors}
+                />
+              </div>
 
-            {/* Right column: MetaClusterTree */}
-            <div style={{
-            width: '28%',
-            minWidth: '250px',
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            borderLeft: '1px solid #e0e0e0',
-            backgroundColor: '#f9f9f9',
-            padding: '10px',
-            boxSizing: 'border-box',
-            fontSize: '11px',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-            }}>
-             <MetaClusterTree
-              onClusterSelect={(clusterId) => {
-                setSelectedClusters(new Set([clusterId]));
-                try { focusClusterByOrbit(clusterId); } catch (_) { }
-              }}
-              selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
-              sortMetric={clusterSortMetric}
-             />
+              {/* Right column: MetaClusterTree */}
+              <div style={{
+             width: '280px',
+             flexShrink: 0,
+             display: 'flex',
+             flexDirection: 'column',
+             borderLeft: '1px solid #e0e0e0',
+             backgroundColor: '#f9f9f9',
+             padding: '10px',
+             boxSizing: 'border-box',
+             fontSize: '11px',
+             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+              }}>
+               <MetaClusterTree
+               onClusterSelect={(clusterId) => {
+                 setSelectedClusters(new Set([clusterId]));
+                 try { focusClusterByOrbit(clusterId); } catch (_) { }
+                }}
+               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+               sortMetric={clusterSortMetric}
+               clusterColors={clusterColorsFromAPI}
+               />
            </div>
 
            {/* Modal Popup for Note Content */}

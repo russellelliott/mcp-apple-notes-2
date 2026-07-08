@@ -447,6 +447,44 @@ async def get_similar_clusters(
     )
 
 
+# ── Cluster Colors Endpoint ────────────────────────────────────────────────
+@app.get("/cluster_colors")
+async def get_cluster_colors():
+    """Return a dict of cluster_id → color for all clusters."""
+    if state.df_viz.empty:
+        return {}
+
+    df = state.df_viz
+    if "display_topic_id" not in df.columns:
+        return {}
+
+    # Compute stable color per cluster based on 5D UMAP position (same logic as meta_clusters)
+    centroids_arr = []
+    for cid, group in df.groupby("display_topic_id"):
+        vectors = np.stack(group["vector"].values) if "vector" in group.columns else np.zeros((1, 5))
+        centroid = vectors.mean(axis=0) if len(vectors) > 0 else np.zeros(5)
+        centroids_arr.append((str(cid), centroid))
+
+    if not centroids_arr:
+        return {}
+
+    all_cents = np.array([c[1] for c in centroids_arr])
+    global_cent = all_cents.mean(axis=0)
+
+    def _color(cid_str):
+        cent = dict(centroids_arr).get(cid_str, np.zeros(5))
+        dx = float(cent[0] - global_cent[0])
+        dy = float(cent[1] - global_cent[1])
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            return "#6b7280"
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+            return "hsl(210, 75%, 45%)"
+        angle = math.degrees(math.atan2(dy, dx)) % 360.0
+        return f"hsl({int(round(angle))}, 75%, 45%)"
+
+    return {cid: _color(cid) for cid, _ in centroids_arr}
+
+
 # ── Original Endpoints ─────────────────────────────────────────────────────
 @app.get("/note_content", response_model=NoteContent)
 async def get_note_content(

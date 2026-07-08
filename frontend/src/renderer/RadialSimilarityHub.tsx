@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+// ── Utility: clamp string to max pixels ──────────────────────────────────────
+function truncateToFit(text: string, maxWidthPx: number, fontSizePx: number): string {
+  const estimatedCharWidth = fontSizePx * 0.6;
+  const maxChars = Math.floor(maxWidthPx / estimatedCharWidth);
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars - 1) + '…';
+}
+
 // ── API types ────────────────────────────────────────────────────────────────
 interface SimilarClusterInfo {
   cluster_id: string;
@@ -29,12 +37,14 @@ const NODE_MAX_RADIUS = 24;
 const CENTER_NODE_RADIUS = 32;
 const SIMILARITY_TO_RADIUS_FACTOR = 0.6; // how much similarity affects visual radius
 
+const DEFAULT_CENTER_COLOR = '#1e40af';
+
 // ── RadialHub component ──────────────────────────────────────────────────────
 export const RadialSimilarityHub: React.FC<Props> = ({
   selectedClusterId,
   onNodeClick,
   activeNoteKey,
-  clusterColors,
+  clusterColors: propClusterColors,
 }) => {
   const [similarData, setSimilarData] = useState<SimilarClusterInfo[]>([]);
   const [targetLabel, setTargetLabel] = useState<string>('');
@@ -79,11 +89,19 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     fetchSimilar();
   }, [selectedClusterId]);
 
-   // Resolve center node color from the clusterColors map or API data
+    // Resolve center node color from the clusterColors map or API data
   const centerNodeColor = useMemo(() => {
-    if (!selectedClusterId) return '#1e40af';
-    return clusterColors?.[selectedClusterId] || similarData.find(c => c.cluster_id === selectedClusterId)?.color || '#1e40af';
-  }, [selectedClusterId, clusterColors, similarData]);
+    if (!selectedClusterId) return DEFAULT_CENTER_COLOR;
+    return propClusterColors?.[selectedClusterId] || similarData.find((c) => c.cluster_id === selectedClusterId)?.color || DEFAULT_CENTER_COLOR;
+   }, [selectedClusterId, propClusterColors, similarData]);
+
+    // Compute the effective color for any orbiting node — prefer its own API color, fall back to assigned palette
+  const getNodeColor = useCallback(
+     (node: SimilarClusterInfo): string => {
+      return node.color || propClusterColors?.[node.cluster_id] || `hsl(${210 + node.cluster_id.charCodeAt(0) * 15}, 75%, 45%)`;
+     },
+     [propClusterColors],
+   );
 
    // Compute positions using polar → cartesian
   const nodePositions = useMemo(() => {
@@ -146,53 +164,54 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     onNodeClick(clusterId);
   }, [onNodeClick]);
 
-   // SVG dimensions (responsive to container)
-  const svgWidth = 420;
-  const svgHeight = 420;
-  const centerX = svgWidth / 2;
-  const centerY = svgHeight / 2;
+        // SVG dimensions — responsive to container (use % for width/height, viewBox for aspect ratio)
+  const svgWidth = '100%';
+  const viewBoxWidth = 500;
+  const viewBoxHeight = 460;
+  const cx = viewBoxWidth / 2;
+  const cy = viewBoxHeight / 2;
 
   if (loading) {
     return (
-        <svg ref={svgRef} width={svgWidth} height={svgHeight} style={{ background: '#fafbfc', borderRadius: 8 }}>
-         <text x={centerX} y={centerY} textAnchor="middle" fill="#9ca3af" fontSize="14">
+          <svg width={svgWidth} height="100%" style={{ background: '#fafbfc', borderRadius: 8, minHeight: 320 }} viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}>
+           <text x={cx} y={cy} textAnchor="middle" fill="#9ca3af" fontSize="14">
           Loading similar clusters…
-         </text>
-        </svg>
-      );
-    }
+           </text>
+          </svg>
+        );
+     }
 
   if (error) {
     return (
-        <svg width={svgWidth} height={svgHeight} style={{ background: '#fafbfc', borderRadius: 8 }}>
-         <text x={centerX} y={centerY} textAnchor="middle" fill="#dc2626" fontSize="14">
+          <svg width={svgWidth} height="100%" style={{ background: '#fafbfc', borderRadius: 8, minHeight: 320 }} viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}>
+           <text x={cx} y={cy} textAnchor="middle" fill="#dc2626" fontSize="14">
           Error: {error}
-         </text>
-        </svg>
-      );
-    }
+           </text>
+          </svg>
+        );
+     }
 
   if (!selectedClusterId) {
     return (
-        <svg width={svgWidth} height={svgHeight} style={{ background: '#fafbfc', borderRadius: 8 }}>
-         <text x={centerX} y={centerY - 10} textAnchor="middle" fill="#6b7280" fontSize="14">
+          <svg width={svgWidth} height="100%" style={{ background: '#fafbfc', borderRadius: 8, minHeight: 320 }} viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}>
+           <text x={cx} y={cy - 10} textAnchor="middle" fill="#6b7280" fontSize="14">
           Select a cluster to view its semantic neighborhood
-         </text>
-         <text x={centerX} y={centerY + 14} textAnchor="middle" fill="#9ca3af" fontSize="11">
+           </text>
+           <text x={cx} y={cy + 14} textAnchor="middle" fill="#9ca3af" fontSize="11">
           Click a cluster in the meta-cluster tree to begin
-         </text>
-        </svg>
-      );
-    }
+           </text>
+          </svg>
+        );
+     }
 
-    // Draw connections from center to orbiting nodes
+     // Draw connections from center to orbiting nodes
   const connections = nodePositions.map((node) => ({
-    x1: centerX,
-    y1: centerY,
-    x2: centerX + node.x,
-    y2: centerY + node.y,
+    x1: cx,
+    y1: cy,
+    x2: cx + node.x,
+    y2: cy + node.y,
     similarity: node.similarityNorm,
-  }));
+   }));
 
    // Gradient definitions for connection lines
   const gradients = nodePositions.map((node, i) => (
@@ -203,183 +222,161 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     ));
 
   return (
-      <svg
+       <svg
       ref={svgRef}
       width={svgWidth}
-      height={svgHeight}
-      style={{ background: '#fafbfc', borderRadius: 8 }}
-      >
-        <defs>{gradients}</defs>
+      height="100%"
+      style={{ background: '#fafbfc', borderRadius: 8, minHeight: 320 }}
+        >
+         <defs>{gradients}</defs>
 
-        {/* Grid circles */}
-        {[0.33, 0.66, 1.0].map((factor, i) => (
-          <circle
-          key={`grid-${i}`}
-          cx={centerX}
-          cy={centerY}
-          r={180 * factor}
-          fill="none"
-          stroke="#e5e7eb"
-          strokeWidth={1}
-          strokeDasharray={i === 2 ? 'none' : '4 4'}
-          />
-        ))}
+          {/* Grid circles */}
+          {[0.33, 0.66, 1.0].map((factor, i) => (
+            <circle
+           key={`grid-${i}`}
+           cx={cx}
+           cy={cy}
+           r={180 * factor}
+           fill="none"
+           stroke="#e5e7eb"
+           strokeWidth={1}
+           strokeDasharray={i === 2 ? 'none' : '4 4'}
+            />
+          ))}
 
-        {/* Connection lines */}
-        {connections.map((conn, i) => (
-          <line
-          key={`conn-${i}`}
-          x1={conn.x1}
-          y1={conn.y1}
-          x2={conn.x2}
-          y2={conn.y2}
-          stroke={`url(#hub-grad-${i})`}
-          strokeWidth={1 + conn.similarity * 2}
-          opacity={0.4 + conn.similarity * 0.3}
-          />
-        ))}
+          {/* Connection lines */}
+          {connections.map((conn, i) => (
+            <line
+           key={`conn-${i}`}
+           x1={conn.x1}
+           y1={conn.y1}
+           x2={conn.x2}
+           y2={conn.y2}
+           stroke={`url(#hub-grad-${i})`}
+           strokeWidth={1 + conn.similarity * 2}
+           opacity={0.4 + conn.similarity * 0.3}
+            />
+          ))}
 
-        {/* Center node — selected cluster */}
-        <g
+          {/* Center node — selected cluster */}
+          <g
         onClick={() => {}} // center doesn't promote, it's the anchor
         style={{ cursor: 'default' }}
-        >
-          <circle
-          cx={centerX}
-          cy={centerY}
-          r={CENTER_NODE_RADIUS}
-          fill={centerNodeColor}
-          stroke="#3b82f6"
-          strokeWidth={3}
-          />
-          <text
-          x={centerX}
-          y={centerY - 4}
-          textAnchor="middle"
-          fill="#fff"
-          fontSize="10"
-          fontWeight={700}
-          style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          >
-            {targetLabel.length > 20 ? targetLabel.slice(0, 18) + '…' : targetLabel}
-          </text>
-          <text
-          x={centerX}
-          y={centerY + 10}
-          textAnchor="middle"
-          fill="#bfdbfe"
-          fontSize="9"
-          >
-            {selectedClusterId}
-          </text>
-        </g>
-
-        {/* Orbiting nodes */}
-        {nodePositions.map((node, i) => {
-        const isHovered = hoveredNodeId === node.cluster_id;
-        const nodeColor = node.color || centerNodeColor || `hsl(${210 + i * 15}, 75%, 45%)`;
-         return (
-            <g
-            key={node.cluster_id}
-            onClick={() => handleNodeClick(node.cluster_id)}
-            onMouseEnter={() => setHoveredNodeId(node.cluster_id)}
-            onMouseLeave={() => setHoveredNodeId(null)}
-            style={{ cursor: 'pointer' }}
+         >
+            <circle
+           cx={cx}
+           cy={cy}
+           r={CENTER_NODE_RADIUS}
+           fill={centerNodeColor}
+           stroke="#3b82f6"
+           strokeWidth={3}
+            />
+            {/* Truncated center label that fits within available width */}
+            <text
+           x={cx}
+           y={cy - 4}
+           textAnchor="middle"
+           fill="#fff"
+           fontSize="10"
+           fontWeight={700}
             >
-              {/* Glow on hover */}
-              {isHovered && (
-                <circle
-                cx={centerX + node.x}
-                cy={centerY + node.y}
-                r={(node.radius + 6) * 1.5}
-                fill={nodeColor}
-                opacity={0.2}
-                />
-              )}
+              {truncateToFit(targetLabel, 160, 10)}
+            </text>
+            <text
+           x={cx}
+           y={cy + 10}
+           textAnchor="middle"
+           fill="#bfdbfe"
+           fontSize="9"
+            >
+              {selectedClusterId}
+            </text>
+          </g>
 
-              {/* Main circle */}
-              <circle
-              cx={centerX + node.x}
-              cy={centerY + node.y}
-              r={isHovered ? node.radius * 1.2 : node.radius}
-              fill={nodeColor}
-              stroke={isHovered ? '#fff' : 'none'}
-              strokeWidth={isHovered ? 2 : 0}
-              opacity={0.85 + node.similarityNorm * 0.15}
-              />
-
-              {/* Label */}
-              <text
-              x={centerX + node.x}
-              y={centerY + node.y + node.radius + 14}
-              textAnchor="middle"
-              fill="#374151"
-              fontSize={isHovered ? 10 : 9}
-              fontWeight={isHovered ? 600 : 400}
-              style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: 60,
-              }}
+          {/* Orbiting nodes */}
+          {nodePositions.map((node, i) => {
+        const isHovered = hoveredNodeId === node.cluster_id;
+        const nodeColor = getNodeColor(node);
+         return (
+             <g
+             key={node.cluster_id}
+             onClick={() => handleNodeClick(node.cluster_id)}
+             onMouseEnter={() => setHoveredNodeId(node.cluster_id)}
+             onMouseLeave={() => setHoveredNodeId(null)}
+             style={{ cursor: 'pointer' }}
               >
-                {node.cluster_id.length > 8 ? node.cluster_id.slice(0, 6) + '…' : node.cluster_id}
-              </text>
-
-              {/* Similarity percentage on hover */}
-              {isHovered && (
-                <g>
-                  <rect
-                  x={(centerX + node.x) - 50}
-                  y={(centerY + node.y) - node.radius - 30}
-                  width={100}
-                  height={28}
-                  rx={4}
-                  fill="#1f2937"
-                  opacity={0.95}
+                {/* Glow on hover */}
+                {isHovered && (
+                  <circle
+                 cx={cx + node.x}
+                 cy={cy + node.y}
+                 r={(node.radius + 6) * 1.5}
+                 fill={nodeColor}
+                 opacity={0.2}
                   />
-                  <text
-                  x={centerX + node.x}
-                  y={(centerY + node.y) - node.radius - 18}
-                  textAnchor="middle"
-                  fill="#fff"
-                  fontSize="10"
-                  fontWeight={600}
-                  style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    maxWidth: 96,
-                  }}
-                  >
-                    {node.label.length > 25 ? node.label.slice(0, 23) + '…' : node.label}
-                  </text>
-                  <text
-                  x={centerX + node.x}
-                  y={(centerY + node.y) - node.radius - 6}
-                  textAnchor="middle"
-                  fill="#d1d5db"
-                  fontSize="9"
-                  >
-                    {node.chunk_count} chunks · {Math.round(node.similarity * 100)}% similar
-                  </text>
-                </g>
-              )}
-            </g>
-          );
-        })}
+                )}
 
-        {/* Similarity legend */}
-        <g transform={`translate(${svgWidth - 90}, ${svgHeight - 60})`}>
-          <rect width={80} height={50} rx={4} fill="#fff" stroke="#e5e7eb" strokeWidth={1} />
-          <text x={40} y={16} textAnchor="middle" fill="#6b7280" fontSize="9" fontWeight={600}>
-           Similarity
-          </text>
-          <line x1={15} y1={26} x2={65} y2={26} stroke="#1e40af" strokeWidth={3} />
-          <text x={15} y={38} fill="#9ca3af" fontSize="8">High</text>
-          <text x={65} y={38} fill="#9ca3af" fontSize="8" textAnchor="end">Low</text>
-        </g>
-      </svg>
+                {/* Main circle */}
+                <circle
+               cx={cx + node.x}
+               cy={cy + node.y}
+               r={isHovered ? node.radius * 1.2 : node.radius}
+               fill={nodeColor}
+               stroke={isHovered ? '#fff' : 'none'}
+               strokeWidth={isHovered ? 2 : 0}
+               opacity={0.85 + node.similarityNorm * 0.15}
+                />
+
+                {/* Label */}
+                <text
+               x={cx + node.x}
+               y={cy + node.y + node.radius + 14}
+               textAnchor="middle"
+               fill="#374151"
+               fontSize={isHovered ? 10 : 9}
+               fontWeight={isHovered ? 600 : 400}
+                >
+                  {node.cluster_id.length > 8 ? node.cluster_id.slice(0, 6) + '…' : node.cluster_id}
+                </text>
+
+                {/* Similarity percentage on hover — wraps long text */}
+                {isHovered && (
+                  <g>
+                    <rect
+                   x={(cx + node.x) - 60}
+                   y={(cy + node.y) - node.radius - 38}
+                   width={120}
+                   height={44}
+                   rx={6}
+                   fill="#1f2937"
+                   opacity={0.95}
+                    />
+                    {/* Wrapped label across two lines if needed */}
+                    <text
+                   x={cx + node.x}
+                   y={(cy + node.y) - node.radius - 24}
+                   textAnchor="middle"
+                   fill="#fff"
+                   fontSize="10"
+                   fontWeight={600}
+                    >
+                      {truncateToFit(node.label, 110, 10)}
+                    </text>
+                    <text
+                   x={cx + node.x}
+                   y={(cy + node.y) - node.radius - 8}
+                   textAnchor="middle"
+                   fill="#d1d5db"
+                   fontSize="9"
+                    >
+                      {node.chunk_count} chunks · {Math.round(node.similarity * 100)}% similar
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+        </svg>
     );
 };
 
