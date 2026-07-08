@@ -2952,7 +2952,7 @@ export default function NoteClusters() {
 
               {/* Right column: MetaClusterTree */}
               <div style={{
-             width: '36%',
+             width: '26%',
              flexShrink: 0,
              display: 'flex',
              flexDirection: 'column',
