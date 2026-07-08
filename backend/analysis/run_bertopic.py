@@ -22,6 +22,7 @@ from bertopic.vectorizers import ClassTfidfTransformer
 import ollama
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
 from backend.scripts.common_words import clean_text
+from backend.analysis.meta_clustering import compute_meta_clusters
 from umap import UMAP
 from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
@@ -801,12 +802,26 @@ df['base_cluster_label'] = df['base_cluster_label'].fillna(df['cluster_label']).
 df['cluster_confidence'] = confidences
 df['last_clustered'] = datetime.now().isoformat()
 
+# --- 5.5. META-CLUSTERING (Cluster-of-Clusters Hierarchy) ---
+print("🔗 Building meta-cluster hierarchy (cluster-of-clusters)...")
+try:
+    df = compute_meta_clusters(
+        df,
+        vectors=vectors,
+        docs=docs,
+        vector_col="vector",
+        topic_col="display_topic_id",
+    )
+    print(f"   ✅ Meta-clustering complete.")
+except Exception as e:
+    print(f"   ⚠️ Meta-clustering failed ({e}) — continuing without meta-clusters.")
+
 # Ensure we only write back the columns that exist in the schema
 schema_columns = ['title', 'content', 'creation_date', 'modification_date', 'chunk_index',
        'total_chunks', 'chunk_content', 'clean_chunk_content', 'vector',
        'base_topic_id', 'display_topic_id', 'is_split_child', 'cluster_id',
-    'cluster_label', 'base_cluster_label', 'cluster_confidence', 'cluster_summary',
-       'last_clustered']
+     'cluster_label', 'base_cluster_label', 'cluster_confidence', 'cluster_summary',
+        'last_clustered', 'meta_cluster_id', 'meta_cluster_label']
 df = df[schema_columns]
 
 print(f"💾 Overwriting table '{TABLE_NAME}' with clustered data...")

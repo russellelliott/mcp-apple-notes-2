@@ -9,6 +9,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import { RadialSimilarityHub } from './RadialSimilarityHub';
+import { MetaClusterTree } from './MetaClusterTree';
 
 interface NotePoint {
   unique_key: string;
@@ -2067,16 +2069,16 @@ export default function NoteClusters() {
   }, [openSidebarNote]);
 
   const handleInactiveRailClickForHistory = useCallback(
-     (chunk: SidebarChunkData) => {
-       // In history mode, clicking a dash selects that cluster instead of opening the note
+    (chunk: SidebarChunkData) => {
+      // In history mode, clicking a dash selects that cluster instead of opening the note
       setSelectedClusters(new Set([chunk.cluster_id]));
-     },
-     [],
-   );
+    },
+    [],
+  );
 
   const handleInactiveRailClick = useCallback(
-     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
-       // Immediately scroll the note to the top of the notes list
+    (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
+      // Immediately scroll the note to the top of the notes list
       const leftContainer = notesListRef.current;
       const cardEl = sidebarCardRefs.current[note.note_key];
       if (leftContainer && cardEl) {
@@ -2084,28 +2086,28 @@ export default function NoteClusters() {
         const containerRect = leftContainer.getBoundingClientRect();
         const offsetFromTop = cardRect.top - containerRect.top;
         leftContainer.scrollTop += offsetFromTop;
-       }
+      }
 
       const shift = !!(e && e.shiftKey);
       if (shift) {
-         // add to selection (toggle)
+        // add to selection (toggle)
         setSelectedClusters((prev) => {
           const next = new Set(prev);
           if (next.has(chunk.cluster_id)) next.delete(chunk.cluster_id);
           else next.add(chunk.cluster_id);
           return next;
-         });
-       } else {
-         // normal click -> select sole cluster
+        });
+      } else {
+        // normal click -> select sole cluster
         setSelectedClusters(new Set([chunk.cluster_id]));
         focusClusterByOrbit(chunk.cluster_id);
-       }
+      }
 
       setPendingScrollNoteKey(note.note_key);
       setPendingScrollNoteTitle(note.title);
       setPendingScrollTargetCluster(chunk.cluster_id);
 
-       // After state updates, scroll legend cluster into view (centered)
+      // After state updates, scroll legend cluster into view (centered)
       setTimeout(() => {
         const legendEl = legendClusterRefs.current[chunk.cluster_id];
         const legendContainer = legendContainerRef.current;
@@ -2116,14 +2118,14 @@ export default function NoteClusters() {
           const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
           try {
             legendContainer.scrollTo({ top: target, behavior: 'smooth' });
-           } catch (err) {
+          } catch (err) {
             legendContainer.scrollTop = target;
-           }
-         }
-       }, 60);
-     },
-     [],
-   );
+          }
+        }
+      }, 60);
+    },
+    [],
+  );
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
@@ -2473,19 +2475,19 @@ export default function NoteClusters() {
                   </div>
                 )}
 
-                 {displayedHistorySidebarNotes.map((note) => {
-                   const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
-                   // Use selectedClusters for dots/dashes logic (same as regular mode)
-                   // If no clusters selected, show all chunks as dots
-                   const historyActiveClusterIds = selectedClusters.size > 0
-                     ? selectedClusters
-                     : new Set(note.chunks.map((chunk) => chunk.cluster_id));
-                   const isSelectedNote = !!selectedNode
-                     && selectedNode.title === note.title
-                     && selectedNode.creation_date === note.creation_date
-                     && selectedNode.modification_date === note.modification_date;
-                   const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
-                   return (
+                {displayedHistorySidebarNotes.map((note) => {
+                  const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
+                  // Use selectedClusters for dots/dashes logic (same as regular mode)
+                  // If no clusters selected, show all chunks as dots
+                  const historyActiveClusterIds = selectedClusters.size > 0
+                    ? selectedClusters
+                    : new Set(note.chunks.map((chunk) => chunk.cluster_id));
+                  const isSelectedNote = !!selectedNode
+                    && selectedNode.title === note.title
+                    && selectedNode.creation_date === note.creation_date
+                    && selectedNode.modification_date === note.modification_date;
+                  const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
+                  return (
                     <div
                       key={note.note_key}
                       ref={(el) => {
@@ -2498,7 +2500,7 @@ export default function NoteClusters() {
                         border: '1px solid #e5e7eb',
                         backgroundColor: '#ffffff',
                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                       }}
+                      }}
                     >
                       <div
                         style={{
@@ -2531,118 +2533,118 @@ export default function NoteClusters() {
                         ) : null}
                       </div>
 
-                          {note.chunks.length >= 1 && (
-                            <SegmentedRail
-                              chunks={note.chunks}
-                              activeClusterIds={historyActiveClusterIds}
-                              currentChunkIndex={currentChunkIndex}
-                              getClusterColor={getClusterColor}
-                              onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
-                              onInactiveDashClick={(chunk, _e) => {
-                                // In history mode, clicking a dash selects that cluster instead of opening the note
-                                handleInactiveRailClickForHistory(chunk);
-                              }}
-                            />
-                          )}
+                      {note.chunks.length >= 1 && (
+                        <SegmentedRail
+                          chunks={note.chunks}
+                          activeClusterIds={historyActiveClusterIds}
+                          currentChunkIndex={currentChunkIndex}
+                          getClusterColor={getClusterColor}
+                          onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
+                          onInactiveDashClick={(chunk, _e) => {
+                            // In history mode, clicking a dash selects that cluster instead of opening the note
+                            handleInactiveRailClickForHistory(chunk);
+                          }}
+                        />
+                      )}
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          {(() => {
-                           const rows: React.ReactNode[] = [];
-                           let i = 0;
-                           while (i < note.chunks.length) {
-                             const chunk = note.chunks[i];
-                             const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {(() => {
+                          const rows: React.ReactNode[] = [];
+                          let i = 0;
+                          while (i < note.chunks.length) {
+                            const chunk = note.chunks[i];
+                            const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
 
-                             if (isActiveChunk) {
-                               // Show dot chunk - only if we have a selection, or show all if no selection
-                               if (selectedClusters.size > 0) {
-                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                 const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                 const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
-                                 rows.push(
-                                    <button
-                                     type="button"
-                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
-                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                                     style={{
-                                       border: `1px solid ${chunkClusterColor}`,
-                                       background: lightenedColor,
-                                       borderRadius: '6px',
-                                       padding: '6px 8px',
-                                       cursor: 'pointer',
-                                       textAlign: 'left',
-                                       color: '#374151',
-                                       fontSize: '12px',
-                                       lineHeight: 1.35,
-                                       whiteSpace: 'normal',
-                                       overflowWrap: 'anywhere',
-                                       wordBreak: 'break-word',
-                                      }}
+                            if (isActiveChunk) {
+                              // Show dot chunk - only if we have a selection, or show all if no selection
+                              if (selectedClusters.size > 0) {
+                                const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                                const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                rows.push(
+                                  <button
+                                    type="button"
+                                    key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
+                                    onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                                    style={{
+                                      border: `1px solid ${chunkClusterColor}`,
+                                      background: lightenedColor,
+                                      borderRadius: '6px',
+                                      padding: '6px 8px',
+                                      cursor: 'pointer',
+                                      textAlign: 'left',
+                                      color: '#374151',
+                                      fontSize: '12px',
+                                      lineHeight: 1.35,
+                                      whiteSpace: 'normal',
+                                      overflowWrap: 'anywhere',
+                                      wordBreak: 'break-word',
+                                    }}
                                     title={`Open chunk ${chunk.chunk_index + 1}`}
-                                   >
-                                     <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                                     {preview.length > 180 ? '...' : ''}
-                                   </button>,
-                                 );
-                               } else {
-                                 // No selection - show all chunks
-                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                 const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                 const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
-                                 rows.push(
-                                    <button
-                                     type="button"
-                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
-                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                                     style={{
-                                       border: `1px solid ${chunkClusterColor}`,
-                                       background: lightenedColor,
-                                       borderRadius: '6px',
-                                       padding: '6px 8px',
-                                       cursor: 'pointer',
-                                       textAlign: 'left',
-                                       color: '#374151',
-                                       fontSize: '12px',
-                                       lineHeight: 1.35,
-                                       whiteSpace: 'normal',
-                                       overflowWrap: 'anywhere',
-                                       wordBreak: 'break-word',
-                                      }}
+                                  >
+                                    <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                                    {preview.length > 180 ? '...' : ''}
+                                  </button>,
+                                );
+                              } else {
+                                // No selection - show all chunks
+                                const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                                const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                rows.push(
+                                  <button
+                                    type="button"
+                                    key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
+                                    onClick={() => openSidebarNote(note, chunk.chunk_index)}
+                                    style={{
+                                      border: `1px solid ${chunkClusterColor}`,
+                                      background: lightenedColor,
+                                      borderRadius: '6px',
+                                      padding: '6px 8px',
+                                      cursor: 'pointer',
+                                      textAlign: 'left',
+                                      color: '#374151',
+                                      fontSize: '12px',
+                                      lineHeight: 1.35,
+                                      whiteSpace: 'normal',
+                                      overflowWrap: 'anywhere',
+                                      wordBreak: 'break-word',
+                                    }}
                                     title={`Open chunk ${chunk.chunk_index + 1}`}
-                                   >
-                                     <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                                     {preview.length > 180 ? '...' : ''}
-                                   </button>,
-                                 );
-                               }
-                               i += 1;
-                               continue;
+                                  >
+                                    <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
+                                    {preview.length > 180 ? '...' : ''}
+                                  </button>,
+                                );
                               }
-
-                             // Chunk is not in selected cluster - show as gap
-                             let gapCount = 0;
-                             while (i < note.chunks.length && !historyActiveClusterIds.has(note.chunks[i].cluster_id)) {
-                               gapCount += 1;
-                               i += 1;
-                              }
-
-                              rows.push(
-                                <div
-                                 key={`history-gap-${note.note_key}-${i}-${gapCount}`}
-                                 style={{
-                                   fontSize: '11px',
-                                   color: '#6b7280',
-                                   fontStyle: 'italic',
-                                   padding: '2px 4px',
-                                  }}
-                                >
-                                  --- {gapCount} Chunks ---
-                                </div>,
-                              );
+                              i += 1;
+                              continue;
                             }
-                           return rows;
-                          })()}
-                        </div>
+
+                            // Chunk is not in selected cluster - show as gap
+                            let gapCount = 0;
+                            while (i < note.chunks.length && !historyActiveClusterIds.has(note.chunks[i].cluster_id)) {
+                              gapCount += 1;
+                              i += 1;
+                            }
+
+                            rows.push(
+                              <div
+                                key={`history-gap-${note.note_key}-${i}-${gapCount}`}
+                                style={{
+                                  fontSize: '11px',
+                                  color: '#6b7280',
+                                  fontStyle: 'italic',
+                                  padding: '2px 4px',
+                                }}
+                              >
+                                --- {gapCount} Chunks ---
+                              </div>,
+                            );
+                          }
+                          return rows;
+                        })()}
+                      </div>
                     </div>
                   );
                 })}
@@ -2888,553 +2890,29 @@ export default function NoteClusters() {
             </div>
           </div>
 
-          <div style={{ flex: 1, position: 'relative', height: '100%', minWidth: 0 }} ref={plotAreaRef}>
-            {selectedNode && (
-              <div
-                style={{
-                  ...modalStyle.base,
-                  backgroundColor: selectedNodeSurfaceColor,
-                }}
-              >
-                <div style={modalStyle.header}>
-                  <h3 style={{ margin: 0, fontSize: '1.1em', wordBreak: 'break-word', color: '#333', textAlign: 'left', flex: 1 }}>
-                    {selectedNode.title}
-                  </h3>
-                  <button
-                    onClick={closePopup}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      fontSize: '1.5em',
-                      cursor: 'pointer',
-                      padding: '0 5px',
-                      lineHeight: '0.8',
-                      color: '#666',
-                    }}
-                  >
-                    &times;
-                  </button>
-                </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <div style={{ fontSize: '0.9em', color: '#555', textAlign: 'left' }}>
-                    Cluster {selectedNode.display_topic_id || (selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?')}:{' '}
-                    {selectedNode.cluster_label}
-                  </div>
-                  <div style={{ fontSize: '0.85em', color: '#666' }}>{formatDateMMDDYYYY(selectedNode.modification_date)}</div>
-                </div>
-
-                <div
-                  style={{
-                    flex: 1,
-                    overflowY: 'auto',
-                    marginBottom: '15px',
-                    whiteSpace: 'pre-wrap',
-                    fontSize: '0.95em',
-                    lineHeight: '1.5',
-                    padding: '10px',
-                    backgroundColor: 'rgba(255,255,255,0.5)',
-                    borderRadius: '4px',
-                    border: '1px solid rgba(0,0,0,0.05)',
-                    textAlign: 'left',
-                  }}
-                >
-                  {isLoadingContent ? 'Loading content...' : selectedNode.content}
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 'auto',
-                    width: '100%',
-                  }}
-                >
-                  {selectedNode.total_chunks > 1 ? (
-                    <div style={{ width: '100%' }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          flexWrap: 'wrap',
-                          margin: '0 0 8px 0',
-                          backgroundColor: '#000000',
-                          borderRadius: '6px',
-                          padding: '4px 6px',
-                        }}
-                      >
-                        {modalRailChunks.map((chunk) => {
-                          const selectedClusterId = selectedNode.display_topic_id || selectedNode.cluster_id || '';
-                          const isDot = chunk.cluster_id === selectedClusterId;
-                          const symbol = isDot ? '●' : '−';
-                          const isCurrent = chunk.chunk_index === selectedNode.chunk_index;
-                          return (
-                            <button
-                              type="button"
-                              key={`modal-rail-${chunk.chunk_index}-${chunk.cluster_id}`}
-                              onClick={() => handleModalChunkJump(chunk.chunk_index)}
-                              title={`Chunk ${chunk.chunk_index + 1} | Cluster: ${chunk.cluster_name}`}
-                              style={{
-                                border: 'none',
-                                background: 'transparent',
-                                cursor: 'pointer',
-                                color: isDot ? '#ffffff' : getClusterColor(chunk.cluster_id),
-                                fontSize: isDot ? '15px' : '14px',
-                                lineHeight: 1,
-                                padding: 0,
-                                margin: 0,
-                                opacity: isCurrent ? 1 : 0.82,
-                                transform: isCurrent ? 'scale(1.15)' : 'scale(1)',
-                              }}
-                              aria-label={`Jump to chunk ${chunk.chunk_index + 1}`}
-                            >
-                              {symbol}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '1fr auto 1fr',
-                          alignItems: 'center',
-                          width: '100%',
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={handlePrevChunk}
-                          disabled={isLoadingContent}
-                          style={{
-                            justifySelf: 'start',
-                            width: '34px',
-                            height: '30px',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            border: '1px solid #ccc',
-                            backgroundColor: '#fff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: 0,
-                          }}
-                          aria-label="Previous chunk"
-                        >
-                          <ArrowBackIcon />
-                        </button>
-                        <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap', justifySelf: 'center' }}>
-                          Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={handleNextChunk}
-                          disabled={isLoadingContent}
-                          style={{
-                            justifySelf: 'end',
-                            width: '34px',
-                            height: '30px',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            border: '1px solid #ccc',
-                            backgroundColor: '#fff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: 0,
-                          }}
-                          aria-label="Next chunk"
-                        >
-                          <ArrowForwardIcon />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                      <span style={{ fontSize: '0.9em', color: '#444', whiteSpace: 'nowrap' }}>
-                        Chunk 1 of 1
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {hoverSource === 'canvas' && hoveredPoint && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: tooltipStyle.left,
-                  right: tooltipStyle.right,
-                  top: tooltipStyle.top,
-                  pointerEvents: 'none',
-                  zIndex: 120,
-                  backgroundColor: hoveredClusterSurfaceColor,
-                  border: '1px solid rgba(0, 0, 0, 0.2)',
-                  borderRadius: '6px',
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.14)',
-                  padding: '8px 10px',
-                  maxWidth: '300px',
-                  color: '#222',
-                  fontSize: '12px',
-                  lineHeight: 1.4,
-                  textAlign: tooltipStyle.positionLeft ? 'right' : 'left',
-                  overflowWrap: 'anywhere',
-                }}
-              >
-                <>
-                  <div style={{ fontWeight: 700 }}>{hoveredPoint.title}</div>
-                  {/* Use authoritative cluster key (display_topic_id if present) and lookup label from clusterNameById */}
-                  {(() => {
-                      const resolved = resolveClusterForUniqueKey(
-                        hoveredPoint.unique_key,
-                        hoveredPoint.creation_date,
-                        hoveredPoint.modification_date,
-                      );
-                      const displayId = resolved.key && resolved.key !== '-1' ? resolved.key : '?';
-                      const displayLabel = resolved.label || '';
-                      return (
-                        <div style={{ color: '#333' }}>
-                          Cluster {displayId}: {displayLabel}
-                        </div>
-                      );
-                    })()}
-                  <div style={{ color: '#333' }}>
-                    Chunk {hoveredPoint.chunk_index + 1} of {hoveredPoint.total_chunks || '?'}
-                  </div>
-                </>
-              </div>
-            )}
-
-            <Canvas
-              camera={{
-                fov: 45,
-                near: 0.1,
-                far: Math.max(visualSceneRadius * GLOBAL_LAYOUT_SPREAD * 22, 180),
-                position: cameraPosition,
+          <div style={{
+            width: '400px',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid #e0e0e0',
+            backgroundColor: '#f9f9f9',
+            padding: '10px',
+            boxSizing: 'border-box',
+            fontSize: '11px',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          }}>
+            <MetaClusterTree
+              onClusterSelect={(clusterId) => {
+                setSelectedClusters(new Set([clusterId]));
+                try { focusClusterByOrbit(clusterId); } catch (_) { }
               }}
-              onPointerMissed={() => {
-                setHoveredId(null);
-                setHoverSource(null);
-              }}
-              onPointerLeave={() => {
-                setHoveredId(null);
-                setHoverSource(null);
-              }}
-              style={{ width: '100%', height: '100%', background: '#030313' }}
-            >
-              <CameraOrbitAnimator />
-              <ambientLight intensity={0.9} />
-              <OrbitControls
-                ref={controlsRef}
-                makeDefault
-                enablePan
-                enableZoom
-                enableRotate
-                target={[sceneBounds.center.x, sceneBounds.center.y, sceneBounds.center.z]}
-              />
-              <AutoRotateGroup>
-                {buckets.map((bucket) => {
-                  const adaptiveBase = Math.max(DOT_RADIUS_BASE, sceneBounds.radius * 0.0018);
-                  const sphereRadius = (bucket.sizeMetric / 0.02) * adaptiveBase;
-                  return (
-                    <DotInstances
-                      key={`bucket-${bucket.key}-${bucket.points.length}`}
-                      bucket={bucket}
-                      sphereRadius={sphereRadius}
-                      hoveredId={hoveredId}
-                      highlightedId={highlightedNodeId}
-                      onPointerOver={(event: ThreeEvent<PointerEvent>) => {
-                        const point = resolvePointFromEvent(event);
-                        if (!point) return;
-                        handleCanvasPointMove(point, event);
-                      }}
-                      onPointerMove={(event: ThreeEvent<PointerEvent>) => {
-                        const point = resolvePointFromEvent(event);
-                        if (!point) {
-                          setHoveredId(null);
-                          setHoverSource(null);
-                          return;
-                        }
-
-                        handleCanvasPointMove(point, event);
-                      }}
-                      onPointerOut={(event: ThreeEvent<PointerEvent>) => {
-                        event.stopPropagation();
-                        if (event.intersections.length === 0) {
-                          setHoveredId(null);
-                          setHoverSource(null);
-                        }
-                      }}
-                      onClick={(event: ThreeEvent<MouseEvent>) => {
-                        const point = resolvePointFromEvent(event);
-                        if (!point) return;
-
-                        handleCanvasPointClick(point, event);
-                      }}
-                    />
-                  );
-                })}
-              </AutoRotateGroup>
-            </Canvas>
+              selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+              sortMetric={clusterSortMetric}
+            />
           </div>
 
-          <div
-            style={{
-              width: '440px',
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              borderLeft: '1px solid #e0e0e0',
-              backgroundColor: '#f9f9f9',
-              padding: '10px',
-              boxSizing: 'border-box',
-              zIndex: 10,
-              fontSize: '11px',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-              userSelect: 'none',
-            }}
-          >
-            <style>{`
-              @keyframes marquee-scroll {
-                0% { transform: translateX(0); }
-                100% { transform: translateX(-100%); }
-              }
-              .cluster-label-container {
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                flex: 1;
-                padding-left: 5px;
-              }
-              .cluster-label-content {
-                display: inline-block;
-              }
-              .cluster-label-container.overflowing:hover {
-                text-overflow: clip;
-              }
-              .cluster-label-container.overflowing:hover .cluster-label-content {
-                animation: marquee-scroll linear infinite;
-                padding-right: 20px;
-              }
-              .cluster-row {
-                display: flex;
-                align-items: center;
-                margin-bottom: 4px;
-                cursor: pointer;
-                padding: 2px 0;
-                border-radius: 4px;
-                transition: opacity 0.15s ease, background-color 0.15s ease;
-              }
-              .cluster-row:hover {
-                background-color: rgba(0, 0, 0, 0.08);
-              }
-              .cluster-row.cluster-row-selected {
-                background-color: rgba(0, 0, 0, 0.04);
-              }
-              .cluster-row.cluster-row-selected:hover {
-                background-color: rgba(0, 0, 0, 0.1);
-              }
-              .cluster-id {
-                width: 30px;
-                text-align: right;
-                margin-right: 5px;
-                font-weight: bold;
-                color: #555;
-                flex-shrink: 0;
-              }
-              .cluster-dot {
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                margin-right: 5px;
-                flex-shrink: 0;
-              }
-            `}</style>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, width: '100%' }}>
-              <h3 style={{ margin: 0, color: '#333', userSelect: 'none' }}>
-                Showing {visibleLabels.length} cluster{visibleLabels.length === 1 ? '' : 's'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setViewMode((mode) => (mode === 'global' ? 'history' : 'global'))}
-                title={viewMode === 'global' ? 'Switch to History' : 'Switch to Global'}
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: viewMode === 'global' ? '#eef6ec' : '#fef3c7',
-                  marginLeft: 'auto',
-                }}
-              >
-                {viewMode === 'global' ? (
-                  <LanguageIcon style={{ color: '#16a34a' }} />
-                ) : (
-                  <HistoryIcon style={{ color: '#ca8a04' }} />
-                )}
-              </button>
-            </div>
-            <div style={{ minHeight: '30px', marginBottom: '8px', userSelect: 'none' }}>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: 11, flexWrap: 'wrap' }}>
-                  {([
-                    { key: 'recency', label: 'Recency' },
-                    { key: 'momentum', label: 'Momentum' },
-                    { key: 'az', label: 'A–Z' },
-                    { key: 'size', label: 'Size' },
-                    ...(searchResults.length > 0 ? [{ key: 'search', label: 'Search Relevance' }] : []),
-                    ...(isHistoryMode && historySidebarNotes.length > 0 ? [{ key: 'history', label: 'History Order' }] : []),
-                    ...(!isHistoryMode && selectedClusters.size > 0 ? [{ key: 'similarity', label: 'Cluster Similarity' }] : []),
-                  ] as Array<{ key: ClusterSortMetric; label: string }>).map((opt, idx, arr) => (
-                    <span key={opt.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <button
-                        type="button"
-                        onClick={() => setClusterSortMetric(opt.key)}
-                        style={{
-                          background: clusterSortMetric === opt.key ? '#eef2ff' : 'transparent',
-                          border: clusterSortMetric === opt.key ? '1px solid #c7d2fe' : 'none',
-                          padding: '4px 6px',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          fontWeight: clusterSortMetric === opt.key ? 700 : 600,
-                          color: '#111827',
-                          fontSize: 11,
-                        }}
-                      >
-                        {opt.label}
-                      </button>
-                      {idx < arr.length - 1 && <span style={{ color: '#9ca3af' }}>•</span>}
-                    </span>
-                  ))}
-                </div>
-
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => setClusterSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))}
-                    title={clusterSortDirection === 'asc' ? 'Ascending' : 'Descending'}
-                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 6 }}
-                  >
-                    {clusterSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div ref={legendContainerRef} style={{ flex: 1, overflowY: 'auto', userSelect: 'none' }}>
-              {displayedClusterLabels.map((label, idx) => {
-                const group = clusterGroups[label];
-                const cid = group.clusterId || label;
-                const displayLabel = group.clusterLabel || label;
-                const hasHits = group.customdata.some((pointData) =>
-                  searchScoreMap.has(pointData.unique_key),
-                );
-                const hasHistoryHits = group.customdata.some((pointData) =>
-                  historyTitleSet.has(pointData.title),
-                );
-                const color = clusterColors[label];
-                const isSelected = selectedClusters.has(label);
-                const isSearchDimmed = searchResults.length > 0 && !hasHits;
-                const isHistoryDimmed = isHistoryMode && !hasHistoryHits;
-                // Don't let the hide-other filter dim clusters that actually have search hits
-                const isFilterDimmed = false;
-                const isHardDimmed = isFilterDimmed || ((isSearchDimmed || isHistoryDimmed) && !isSelected);
-                const isSoftDimmed = (isSearchDimmed || isHistoryDimmed) && isSelected;
-                const isDimmed = isHardDimmed || isSoftDimmed;
-                const rowOpacity = isHardDimmed ? 0.5 : isSoftDimmed ? 0.76 : 1;
-                const dotOpacity = isHardDimmed ? 0.55 : isSoftDimmed ? 0.78 : 1;
-                const idColor = isHardDimmed ? '#8a8a8a' : isSoftDimmed ? '#666' : '#555';
-                const items: React.ReactNode[] = [];
-                if (clusterSortMetric === 'az') {
-                  const prev = displayedClusterLabels[idx - 1];
-                  const prevLetter = prev ? (clusterGroups[prev]?.clusterLabel || prev).charAt(0).toUpperCase() : '';
-                  const curLetter = (displayLabel || '').charAt(0).toUpperCase();
-                  if (!prev || prevLetter !== curLetter) {
-                    items.push(
-                      <div key={`divider-${label}`} style={{ padding: '6px 6px', color: '#6b7280', fontWeight: 700 }}>
-                        {curLetter}
-                      </div>,
-                    );
-                  }
-                } else if (clusterSortMetric === 'recency' || clusterSortMetric === 'momentum') {
-                  const prev = displayedClusterLabels[idx - 1];
-                  const currentSection = getClusterSectionTitle(label);
-                  const prevSection = prev ? getClusterSectionTitle(prev) : '';
-                  if (!prev || currentSection !== prevSection) {
-                    items.push(
-                      <div key={`divider-${label}`} style={{ padding: '6px 6px', color: '#6b7280', fontWeight: 700 }}>
-                        {currentSection}
-                      </div>,
-                    );
-                  }
-                }
-
-                items.push(
-                  <div
-                    key={label}
-                    ref={(el) => {
-                      legendClusterRefs.current[label] = el;
-                    }}
-                    className={`cluster-row ${isSelected ? 'cluster-row-selected' : ''}`}
-                    onClick={(e) => {
-                      const isShiftClick = e.shiftKey;
-                      if (isShiftClick) {
-                        // Shift+click: Add/toggle cluster to selection
-                        setSelectedClusters((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(label)) {
-                            next.delete(label);
-                          } else {
-                            next.add(label);
-                          }
-                          return next;
-                        });
-                      } else {
-                        // Regular click: Select only this cluster and focus it
-                        setSelectedClusters(new Set([label]));
-                        try {
-                          focusClusterByOrbit(label);
-                        } catch (err) {
-                          // ignore
-                        }
-                      }
-                    }}
-                    style={{
-                      opacity: rowOpacity,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <div
-                      className="cluster-dot"
-                      style={{ backgroundColor: color, opacity: dotOpacity }}
-                    ></div>
-                    <div
-                      className="cluster-id"
-                      style={{ color: idColor, fontWeight: isSelected ? 700 : 600 }}
-                    >
-                      {cid}
-                    </div>
-                    <ClusterLabel
-                      label={displayLabel}
-                      hasHits={hasHits}
-                      isSelected={isSelected}
-                      isDimmed={isDimmed}
-                    />
-                    {clusterSortMetric === 'size' && (
-                      <span style={{ marginLeft: '8px', color: '#6b7280', fontWeight: 600, fontSize: '0.85em' }}>
-                        {group.customdata.length} chunk{group.customdata.length === 1 ? '' : 's'}
-                      </span>
-                    )}
-                  </div>,
-                );
-
-                return items;
-              })}
-            </div>
-          </div>
         </div>
       )}
     </div>

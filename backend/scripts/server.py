@@ -1,120 +1,122 @@
-import os
-import sys  # Added sys
-from pathlib import Path
-
-# ── PATH FIX: must happen before any `backend.*` import ──────────────────────
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-# ─────────────────────────────────────────────────────────────────────────────
-
 import json
+import math
 import re
+import sys
+from pathlib import Path
+from contextlib import asynccontextmanager
 
 import lancedb
-import pandas as pd
 import numpy as np
-import math
-try:
-    import umap
-    UMAP_AVAILABLE = True
-except Exception as _e:
-    umap = None
-    UMAP_AVAILABLE = False
+import pandas as pd
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-from pathlib import Path
 from sentence_transformers import SentenceTransformer
-from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+
+
+# ── REQUIRED PATH FIX: must happen before any `backend.*` import ──────────────────────
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    import umap
+    UMAP_AVAILABLE = True
+except Exception:
+    umap = None
+    UMAP_AVAILABLE = False
 
 # Import search logic
 from backend.scripts.main import NotesDatabase
 from backend.analysis.search_notes import search_and_combine_results
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ── PATH FIX ───────────────────────────────────────────────────────────────
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+# ────────────────────────────────────────────────────────────────────────────
 
 # Configuration
-# NOTE: Matching streamlit_app.py configuration
 DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 TABLE_NAME = "notes"
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
-# Server-side multiplier to push clusters further apart without changing shape/radius.
-# Hard-coded here per request (change this constant to tune spacing).
-CLUSTER_SPREAD_MULTIPLIER = 6.0
 
-# Global State Container
+EMBEDDING_DIM = 15
+SIMILARITY_THRESHOLD = 0.3
+MAX_SIMILAR_RESULTS = 25
+
+
+# ── Global State ────────────────────────────────────────────────────────────
 class AppState:
     table = None
     model = None
-    df_viz = pd.DataFrame() # Cached DataFrame with UMAP coordinates
+    df_viz = pd.DataFrame()
 
 state = AppState()
 
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
 def get_embedding_model():
     if state.model is None:
-        print(f"📦 Loading embedding model: {MODEL_NAME}")
+        print(f"Loading embedding model: {MODEL_NAME}")
         state.model = SentenceTransformer(MODEL_NAME)
     return state.model
+
 
 def get_query_embedding(query: str) -> List[float]:
     model = get_embedding_model()
     return model.encode(query).tolist()
 
+
+def _compute_meta_centroids(df, topic_col="display_topic_id"):
+    """Compute centroid (average embedding) for each cluster."""
+    if "vector" not in df.columns or df.empty:
+        return pd.DataFrame(columns=["cluster_id", "centroid", "meta_cluster_id", "chunk_count"])
+
+    rows = []
+    for cid, group in df.groupby(topic_col):
+        vectors = np.stack(group["vector"].values)
+        centroid = vectors.mean(axis=0)
+        meta_id = str(group.iloc[0].get("meta_cluster_id", ""))
+        rows.append({
+            "cluster_id": str(cid),
+            "centroid": centroid,
+            "meta_cluster_id": meta_id,
+            "chunk_count": len(group),
+        })
+    return pd.DataFrame(rows)
+
+
 def load_and_process_data():
-    """Lengths data from LanceDB and computes UMAP projections"""
-    print("🔄 Loading data from LanceDB...")
+    """Loads data from LanceDB. 3D UMAP projections are no longer needed."""
+    print("Loading data from LanceDB...")
     try:
         db = lancedb.connect(str(DB_PATH))
         state.table = db.open_table(TABLE_NAME)
         df = state.table.to_pandas()
-        
+
         if df.empty:
-            print("⚠️ Database is empty.")
+            print("Database is empty.")
             state.df_viz = pd.DataFrame()
             return
 
-        print(f"✅ Loaded {len(df)} rows.")
+        print(f"Loaded {len(df)} rows.")
 
         if 'vector' not in df.columns:
-            print("❌ 'vector' column missing.")
-            state.df_viz = df
-            return
-            
-        # Compute UMAP
-        print("🧮 Computing UMAP projections...")
-        if not UMAP_AVAILABLE:
-            raise RuntimeError("umap library not available. Install umap-learn to compute projections.")
-        embeddings = np.stack(df['vector'].values)
-        
-        # Remove `random_state` to allow UMAP to use multiple cores when available.
-        # Set `n_jobs=-1` to enable parallelism across all CPUs.
-        reducer = umap.UMAP(
-            n_components=3,
-            n_neighbors=30,
-            min_dist=0.0,
-            metric='cosine',
-            n_jobs=-1,
-        )
-        
-        projections = reducer.fit_transform(embeddings)
-        
-        df['umap_x'] = projections[:, 0]
-        df['umap_y'] = projections[:, 1]
-        df['umap_z'] = projections[:, 2]
-        
-        # Ensure ID/Key columns exist for frontend
+            print("'vector' column missing.")
+
         df['chunk_index'] = df['chunk_index'].fillna(0).astype(int)
         df['unique_key'] = df['title'].astype(str) + "_" + df['chunk_index'].astype(str)
-        
-        # Ensure total_chunks
+
         if 'total_chunks' not in df.columns:
-             print("ℹ️ Computing total_chunks...")
-             df['total_chunks'] = df.groupby('title')['chunk_index'].transform('count')
+            print("Computing total_chunks...")
+            df['total_chunks'] = df.groupby('title')['chunk_index'].transform('count')
         else:
-             df['total_chunks'] = df['total_chunks'].fillna(1).astype(int)
-             
-        # Fill optional fields
+            df['total_chunks'] = df['total_chunks'].fillna(1).astype(int)
+
         if 'cluster_label' not in df.columns:
             df['cluster_label'] = 'Unclustered'
         else:
@@ -134,51 +136,61 @@ def load_and_process_data():
             df['display_topic_id'] = df['base_topic_id'].astype(str)
         else:
             df['display_topic_id'] = df['display_topic_id'].astype(str).fillna(df['base_topic_id'])
-        
-        # --- FIX 1: Ensure ID Consistency ---
-        # Convert IDs to strings and normalize NaN representations
+
         for col in ['cluster_id', 'base_topic_id', 'display_topic_id']:
             if col in df.columns:
-                df[col] = df[col].astype(str).replace(['nan', 'None', 'nan', '-1.0'], '-1')
-        
-        # Compute server-side shaped positions (Fibonacci sphere per cluster)
-        try:
-            print("🔮 Computing shaped cluster positions...")
-            df = compute_shaped_positions(df)
-            print(f"✅ Shaped positions computed. rows={len(df)} index_type={type(df.index)}")
-            if len(df) > 0:
-                print(f" first_index_sample={list(df.index[:5])}")
-        except Exception as e:
-            print(f"⚠️ Error computing shaped positions: {e}")
+                df[col] = df[col].astype(str).replace(['nan', 'None', '-1.0'], '-1')
+
+        # Compute 5-dim UMAP
+        print("Computing 5-dim UMAP embeddings...")
+        if not UMAP_AVAILABLE:
+            print("umap library not available — skipping UMAP projections.")
+            df['umap_x'] = 0.0
+            df['umap_y'] = 0.0
+            df['umap_z'] = 0.0
+        else:
+            if 'vector' in df.columns:
+                embeddings = np.stack(df['vector'].values)
+                reducer = umap.UMAP(
+                    n_components=5, n_neighbors=30, min_dist=0.0,
+                    metric='cosine', n_jobs=-1,
+                )
+                projections = reducer.fit_transform(embeddings)
+                df['umap_x'] = projections[:, 0]
+                df['umap_y'] = projections[:, 1]
+                df['umap_z'] = projections[:, 2]
+            else:
+                df['umap_x'] = 0.0
+                df['umap_y'] = 0.0
+                df['umap_z'] = 0.0
 
         state.df_viz = df
-        print("✨ Data processing complete.")
+        print("Data processing complete.")
 
     except Exception as e:
-        print(f"❌ Error loading data: {e}")
+        print(f"Error loading data: {e}")
         state.df_viz = pd.DataFrame()
 
+
+# ── Lifespan ────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    get_embedding_model() # Preload model
-    load_and_process_data() # Preload data & UMAP
+    get_embedding_model()
+    load_and_process_data()
     yield
-    # Shutdown (if any cleanup needed)
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all for now
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Models ---
 
+# ── Pydantic Models ────────────────────────────────────────────────────────
 class NotePoint(BaseModel):
     unique_key: str
     title: str
@@ -188,201 +200,12 @@ class NotePoint(BaseModel):
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
     cluster_label: str
-    cluster_color: Optional[str] = None
-    dot_color: Optional[str] = None
     umap_x: float
     umap_y: float
     umap_z: float
     creation_date: Optional[Any] = None
     modification_date: Optional[Any] = None
-    # We avoid sending full content or vector to keep payload light, unless requested
 
-
-class ShapedNotePoint(BaseModel):
-    unique_key: str
-    title: str
-    chunk_index: int
-    total_chunks: Optional[int] = None
-    cluster_id: Optional[str] = None
-    base_topic_id: Optional[str] = None
-    display_topic_id: Optional[str] = None
-    cluster_label: str
-    cluster_color: Optional[str] = None
-    dot_color: Optional[str] = None
-    umap_x: float
-    umap_y: float
-    umap_z: float
-    display_x: float
-    display_y: float
-    display_z: float
-    creation_date: Optional[Any] = None
-    modification_date: Optional[Any] = None
-
-
-def compute_shaped_positions(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute display_x/y/z positions for each row by placing points on
-    a Fibonacci sphere around a repulsed cluster centroid in UMAP space.
-    """
-    # Work on a copy and ensure positional integer index for numpy indexing
-    df = df.copy().reset_index(drop=True)
-    cluster_col = 'display_topic_id' if 'display_topic_id' in df.columns else 'cluster_id'
-
-    if df.empty:
-        df['display_x'] = pd.Series(dtype=float)
-        df['display_y'] = pd.Series(dtype=float)
-        df['display_z'] = pd.Series(dtype=float)
-        return df
-
-    # --- Stage 1: UMAP-space centroids per cluster ---
-    # FIX 3: Only compute centroids for valid clusters (exclude -1 and Unclustered)
-    valid_mask = (df[cluster_col] != '-1') & (df[cluster_col] != 'Unclustered')
-    centroids = df[valid_mask].groupby(cluster_col)[['umap_x', 'umap_y', 'umap_z']].mean()
-    if centroids.empty:
-        # fallback: copy UMAP coords to display
-        df['display_x'] = df['umap_x']
-        df['display_y'] = df['umap_y']
-        df['display_z'] = df['umap_z']
-        return df
-
-    # --- Stage 2: Repel cluster centroids so they don't overlap ---
-    centroid_arr = centroids.values.copy()
-    cluster_ids = centroids.index.tolist()
-    K = len(cluster_ids)
-
-    spread = np.ptp(centroid_arr, axis=0).max() if K > 0 else 0.0
-    # Maximum separation: push clusters as far apart as possible
-    MIN_SEP = max(spread * 5.0, 150.0)
-    # Maximum iteration count for centroid repulsion convergence.
-    # Lowered to speed startup; increase if clusters still overlap.
-    REPULSE_ITERS = 400
-
-    for _ in range(REPULSE_ITERS):
-        for i in range(K):
-            for j in range(i + 1, K):
-                delta = centroid_arr[j] - centroid_arr[i]
-                dist = np.linalg.norm(delta) or 1e-9
-                if dist < MIN_SEP:
-                    overlap = (MIN_SEP - dist) * 0.5
-                    direction = delta / dist
-                    centroid_arr[i] -= direction * overlap
-                    centroid_arr[j] += direction * overlap
-
-    # Maximum outward radial nudge from the global centroid to push clusters to the far edges
-    try:
-        global_cent = centroid_arr.mean(axis=0)
-        # Allow server-wide tuning of how far clusters are pushed outward.
-        # This only moves cluster centroids away from the global center; it
-        # does not change per-cluster Fibonacci radii (so shapes/sizes stay).
-        radial_base = 0.8
-        radial_factor = radial_base * CLUSTER_SPREAD_MULTIPLIER
-        for k in range(K):
-            offset = centroid_arr[k] - global_cent
-            centroid_arr[k] = centroid_arr[k] + offset * radial_factor
-    except Exception:
-        pass
-
-    # Map back to dict for fast lookup (string keys)
-    spaced_centroids = {str(cluster_ids[k]): centroid_arr[k] for k in range(K)}
-
-    # --- Stage 3: Fibonacci sphere per cluster ---
-    GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
-
-    # --- FIX 4: Explicit Color Assignment ---
-    # Compute a stable server-side color per cluster from the centroid's
-    # position in the centroid distribution. The frontend can then reuse
-    # this exact color for the cluster and all of its chunks.
-    cluster_color_map: Dict[str, str] = {}
-    global_centroid = centroid_arr.mean(axis=0) if K > 0 else np.zeros(3)
-    for k, cid in enumerate(cluster_ids):
-        centroid = centroid_arr[k]
-        dx = float(centroid[0] - global_centroid[0])
-        dy = float(centroid[1] - global_centroid[1])
-        if not np.isfinite(dx) or not np.isfinite(dy):
-            cluster_color_map[str(cid)] = '#6b7280'
-            continue
-        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
-            cluster_color_map[str(cid)] = 'hsl(210, 75%, 45%)'
-            continue
-        angle = math.degrees(math.atan2(dy, dx)) % 360.0
-        cluster_color_map[str(cid)] = f'hsl({int(round(angle))}, 75%, 45%)'
-    
-    # Initialize color columns with defaults
-    df['cluster_color'] = '#6b7280'
-    df['dot_color'] = '#6b7280'
-
-    display_x = np.zeros(len(df))
-    display_y = np.zeros(len(df))
-    display_z = np.zeros(len(df))
-
-    # Backup original UMAP coords so we don't lose them.
-    df['umap_x_orig'] = df['umap_x']
-    df['umap_y_orig'] = df['umap_y']
-    df['umap_z_orig'] = df['umap_z']
-
-    # --- FIX 5: Full Group Inclusion ---
-    # Place each cluster in one pass using every row in the cached DataFrame.
-    # Explicitly assign color to EVERY row in the group.
-    for cid, group_idx in df.groupby(cluster_col, sort=False).groups.items():
-        indices = list(group_idx)
-        n = len(indices)
-        cid_str = str(cid)
-        
-        # Assign color to EVERY row in this group
-        color = cluster_color_map.get(cid_str, '#6b7280')
-        df.loc[indices, 'cluster_color'] = color
-        df.loc[indices, 'dot_color'] = color
-        
-        # Skip Fibonacci placement for unclustered points
-        if cid_str == '-1' or cid_str == 'Unclustered':
-            display_x[indices] = df.loc[indices, 'umap_x'].values
-            display_y[indices] = df.loc[indices, 'umap_y'].values
-            display_z[indices] = df.loc[indices, 'umap_z'].values
-            continue
-        
-        centroid = spaced_centroids.get(cid_str)
-        if centroid is None:
-            centroid = centroids.loc[cid_str].values if cid_str in centroids.index else np.zeros(3)
-        
-        # Maximum intra-cluster radius for extreme dot spread within each cluster.
-        # Make cluster size scale with number of chunks: small clusters stay small,
-        # larger clusters grow more strongly. Use sqrt and log to provide smooth scaling.
-        RADIUS = max(2.5, math.sqrt(n) * 2.5, math.log1p(max(1, n)) * 2.8)
-        
-        # Sort indices to ensure stable positions
-        indices_sorted = sorted(indices, key=lambda i: (df.at[i, 'chunk_index'], i))
-        
-        for rank, df_idx in enumerate(indices_sorted):
-            y_fib = 1.0 - (rank / max(n - 1, 1)) * 2.0
-            r_fib = math.sqrt(max(0.0, 1.0 - y_fib * y_fib))
-            theta = GOLDEN_ANGLE * rank
-            
-            display_x[df_idx] = centroid[0] + r_fib * math.cos(theta) * RADIUS
-            display_y[df_idx] = centroid[1] + y_fib * RADIUS
-            display_z[df_idx] = centroid[2] + r_fib * math.sin(theta) * RADIUS
-        
-        # Overwrite per-point UMAP positions with the cluster centroid
-        # so that independent UMAP positions are disregarded and all
-        # points are assembled at/around the cluster center.
-        try:
-            idx_arr = np.array(indices_sorted, dtype=int)
-            df.loc[idx_arr, 'umap_x'] = float(centroid[0])
-            df.loc[idx_arr, 'umap_y'] = float(centroid[1])
-            df.loc[idx_arr, 'umap_z'] = float(centroid[2])
-        except Exception:
-            # If anything goes wrong here, continue — we still have display positions.
-            pass
-
-    df['display_x'] = display_x
-    df['display_y'] = display_y
-    df['display_z'] = display_z
-    
-    # Ensure color columns have values (should be filled by now, but add safety fallback)
-    if 'cluster_color' not in df.columns or df['cluster_color'].isna().any():
-        df['cluster_color'] = df['cluster_color'].fillna('#6b7280')
-    if 'dot_color' not in df.columns or df['dot_color'].isna().any():
-        df['dot_color'] = df['dot_color'].fillna('#6b7280')
-    
-    return df
 
 class SearchResult(BaseModel):
     unique_key: str
@@ -395,15 +218,18 @@ class SearchResult(BaseModel):
     display_topic_id: Optional[str] = None
     cluster_label: str
     preview: Optional[str] = None
-    
+
+
 class SearchStats(BaseModel):
     total_chunks: int
     unique_notes: int
-    
+
+
 class SearchResponse(BaseModel):
     results: List[SearchResult]
-    match_ids: List[str] # List of unique_keys that matched
+    match_ids: List[str]
     stats: SearchStats
+
 
 class NoteContent(BaseModel):
     title: str
@@ -436,8 +262,192 @@ class SidebarResponse(BaseModel):
     active_cluster_id: str
     notes: List[SidebarNote]
 
-# --- Endpoints ---
 
+# ── Meta-Cluster & Similarity Models ───────────────────────────────────────
+class MetaChildCluster(BaseModel):
+    cluster_id: str
+    label: str
+    chunk_count: int
+    color: Optional[str] = None
+    centroid: Optional[List[float]] = None
+
+
+class MetaClusterInfo(BaseModel):
+    meta_cluster_id: str
+    label: str
+    child_clusters: List[MetaChildCluster]
+
+
+class SimilarClusterInfo(BaseModel):
+    cluster_id: str
+    label: str
+    similarity: float
+    chunk_count: int
+    color: Optional[str] = None
+
+
+class SimilarClustersResponse(BaseModel):
+    target_cluster_id: str
+    target_label: str
+    similar_clusters: List[SimilarClusterInfo]
+
+
+# ── Meta-Cluster Endpoints ─────────────────────────────────────────────────
+@app.get("/meta_clusters", response_model=List[MetaClusterInfo])
+async def get_meta_clusters():
+    """Return the full hierarchy of meta-clusters with child clusters."""
+    if state.df_viz.empty:
+        return []
+
+    df = state.df_viz
+    if "meta_cluster_id" not in df.columns or "meta_cluster_label" not in df.columns:
+        return []
+
+    meta_centroids_df = _compute_meta_centroids(df)
+    if meta_centroids_df.empty:
+        return []
+
+    centroid_lookup: Dict[str, Dict[str, Any]] = {}
+    for _, row in meta_centroids_df.iterrows():
+        cid = str(row["cluster_id"])
+        centroid_lookup[cid] = {
+            "centroid": row["centroid"],
+            "meta_cluster_id": str(row["meta_cluster_id"]),
+            "chunk_count": int(row["chunk_count"]),
+        }
+
+    # Compute stable color per cluster based on 5D UMAP position
+    all_centroids_arr = np.vstack([v["centroid"] for v in centroid_lookup.values()]) if centroid_lookup else np.zeros((1, 5))
+    global_centroid = all_centroids_arr.mean(axis=0) if len(all_centroids_arr) > 0 else np.zeros(5)
+
+    def _cluster_color(cid: str) -> str:
+        info = centroid_lookup.get(cid)
+        if not info:
+            return "#6b7280"
+        cent = info["centroid"]
+        dx = float(cent[0] - global_centroid[0])
+        dy = float(cent[1] - global_centroid[1])
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            return "#6b7280"
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+            return "hsl(210, 75%, 45%)"
+        angle = math.degrees(math.atan2(dy, dx)) % 360.0
+        return f"hsl({int(round(angle))}, 75%, 45%)"
+
+    # Group by meta_cluster_id
+    meta_groups: Dict[str, Dict[str, Any]] = {}
+    for cid_str in df["display_topic_id"].astype(str).unique():
+        child_df = df[df["display_topic_id"] == cid_str]
+        if child_df.empty:
+            continue
+        mid = str(child_df.iloc[0].get("meta_cluster_id", "unknown"))
+        mlabel = str(child_df.iloc[0].get("meta_cluster_label", f"Meta {mid}"))
+        if mid not in meta_groups:
+            meta_groups[mid] = {"id": mid, "label": mlabel, "children": []}
+        color = _cluster_color(cid_str)
+        centroid_list = None
+        cl_info = centroid_lookup.get(cid_str)
+        if cl_info:
+            centroid_list = cl_info["centroid"].tolist()
+        meta_groups[mid]["children"].append({
+            "cluster_id": cid_str,
+            "label": str(child_df.iloc[0].get("cluster_label", cid_str)),
+            "chunk_count": len(child_df),
+            "color": color,
+            "centroid": centroid_list,
+        })
+
+    for mid in meta_groups:
+        meta_groups[mid]["children"].sort(key=lambda c: -c["chunk_count"])
+
+    result = [
+        MetaClusterInfo(
+            meta_cluster_id=mg["id"],
+            label=mg["label"],
+            child_clusters=[MetaChildCluster(**c) for c in mg["children"]],
+        )
+        for mg in meta_groups.values()
+    ]
+    result.sort(key=lambda m: -sum(c.chunk_count for c in m.child_clusters))
+    return result
+
+
+@app.get("/similar_clusters", response_model=SimilarClustersResponse)
+async def get_similar_clusters(
+    cluster_id: str = Query(..., description="Cluster ID to find similar clusters for"),
+    limit: int = Query(MAX_SIMILAR_RESULTS, ge=1, le=100),
+    min_similarity: float = Query(SIMILARITY_THRESHOLD, ge=0.0, le=1.0),
+):
+    """Return clusters ranked by cosine similarity to the target cluster centroid."""
+    if state.df_viz.empty:
+        raise HTTPException(status_code=503, detail="Data not loaded")
+
+    df = state.df_viz
+    centroid_data = _compute_meta_centroids(df)
+    if centroid_data.empty:
+        raise HTTPException(status_code=503, detail="No cluster centroids available")
+
+    target_row = centroid_data[centroid_data["cluster_id"] == cluster_id]
+    if target_row.empty:
+        base_id = cluster_id.split(".")[0] if "." in cluster_id else cluster_id
+        target_row = centroid_data[centroid_data["cluster_id"] == base_id]
+
+    if target_row.empty:
+        raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
+
+    target_centroid = target_row.iloc[0]["centroid"]
+    target_meta_id = str(target_row.iloc[0]["meta_cluster_id"])
+    child_df = df[df["display_topic_id"] == cluster_id]
+    target_label = str(child_df.iloc[0].get("cluster_label", cluster_id)) if not child_df.empty else cluster_id
+
+    target_norm = np.linalg.norm(target_centroid) or 1e-9
+    target_normalized = target_centroid / target_norm
+
+    candidates = centroid_data[
+        (centroid_data["meta_cluster_id"] == target_meta_id) &
+        (centroid_data["cluster_id"] != cluster_id)
+    ]
+
+    if candidates.empty:
+        return SimilarClustersResponse(
+            target_cluster_id=cluster_id,
+            target_label=target_label,
+            similar_clusters=[],
+        )
+
+    candidate_centroids = np.stack(candidates["centroid"].values)
+    candidate_norms = np.linalg.norm(candidate_centroids, axis=1, keepdims=True)
+    candidate_norms[candidate_norms == 0] = 1.0
+    candidate_normalized = candidate_centroids / candidate_norms
+
+    sims = candidate_normalized @ target_normalized
+    sims_np = np.clip(sims, 0, 1)
+
+    results = []
+    for idx_idx, (_, crow) in enumerate(candidates.iterrows()):
+        sim_val = float(sims_np[idx_idx])
+        if sim_val >= min_similarity:
+            cid_str = str(crow["cluster_id"])
+            cchild_df = df[df["display_topic_id"] == cid_str]
+            clabel = str(cchild_df.iloc[0].get("cluster_label", cid_str)) if not cchild_df.empty else cid_str
+            results.append({
+                "cluster_id": cid_str,
+                "label": clabel,
+                "similarity": round(sim_val, 4),
+                "chunk_count": int(crow["chunk_count"]),
+            })
+
+    results.sort(key=lambda r: -r["similarity"])
+    results = results[:limit]
+
+    return SimilarClustersResponse(
+        target_cluster_id=cluster_id,
+        target_label=target_label,
+        similar_clusters=[SimilarClusterInfo(**r) for r in results],
+    )
+
+
+# ── Original Endpoints ─────────────────────────────────────────────────────
 @app.get("/note_content", response_model=NoteContent)
 async def get_note_content(
     title: str,
@@ -445,31 +455,29 @@ async def get_note_content(
     creation_date: Optional[str] = None,
     modification_date: Optional[str] = None,
 ):
-    """Get full content for a specific chunk"""
+    """Get full content for a specific chunk."""
     if state.df_viz.empty:
         raise HTTPException(status_code=503, detail="Data not loaded")
-    
+
     try:
-        # Filter for the specific chunk
-        # Using string comparison for title to be safe, equality for chunk_index
         mask = (state.df_viz['title'] == title) & (state.df_viz['chunk_index'] == chunk_index)
         if creation_date is not None and 'creation_date' in state.df_viz.columns:
             mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
         if modification_date is not None and 'modification_date' in state.df_viz.columns:
             mask = mask & (state.df_viz['modification_date'].astype(str) == str(modification_date))
         row = state.df_viz[mask]
-        
+
         if row.empty:
             raise HTTPException(status_code=404, detail="Chunk not found")
-            
-        # Get content
+
         content = row.iloc[0].get('chunk_content', '')
         if pd.isna(content) or content == '':
-             content = row.iloc[0].get('text', '')
-             if pd.isna(content): content = ""
-        
+            content = row.iloc[0].get('text', '')
+            if pd.isna(content):
+                content = ""
+
         total = row.iloc[0].get('total_chunks', 1)
-        
+
         return NoteContent(
             title=title,
             chunk_index=chunk_index,
@@ -500,16 +508,11 @@ async def get_cluster_sidebar(active_cluster_id: str):
         working_df[cluster_col] = working_df[cluster_col].astype(str).fillna('-1')
         working_df['title'] = working_df['title'].astype(str)
         working_df['chunk_index'] = working_df['chunk_index'].fillna(0).astype(int)
-        if 'creation_date' not in working_df.columns:
-            working_df['creation_date'] = ''
-        if 'modification_date' not in working_df.columns:
-            working_df['modification_date'] = ''
-        if 'cluster_label' not in working_df.columns:
-            working_df['cluster_label'] = 'Unclustered'
-
-        working_df['creation_date'] = working_df['creation_date'].astype(str).fillna('')
-        working_df['modification_date'] = working_df['modification_date'].astype(str).fillna('')
-        working_df['cluster_label'] = working_df['cluster_label'].astype(str).fillna('Unclustered')
+        for col in ['creation_date', 'modification_date', 'cluster_label']:
+            if col not in working_df.columns:
+                working_df[col] = 'Unclustered' if col == 'cluster_label' else ''
+            else:
+                working_df[col] = working_df[col].astype(str).fillna('Unclustered' if col == 'cluster_label' else '')
 
         active_rows = working_df[working_df[cluster_col] == str(active_cluster_id)].copy()
         if active_rows.empty:
@@ -518,17 +521,10 @@ async def get_cluster_sidebar(active_cluster_id: str):
         note_identity_cols = ['title', 'creation_date', 'modification_date']
         note_keys_df = active_rows[note_identity_cols].drop_duplicates().copy()
         note_keys_df['note_key'] = (
-            note_keys_df['title']
-            + '|||' + note_keys_df['creation_date']
-            + '|||' + note_keys_df['modification_date']
+            note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
         )
 
-        merged = working_df.merge(
-            note_keys_df,
-            on=note_identity_cols,
-            how='inner',
-        )
-
+        merged = working_df.merge(note_keys_df, on=note_identity_cols, how='inner')
         merged = merged.sort_values(['note_key', 'chunk_index'])
 
         notes: List[SidebarNote] = []
@@ -557,25 +553,21 @@ async def get_cluster_sidebar(active_cluster_id: str):
                         chunk_text = ''
                     chunk_text = str(chunk_text)
 
-                chunks.append(
-                    SidebarChunk(
-                        chunk_index=chunk_index_val,
-                        cluster_id=chunk_cluster_id,
-                        cluster_name=str(row.get('cluster_label', 'Unclustered')),
-                        in_cluster=in_cluster,
-                        text=chunk_text,
-                    )
-                )
+                chunks.append(SidebarChunk(
+                    chunk_index=chunk_index_val,
+                    cluster_id=chunk_cluster_id,
+                    cluster_name=str(row.get('cluster_label', 'Unclustered')),
+                    in_cluster=in_cluster,
+                    text=chunk_text,
+                ))
 
-            notes.append(
-                SidebarNote(
-                    note_key=str(note_key),
-                    title=title,
-                    creation_date=creation_date,
-                    modification_date=modification_date,
-                    chunks=chunks,
-                )
-            )
+            notes.append(SidebarNote(
+                note_key=str(note_key),
+                title=title,
+                creation_date=creation_date,
+                modification_date=modification_date,
+                chunks=chunks,
+            ))
 
         return SidebarResponse(active_cluster_id=active_cluster_id, notes=notes)
     except HTTPException:
@@ -584,98 +576,53 @@ async def get_cluster_sidebar(active_cluster_id: str):
         print(f"Error building cluster sidebar: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/points", response_model=List[NotePoint])
 async def get_points():
-    """Get all points for visualization"""
+    """Get all points for visualization."""
     if state.df_viz.empty:
         return []
-    
-    # Convert dataframe to list of dicts efficiently
-    # We replicate the cleaning logic from the model definition
-    # Replace NaNs to avoid JSON errors
-    valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
-
-    points_df = valid_df.copy()
-    points_df['cluster_id'] = points_df['display_topic_id']
-
-    records = points_df[[
-        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
-        'display_topic_id', 'cluster_label', 'cluster_color', 'dot_color', 'umap_x', 'umap_y', 'umap_z', 'creation_date',
-        'modification_date'
-    ]].to_dict(orient='records')
-    
-    return records
-
-
-@app.get("/points_shaped", response_model=List[ShapedNotePoint])
-async def get_points_shaped():
-    """
-    Get all points with server-computed Fibonacci sphere positions.
-    display_x/y/z replace raw umap_x/y/z for visualization.
-    Raw UMAP coordinates are still included for reference.
-    """
-    if state.df_viz.empty:
-        return []
-
-    required_cols = ['display_x', 'display_y', 'display_z']
-    if not all(c in state.df_viz.columns for c in required_cols):
-        raise HTTPException(
-            status_code=503,
-            detail="Shaped positions not yet computed. Data may still be loading."
-        )
 
     valid_df = state.df_viz.where(pd.notnull(state.df_viz), None)
     points_df = valid_df.copy()
     points_df['cluster_id'] = points_df['display_topic_id']
 
     records = points_df[[
-        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id', 'base_topic_id',
-        'display_topic_id', 'cluster_label',
-        'cluster_color', 'dot_color',
-        'umap_x', 'umap_y', 'umap_z',
-        'display_x', 'display_y', 'display_z',
-        'creation_date', 'modification_date'
+        'unique_key', 'title', 'chunk_index', 'total_chunks', 'cluster_id',
+        'base_topic_id', 'display_topic_id', 'cluster_label',
+        'umap_x', 'umap_y', 'umap_z', 'creation_date', 'modification_date'
     ]].to_dict(orient='records')
 
-    print(f"/points_shaped returning {len(records)} records")
-    if len(records) > 0:
-        print(f" sample record keys: {list(records[0].keys())}")
     return records
+
 
 @app.get("/search", response_model=SearchResponse)
 async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_distance: float = 0.8):
-    """Search notes and return matches + IDs"""
+    """Search notes and return matches + IDs."""
     if state.table is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
 
-    print(f"🔍 Searching for: {q} (threshold: {max_distance})")
-    
-    # helper for search_and_combine_results
+    print(f"Searching for: {q} (threshold: {max_distance})")
+
     embedding_fn = lambda query: get_query_embedding(query)
-    
+
     try:
         results = search_and_combine_results(
-            state.table, 
-            q, 
-            display_limit=limit, 
-            max_distance=max_distance,
-            compute_query_embedding=embedding_fn
+            state.table, q, display_limit=limit,
+            max_distance=max_distance, compute_query_embedding=embedding_fn,
         )
     except Exception as e:
-         print(f"Search error: {e}")
-         raise HTTPException(status_code=500, detail=str(e))
+        print(f"Search error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     formatted_results = []
     match_ids = []
-    
-    # We need to look up cluster labels from our cached dataframe since search results might comes raw from DB
-    # We can create a lookup map
+
     cluster_map = {}
     cluster_id_map = {}
     base_topic_id_map = {}
     display_topic_id_map = {}
     if not state.df_viz.empty:
-        # unique_key -> cluster_label
         cluster_map = state.df_viz.set_index('unique_key')['cluster_label'].to_dict()
         cluster_id_map = state.df_viz.set_index('unique_key')['cluster_id'].to_dict()
         if 'base_topic_id' in state.df_viz.columns:
@@ -689,45 +636,34 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
         total = r.get('_total_chunks', r.get('total_chunks'))
         score = r.get('_relevance_score', 0)
         preview = r.get('_matching_chunk_preview', '') or r.get('chunk_content', '')[:200]
-        
+
         unique_key = f"{title}_{idx}"
-        
-        # Lookup cluster
+
         cluster = cluster_map.get(unique_key, "Unknown")
         base_topic_id = str(base_topic_id_map.get(unique_key, cluster_id_map.get(unique_key, "-1")))
         display_topic_id = str(display_topic_id_map.get(unique_key, base_topic_id))
-        
+
         res_obj = SearchResult(
-            unique_key=unique_key,
-            title=title,
-            chunk_index=idx,
-            total_chunks=total,
-            distance=score,
-            cluster_id=display_topic_id,
-            base_topic_id=base_topic_id,
-            display_topic_id=display_topic_id,
-            cluster_label=cluster,
-            preview=preview
+            unique_key=unique_key, title=title, chunk_index=idx,
+            total_chunks=total, distance=score,
+            cluster_id=display_topic_id, base_topic_id=base_topic_id,
+            display_topic_id=display_topic_id, cluster_label=cluster, preview=preview,
         )
         formatted_results.append(res_obj)
         match_ids.append(unique_key)
-        
+
     unique_titles_found = set(r.title for r in formatted_results)
-    
-    # Print top results to console for debugging
-    print(f"✅ Found {len(formatted_results)} matching chunks across {len(unique_titles_found)} notes.")
+
+    print(f"Found {len(formatted_results)} matching chunks across {len(unique_titles_found)} notes.")
     for i, res in enumerate(formatted_results):
         cid = res.cluster_id if res.cluster_id and res.cluster_id != '-1' else res.cluster_label
-        print(f"   {i+1}. {res.title} (Chunk {res.chunk_index + 1} of {res.total_chunks or '?'}) [Score: {res.distance:.3f}, Cluster: {cid}]")
+        print(f"  {i+1}. {res.title} (Chunk {res.chunk_index + 1} of {res.total_chunks or '?'}) [Score: {res.distance:.3f}, Cluster: {cid}]")
 
     return SearchResponse(
-        results=formatted_results,
-        match_ids=match_ids,
-        stats=SearchStats(
-            total_chunks=len(formatted_results),
-            unique_notes=len(unique_titles_found)
-        )
+        results=formatted_results, match_ids=match_ids,
+        stats=SearchStats(total_chunks=len(formatted_results), unique_notes=len(unique_titles_found)),
     )
+
 
 @app.get("/health")
 async def health():
@@ -736,19 +672,16 @@ async def health():
 
 @app.get("/debug_state")
 async def debug_state():
-    """Return internal debug info: loaded rows, columns, and a small sample."""
+    """Return internal debug info."""
     try:
         loaded = 0 if state.df_viz is None or state.df_viz.empty else len(state.df_viz)
         cols = [] if state.df_viz is None or state.df_viz.empty else list(state.df_viz.columns)
         sample = [] if state.df_viz is None or state.df_viz.empty else state.df_viz.head(5).to_dict(orient='records')
         return {
-            'loaded_rows': loaded,
-            'columns': cols,
-            'sample_count': len(sample),
-            'sample': sample,
+            'loaded_rows': loaded, 'columns': cols,
+            'sample_count': len(sample), 'sample': sample,
             'table_present': state.table is not None,
-            'db_path': str(DB_PATH),
-            'table_name': TABLE_NAME,
+            'db_path': str(DB_PATH), 'table_name': TABLE_NAME,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -756,136 +689,121 @@ async def debug_state():
 
 @app.post("/reload_data")
 async def reload_data():
-    """Force reload data from LanceDB and recompute UMAP/projections.
-    Useful after running clustering scripts so the API reflects DB updates.
-    """
+    """Force reload data from LanceDB and recompute projections."""
     try:
         load_and_process_data()
         return {"reloaded": True, "loaded_rows": len(state.df_viz)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============================================================================
-# Interaction Tracking Endpoints
-# ============================================================================
+
+# ── Interaction Tracking Endpoints ─────────────────────────────────────────
 class InteractionRequest(BaseModel):
     title: str
     event_type: str
+
 
 class InteractionResponse(BaseModel):
     success: bool
     message: str
     last_opened: Optional[str] = None
 
+
 class InteractionLogResponse(BaseModel):
     title: str
     last_opened: Optional[str]
     interaction_log: List[Dict[str, str]]
 
+
 @app.post("/interaction/log")
 async def log_interaction(request: InteractionRequest):
-    """Log an interaction event for a note (opened/modified)"""
+    """Log an interaction event for a note (opened/modified)."""
     try:
         if request.event_type not in ["opened", "modified"]:
             raise HTTPException(status_code=400, detail="event_type must be 'opened' or 'modified'")
-        
+
         db = NotesDatabase(db_path=DB_PATH)
         notes_table = db.get_or_create_table()
-        
+
         chunks = notes_table.to_pandas()
         note_titles = chunks[chunks['title'] == request.title]['title'].tolist()
-        
+
         if not note_titles:
             return InteractionResponse(
-                success=False,
-                message=f"Note '{request.title}' not found in database"
+                success=False, message=f"Note '{request.title}' not found in database"
             )
-        
+
         if request.event_type == "opened":
             db.log_note_opened(request.title)
         else:
             db.log_note_modified(request.title)
-        
+
         last_opened = db.get_last_opened(request.title)
-        
+
         return InteractionResponse(
             success=True,
             message=f"Successfully logged {request.event_type} event for '{request.title}'",
-            last_opened=last_opened
+            last_opened=last_opened,
         )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to log interaction: {str(e)}")
 
+
 @app.get("/interaction/{title}")
 async def get_interaction(title: str):
-    """Get interaction data for a specific note"""
+    """Get interaction data for a specific note."""
     try:
         db = NotesDatabase(db_path=DB_PATH)
-        
         last_opened = db.get_last_opened(title)
         interaction_log = db.get_interaction_log(title)
-        
         if interaction_log is None:
             interaction_log = []
-        
+
         return InteractionLogResponse(
-            title=title,
-            last_opened=last_opened,
-            interaction_log=interaction_log
+            title=title, last_opened=last_opened, interaction_log=interaction_log,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get interaction data: {str(e)}")
 
+
 @app.get("/interactions/list")
 async def list_interactions(limit: Optional[int] = None):
-    """Get a list of all notes with their last_opened timestamps. Default is no limit."""
+    """Get a list of all notes with their last_opened timestamps."""
     try:
         db = NotesDatabase(db_path=DB_PATH)
-        # Passing None to the DB method typically fetches all records
         interactions = db.list_all_interactions(limit=limit)
-        
-        return {
-            "interactions": interactions,
-            "count": len(interactions)
-        }
+        return {"interactions": interactions, "count": len(interactions)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list interactions: {str(e)}")
 
-# ============================================================================
-# Daily History Endpoints
-# ============================================================================
 
+# ── Daily History Endpoints ────────────────────────────────────────────────
 class DayResponse(BaseModel):
     date: str
-    titles: List[str]  # Distinct note titles opened on this date
-    notes: List[Dict[str, Any]]  # Full note metadata for those titles
+    titles: List[str]
+    notes: List[Dict[str, Any]]
 
 
 def _parse_interaction_events(raw_log: Any) -> List[Dict[str, Any]]:
     if raw_log is None:
         return []
-
     try:
         events = json.loads(raw_log) if isinstance(raw_log, str) else raw_log
     except Exception:
         return []
-
     if isinstance(events, dict):
         events = [events]
-
     return events if isinstance(events, list) else []
 
 
 def _event_date(dt_str: Any) -> Optional[str]:
     if not dt_str:
         return None
-
     dt_value = str(dt_str)
     if len(dt_value) < 10:
         return None
-
     date_only = dt_value[:10]
     if re.match(r'^\d{4}-\d{2}-\d{2}$', date_only):
         return date_only
@@ -901,10 +819,7 @@ def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:
         return history_by_title
 
     interactions_df = interactions_table.to_pandas()
-    if interactions_df.empty:
-        return history_by_title
-
-    if "interaction_log" not in interactions_df.columns:
+    if interactions_df.empty or "interaction_log" not in interactions_df.columns:
         return history_by_title
 
     for _, row in interactions_df.iterrows():
@@ -916,14 +831,16 @@ def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:
         if not events:
             continue
 
-        matching_timestamps = [str(ev.get("dt", "")) for ev in events if _event_date(ev.get("dt")) == date_str]
+        matching_timestamps = [
+            str(ev.get("dt", "")) for ev in events
+            if _event_date(ev.get("dt")) == date_str
+        ]
         if not matching_timestamps:
             continue
 
         matching_timestamps.sort()
         title_info = history_by_title.setdefault(
-            title,
-            {
+            title, {
                 "title": title,
                 "opened_at": matching_timestamps[0],
                 "last_opened_at": matching_timestamps[-1],
@@ -958,22 +875,14 @@ async def get_history_dates():
                     dates_set.add(date_only)
 
         return {"dates": sorted(list(dates_set))}
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch dates: {str(e)}")
 
 
 @app.get("/history/day/{date_str}")
 async def get_history_for_day(date_str: str):
-    """Get all distinct note titles and their full metadata opened on a given date.
-
-    date_str format: YYYY-MM-DD
-    Returns:
-      - titles: list of distinct note titles open that day
-      - notes: full note metadata from the main notes table for those titles
-    """
+    """Get all distinct note titles and their full metadata opened on a given date."""
     try:
-        # Validate date format
         if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
@@ -983,7 +892,7 @@ async def get_history_for_day(date_str: str):
         if not active_titles:
             return {"date": date_str, "titles": [], "notes": []}
 
-        print(f"📅 Found {len(active_titles)} titles for {date_str}")
+        print(f"Found {len(active_titles)} titles for {date_str}")
 
         if state.df_viz.empty:
             load_and_process_data()
@@ -991,39 +900,24 @@ async def get_history_for_day(date_str: str):
         if not state.df_viz.empty:
             working_df = state.df_viz.copy()
             working_df['title'] = working_df['title'].astype(str)
-            if 'creation_date' not in working_df.columns:
-                working_df['creation_date'] = ''
-            if 'modification_date' not in working_df.columns:
-                working_df['modification_date'] = ''
-            if 'cluster_label' not in working_df.columns:
-                working_df['cluster_label'] = 'Unclustered'
-            if 'cluster_id' not in working_df.columns:
-                working_df['cluster_id'] = '-1'
-            if 'display_topic_id' not in working_df.columns:
-                working_df['display_topic_id'] = working_df['cluster_id']
-
-            working_df['creation_date'] = working_df['creation_date'].astype(str).fillna('')
-            working_df['modification_date'] = working_df['modification_date'].astype(str).fillna('')
-            working_df['cluster_label'] = working_df['cluster_label'].astype(str).fillna('Unclustered')
-            working_df['cluster_id'] = working_df['cluster_id'].astype(str).fillna('-1')
-            working_df['display_topic_id'] = working_df['display_topic_id'].astype(str).fillna('-1')
+            for col in ['creation_date', 'modification_date', 'cluster_label', 'cluster_id', 'display_topic_id']:
+                if col not in working_df.columns:
+                    working_df[col] = 'Unclustered' if col == 'cluster_label' else '-1'
+                else:
+                    working_df[col] = working_df[col].astype(str).fillna(
+                        'Unclustered' if col == 'cluster_label' else '-1'
+                    )
 
             notes_df = working_df[working_df['title'].isin(active_titles)].copy()
             note_identity_cols = ['title', 'creation_date', 'modification_date']
             note_keys_df = notes_df[note_identity_cols].drop_duplicates().copy()
             note_keys_df['note_key'] = (
-                note_keys_df['title']
-                + '|||' + note_keys_df['creation_date']
-                + '|||' + note_keys_df['modification_date']
+                note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
             )
 
-            merged = working_df.merge(
-                note_keys_df,
-                on=note_identity_cols,
-                how='inner',
-            )
-
+            merged = working_df.merge(note_keys_df, on=note_identity_cols, how='inner')
             merged = merged.sort_values(['note_key', 'chunk_index'])
+
             notes_list = []
             for note_key, group in merged.groupby('note_key', sort=False):
                 title = str(group.iloc[0].get('title', ''))
@@ -1034,12 +928,12 @@ async def get_history_for_day(date_str: str):
                 cluster_counts: Dict[str, int] = {}
                 cluster_first_seen: Dict[str, int] = {}
                 for position, (_, row) in enumerate(group.iterrows()):
-                    cluster_key = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
-                    if not cluster_key or cluster_key == 'nan':
-                        cluster_key = '-1'
-                    cluster_counts[cluster_key] = cluster_counts.get(cluster_key, 0) + 1
-                    if cluster_key not in cluster_first_seen:
-                        cluster_first_seen[cluster_key] = position
+                    ck = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
+                    if not ck or ck == 'nan':
+                        ck = '-1'
+                    cluster_counts[ck] = cluster_counts.get(ck, 0) + 1
+                    if ck not in cluster_first_seen:
+                        cluster_first_seen[ck] = position
 
                 primary_cluster_id = '-1'
                 if cluster_counts:
@@ -1062,15 +956,15 @@ async def get_history_for_day(date_str: str):
                     if pd.isna(chunk_text):
                         chunk_text = ''
 
-                    chunk_cluster_id = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
-                    if not chunk_cluster_id or chunk_cluster_id == 'nan':
-                        chunk_cluster_id = '-1'
+                    ckid = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
+                    if not ckid or ckid == 'nan':
+                        ckid = '-1'
 
                     chunks.append({
                         "chunk_index": chunk_index_val,
-                        "cluster_id": chunk_cluster_id,
+                        "cluster_id": ckid,
                         "cluster_name": str(row.get('cluster_label', 'Unclustered')),
-                        "in_cluster": chunk_cluster_id == primary_cluster_id,
+                        "in_cluster": ckid == primary_cluster_id,
                         "text": str(chunk_text),
                     })
 
