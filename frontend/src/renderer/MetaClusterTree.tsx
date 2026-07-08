@@ -145,25 +145,22 @@ const TreeNode: React.FC<TreeNodeProps> = ({
       {currentlyExpanded && filteredChildren.map((child) => {
         const isSelected = selectedClusterId === child.cluster_id;
         const dotColor = child.color || clusterColors?.[child.cluster_id] || '#6b7280';
-        const rowBg = isSelected
-          ? '#3b82f6'
-          : hexToRgba(dotColor, 0.12);
 
-        return (
-          <div
-            key={child.cluster_id}
-            onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              cursor: 'pointer',
-              padding: '3px 6px',
-              borderRadius: 4,
-              fontSize: 11,
-              color: isSelected ? '#fff' : '#374151',
-              background: rowBg,
-              marginLeft: 18,
-            }}
+         return (
+           <div
+             key={child.cluster_id}
+             onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
+             style={{
+               display: 'flex',
+               alignItems: 'center',
+               cursor: 'pointer',
+               padding: '3px 6px',
+               borderRadius: 4,
+               fontSize: 11,
+               color: isSelected ? '#fff' : '#374151',
+               background: isSelected ? '#3b82f6' : 'transparent',
+               marginLeft: 18,
+              }}
           >
             <span
               style={{
@@ -247,16 +244,20 @@ export const MetaClusterTree: React.FC<Props> = ({
     });
   }, []);
 
-  // Expand the meta-cluster containing a selected child
-  useEffect(() => {
-    if (!selectedClusterId || metaData.length === 0) return;
-    const target = metaData.find((m) =>
-      m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
-    );
-    if (target && !expandedMetaIds.has(target.meta_cluster_id)) {
-      setExpandedMetaIds(new Set([target.meta_cluster_id]));
-    }
-  }, [selectedClusterId, metaData, expandedMetaIds]);
+   // Expand the meta-cluster containing a selected child
+   useEffect(() => {
+     if (!selectedClusterId || metaData.length === 0) return;
+     const target = metaData.find((m) =>
+       m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
+      );
+     if (!target) return;
+     setExpandedMetaIds((prev) => {
+       if (prev.has(target.meta_cluster_id)) return prev; // no change → no re-render
+       const next = new Set(prev);
+       next.add(target.meta_cluster_id);          // add, don't replace
+       return next;
+      });
+    }, [selectedClusterId, metaData]); // ← expandedMetaIds removed
 
   const handleExpandAll = useCallback(() => {
     setExpandedMetaIds(new Set(metaData.map((m) => m.meta_cluster_id)));
