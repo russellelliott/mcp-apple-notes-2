@@ -263,13 +263,11 @@ export const RadialSimilarityHub: React.FC<Props> = ({
         onClick={() => {}} // center doesn't promote, it's the anchor
         style={{ cursor: 'default' }}
          >
-            <circle
-           cx={cx}
-           cy={cy}
-           r={CENTER_NODE_RADIUS}
-           fill={centerNodeColor}
-           stroke="#3b82f6"
-           strokeWidth={3}
+             <circle
+            cx={cx}
+            cy={cy}
+            r={CENTER_NODE_RADIUS}
+            fill={centerNodeColor}
             />
             {/* Truncated center label that fits within available width */}
             <text

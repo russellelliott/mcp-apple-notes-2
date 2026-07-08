@@ -2240,6 +2240,12 @@ export default function NoteClusters() {
     });
   }, [historySidebarNotes]);
 
+  // Resolve authoritative cluster color from the API for header accent
+  const modalClusterKey = selectedNode?.display_topic_id || selectedNode?.cluster_id || '';
+  const modalApiColor = modalClusterKey
+    ? (clusterColorsFromAPI[modalClusterKey] || selectedNode.cluster_color || selectedNode.dot_color || null)
+    : null;
+
   const modalRailChunks = useMemo(() => {
     if (!selectedNode) return [] as SidebarChunkData[];
 
@@ -2312,8 +2318,8 @@ export default function NoteClusters() {
           {/* Left column: Notes list */}
           <div
             style={{
-              width: '35%',
-              minWidth: '280px',
+              width: '26%',
+              minWidth: '240px',
               flexShrink: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -2362,13 +2368,13 @@ export default function NoteClusters() {
               >
                 <ArrowForwardIcon style={{ transform: 'rotate(180deg)' }} />
               </button>
-               {/* Day header hidden for now — will be dealt with later */}
-               <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
-                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px' }}>Day</div>
-                <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {selectedHistoryDate || 'No history dates'}
-                </div>
-              </div>
+                {/* Day header hidden for now — will be dealt with later */}
+                <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
+                 <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px', display: 'none' }}>Day</div>
+                 <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'none' }}>
+                   {selectedHistoryDate || 'No history dates'}
+                 </div>
+               </div>
               <button
                 type="button"
                 onClick={() => {
@@ -2588,18 +2594,20 @@ export default function NoteClusters() {
                             const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
 
                             if (isActiveChunk) {
-                              // Show dot chunk - only if we have a selection, or show all if no selection
+                               // Show dot chunk - only if we have a selection, or show all if no selection
                               if (selectedClusters.size > 0) {
                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                 // Resolve cluster color from API to match right column
+                                const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
+                                const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                                 rows.push(
                                   <button
                                     type="button"
                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
                                     style={{
-                                      border: `1px solid ${chunkClusterColor}`,
+                                      border: `1px solid ${resolvedColor}`,
                                       background: lightenedColor,
                                       borderRadius: '6px',
                                       padding: '6px 8px',
@@ -2618,18 +2626,20 @@ export default function NoteClusters() {
                                     {preview.length > 180 ? '...' : ''}
                                   </button>,
                                 );
-                              } else {
-                                // No selection - show all chunks
+                               } else {
+                                 // No selection - show all chunks
                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                                 // Resolve cluster color from API to match right column
+                                const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
+                                const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
+                                const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                                 rows.push(
                                   <button
                                     type="button"
                                     key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
                                     onClick={() => openSidebarNote(note, chunk.chunk_index)}
                                     style={{
-                                      border: `1px solid ${chunkClusterColor}`,
+                                      border: `1px solid ${resolvedColor}`,
                                       background: lightenedColor,
                                       borderRadius: '6px',
                                       padding: '6px 8px',
@@ -2697,6 +2707,9 @@ export default function NoteClusters() {
                 const preview = (result.preview || '').trim();
                 const isHovered = hoveredId === result.unique_key;
                 const pointMatch = data.find((d) => d.unique_key === result.unique_key);
+                // Use API colors for search snippet backgrounds in the left column
+                const apiColor = clusterColorsFromAPI[resultClusterKey];
+                const apiTint = apiColor ? mixColorWithWhite(apiColor, 0.82) : undefined;
                 return (
                   <div
                     key={result.unique_key}
@@ -2724,7 +2737,7 @@ export default function NoteClusters() {
                       padding: '12px',
                       marginBottom: '8px',
                       borderRadius: '6px',
-                      backgroundColor: clusterTints[resultClusterKey] || 'white',
+                      backgroundColor: apiTint || clusterTints[resultClusterKey] || 'white',
                       border: '1px solid #eee',
                       cursor: 'pointer',
                       transition: 'transform 0.15s ease, box-shadow 0.15s ease',
@@ -2861,17 +2874,19 @@ export default function NoteClusters() {
                       let i = 0;
                       while (i < note.chunks.length) {
                         const chunk = note.chunks[i];
-                        if (chunk.in_cluster) {
-                          const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                          const chunkClusterColor = clusterColors[chunk.cluster_id] || '#f3f4f6';
-                          const lightenedColor = new THREE.Color(chunkClusterColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                         if (chunk.in_cluster) {
+                           const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                           // Resolve cluster color from the API so it matches the right column
+                           const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
+                           const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
+                           const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                           rows.push(
                             <button
                               type="button"
                               key={`snippet-${note.note_key}-${chunk.chunk_index}`}
                               onClick={() => openSidebarNote(note, chunk.chunk_index)}
                               style={{
-                                border: `1px solid ${chunkClusterColor}`,
+                                border: `1px solid ${resolvedColor}`,
                                 background: lightenedColor,
                                 borderRadius: '6px',
                                 padding: '6px 8px',
@@ -2942,13 +2957,13 @@ export default function NoteClusters() {
                  setSelectedClusters(new Set([clusterId]));
                  try { focusClusterByOrbit(clusterId); } catch (_) { }
                 }}
-               clusterColors={clusterColors}
+               clusterColors={clusterColorsFromAPI}
                 />
               </div>
 
               {/* Right column: MetaClusterTree */}
               <div style={{
-             width: '280px',
+             width: '36%',
              flexShrink: 0,
              display: 'flex',
              flexDirection: 'column',
@@ -3001,10 +3016,10 @@ export default function NoteClusters() {
                   overflow: 'hidden',
                   pointerEvents: 'auto',
                 }}
-                onClick={(e) => e.stopPropagation()}
-               >
-                 {/* Close button (X) in upper right */}
-                 <button
+                 onClick={(e) => e.stopPropagation()}
+                 >
+                   {/* Close button (X) in upper right */}
+                  <button
                   type="button"
                   onClick={closePopup}
                   style={{
@@ -3031,28 +3046,41 @@ export default function NoteClusters() {
                   title="Close"
                  >
                    ×
-                 </button>
+                </button>
 
                   {/* Header with cluster color accent */}
                   <div style={{
-                   padding: '16px 16px 12px 16px',
-                   borderBottom: '1px solid #e5e7eb',
-                   backgroundColor: selectedNode.cluster_color
-                      ? mixColorWithWhite(selectedNode.cluster_color, 0.85)
-                      : '#f9fafb',
+                    padding: '16px 16px 12px 16px',
+                   borderBottom: `1px solid ${modalApiColor ? mixColorWithWhite(modalApiColor, 0.85) : '#e5e7eb'}`,
+                   backgroundColor: modalApiColor
+                        ? mixColorWithWhite(modalApiColor, 0.88)
+                        : '#f9fafb',
                   }}>
-                    <div style={{
-                     fontWeight: 700,
-                     fontSize: '15px',
-                     color: '#111827',
-                     marginBottom: '4px',
-                     overflow: 'hidden',
-                     textOverflow: 'ellipsis',
-                     whiteSpace: 'nowrap',
-                    }}>
-                      {selectedNode.title}
-                    </div>
-                    <div style={{
+                      <div style={{
+                        fontWeight: 700,
+                        fontSize: '15px',
+                        color: '#111827',
+                        marginBottom: '4px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {selectedNode.title}
+                      </div>
+
+                      {/* Thin colored accent bar at top of header */}
+                      {modalApiColor && (
+                        <div style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: '3px',
+                          backgroundColor: modalApiColor,
+                        }} />
+                      )}
+
+                      <div style={{
                      fontSize: '12px',
                      color: '#6b7280',
                      display: 'flex',
