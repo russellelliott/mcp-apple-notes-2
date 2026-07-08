@@ -3059,21 +3059,20 @@ export default function NoteClusters() {
                        currentChunkIndex={selectedNode.chunk_index}
                        getClusterColor={(clusterId) => clusterColors[clusterId] || '#6b7280'}
                       onActiveDotClick={(chunk) => handleModalChunkJump(chunk.chunk_index)}
-                       onInactiveDashClick={(chunk) => {
-                         // Clicking a dash: select that cluster, navigate to its chunk
-                         const chunkIdx = Number(chunk.cluster_id);
-                         setSelectedClusters(new Set([String(chunkIdx)]));
-                         fetchNoteContent(
-                           selectedNode.title,
-                           chunkIdx,
-                           selectedNode.cluster_id,
-                           selectedNode.cluster_label,
-                           String(chunkIdx),
-                           selectedNode.base_topic_id,
-                           selectedNode.creation_date,
-                           selectedNode.modification_date,
-                         );
-                       }}
+                        onInactiveDashClick={(chunk) => {
+                           // Clicking a dash: select that cluster, navigate to the chunk
+                          setSelectedClusters(new Set([chunk.cluster_id]));
+                          fetchNoteContent(
+                            selectedNode.title,
+                            chunk.chunk_index,
+                            selectedNode.cluster_id,
+                            selectedNode.cluster_label,
+                            chunk.cluster_id,
+                            selectedNode.base_topic_id,
+                            selectedNode.creation_date,
+                            selectedNode.modification_date,
+                           );
+                         }}
                       />
                     )}
                   </div>
