@@ -474,16 +474,24 @@ export default function NoteClusters() {
       const display_topic_id = response.data?.display_topic_id || initialDisplayTopicId;
       const base_topic_id = response.data?.base_topic_id || initialBaseTopicId;
 
-      setSelectedNode({
-        ...response.data,
-        cluster_id,
-        display_topic_id,
-        base_topic_id,
-        cluster_label,
-        creation_date: creationDate,
-        modification_date: modificationDate,
-        unique_key: newUniqueKey,
-      });
+       // Compute cluster_color from the resolved display_topic_id / cluster_id
+       const resolvedClusterKey = display_topic_id || cluster_id || '-1';
+       const computedClusterColor = clusterColors[resolvedClusterKey]
+         || response.data?.dot_color
+         || response.data?.cluster_color
+         || null;
+
+       setSelectedNode({
+          ...response.data,
+         cluster_id,
+         display_topic_id,
+         base_topic_id,
+         cluster_label,
+         cluster_color: computedClusterColor,
+         creation_date: creationDate,
+         modification_date: modificationDate,
+         unique_key: newUniqueKey,
+        });
       // Cache the authoritative cluster info from backend for this unique_key
       const cacheClusId = display_topic_id || cluster_id || '-1';
       const color = response.data?.dot_color || response.data?.cluster_color;
@@ -2295,20 +2303,20 @@ export default function NoteClusters() {
           >
             {/* removed Peak Recency / Momentum UI as requested */}
 
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '8px',
-                marginBottom: '10px',
-                padding: '8px 10px',
-                borderRadius: '8px',
-                border: '1px solid #e5e7eb',
-                background: '#fff',
-              }}
-            >
-              <button
+              <div
+               style={{
+                 display: 'none',
+                 alignItems: 'center',
+                 justifyContent: 'space-between',
+                 gap: '8px',
+                 marginBottom: '10px',
+                 padding: '8px 10px',
+                 borderRadius: '8px',
+                 border: '1px solid #e5e7eb',
+                 background: '#fff',
+               }}
+             >
+               <button
                 type="button"
                 onClick={() => {
                   if (!canGoBackHistory) return;
@@ -2891,7 +2899,29 @@ export default function NoteClusters() {
           </div>
 
 
-          <div style={{
+           {/* Center column: RadialSimilarityHub */}
+           <div style={{
+            width: '420px',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid #e0e0e0',
+            backgroundColor: '#f9f9f9',
+            padding: '10px',
+            boxSizing: 'border-box',
+           }}>
+             <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
+             <RadialSimilarityHub
+              selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
+              onNodeClick={(clusterId) => {
+                setSelectedClusters(new Set([clusterId]));
+                try { focusClusterByOrbit(clusterId); } catch (_) { }
+              }}
+             />
+           </div>
+
+           {/* Right column: MetaClusterTree */}
+           <div style={{
             width: '400px',
             flexShrink: 0,
             display: 'flex',
@@ -2902,18 +2932,192 @@ export default function NoteClusters() {
             boxSizing: 'border-box',
             fontSize: '11px',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-          }}>
-            <MetaClusterTree
+           }}>
+             <MetaClusterTree
               onClusterSelect={(clusterId) => {
                 setSelectedClusters(new Set([clusterId]));
                 try { focusClusterByOrbit(clusterId); } catch (_) { }
               }}
               selectedClusterId={selectedClusters.size === 1 ? Array.from(selectedClusters)[0] : null}
               sortMetric={clusterSortMetric}
-            />
-          </div>
+             />
+           </div>
 
-        </div>
+           {/* Modal Popup for Note Content */}
+           {selectedNode && (
+             <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999,
+                pointerEvents: 'auto',
+              }}
+              onClick={closePopup}
+             >
+               <div
+                style={{
+                  position: 'relative',
+                  width: 'min(520px, 90vw)',
+                  maxHeight: '80vh',
+                  backgroundColor: '#fff',
+                  borderRadius: '12px',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  pointerEvents: 'auto',
+                }}
+                onClick={(e) => e.stopPropagation()}
+               >
+                 {/* Close button (X) in upper right */}
+                 <button
+                  type="button"
+                  onClick={closePopup}
+                  style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: '#6b7280',
+                    fontSize: '18px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    zIndex: 10,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f3f4f6'; e.currentTarget.style.color = '#111827'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
+                  title="Close"
+                 >
+                   ×
+                 </button>
+
+                 {/* Header with cluster color accent */}
+                 <div style={{
+                   padding: '16px 16px 12px 16px',
+                   borderBottom: '1px solid #e5e7eb',
+                   backgroundColor: selectedNode.cluster_color
+                     ? mixColorWithWhite(selectedNode.cluster_color, 0.85)
+                     : '#f9fafb',
+                 }}>
+                   <div style={{
+                     fontWeight: 700,
+                     fontSize: '15px',
+                     color: '#111827',
+                     marginBottom: '4px',
+                     overflow: 'hidden',
+                     textOverflow: 'ellipsis',
+                     whiteSpace: 'nowrap',
+                   }}>
+                     {selectedNode.title}
+                   </div>
+                   <div style={{
+                     fontSize: '12px',
+                     color: '#6b7280',
+                     display: 'flex',
+                     alignItems: 'center',
+                     gap: '8px',
+                   }}>
+                     <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
+                     {selectedNode.cluster_label && (
+                       <span style={{
+                         color: selectedNode.cluster_color || '#4b5563',
+                         fontWeight: 600,
+                       }}>
+                         | {selectedNode.cluster_label}
+                       </span>
+                     )}
+                   </div>
+                 </div>
+
+                 {/* Navigation and Content */}
+                 <div style={{
+                   flex: 1,
+                   overflowY: 'auto',
+                   padding: '16px',
+                   display: 'flex',
+                   flexDirection: 'column',
+                   gap: '12px',
+                 }}>
+                   {/* Navigation buttons */}
+                   <div style={{
+                     display: 'flex',
+                     justifyContent: 'space-between',
+                     alignItems: 'center',
+                   }}>
+                     <button
+                      type="button"
+                      onClick={handlePrevChunk}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: '#fff',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                      }}
+                     >
+                       ← Previous
+                     </button>
+                     <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                       {selectedNode.chunk_index + 1} / {selectedNode.total_chunks}
+                     </span>
+                     <button
+                      type="button"
+                      onClick={handleNextChunk}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: '#fff',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                      }}
+                     >
+                       Next →
+                     </button>
+                   </div>
+
+                   {/* Content area */}
+                   <div style={{
+                     flex: 1,
+                     overflowY: 'auto',
+                     fontSize: '13px',
+                     lineHeight: '1.6',
+                     color: '#374151',
+                     whiteSpace: 'pre-wrap',
+                     wordBreak: 'break-word',
+                   }}>
+                     {isLoadingContent ? (
+                       <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af' }}>
+                         Loading...
+                       </div>
+                     ) : (
+                       selectedNode.content || '(No content)'
+                     )}
+                   </div>
+                 </div>
+               </div>
+             </div>
+           )}
+
+         </div>
       )}
     </div>
   );

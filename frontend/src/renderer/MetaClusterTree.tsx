@@ -159,12 +159,15 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 flex: '0 0 8px',
               }}
             />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-              {child.cluster_id}
-            </span>
-            <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af' }}>
-              {child.chunk_count}
-            </span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                {child.cluster_id}
+              </span>
+              <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {child.label}
+              </span>
+              <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0 }}>
+                {child.chunk_count}
+              </span>
           </div>
         );
       })}
