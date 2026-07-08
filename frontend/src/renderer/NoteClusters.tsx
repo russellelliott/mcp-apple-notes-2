@@ -2927,28 +2927,45 @@ export default function NoteClusters() {
           </div>
 
 
-              {/* Center column: RadialSimilarityHub */}
-              <div style={{
-             flex: 1,
-             minWidth: '200px',
-             display: 'flex',
-             flexDirection: 'column',
-             borderLeft: '1px solid #e0e0e0',
-             borderRight: '1px solid #e0e0e0',
-             backgroundColor: '#f9f9f9',
-             padding: '10px',
-             boxSizing: 'border-box',
-              }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937', marginBottom: '8px', textAlign: 'center' }}>Similar Clusters</div>
-                <RadialSimilarityHub
-               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-               onNodeClick={(clusterId) => {
-                 setSelectedClusters(new Set([clusterId]));
-                 try { focusClusterByOrbit(clusterId); } catch (_ignore) { }
-                }}
-               clusterColors={clusterColorsFromAPI}
-                />
-              </div>
+{/* Center column: RadialSimilarityHub */}
+<div style={{
+  flex: 1,
+  minWidth: '200px',
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
+  borderLeft: '1px solid #e0e0e0',
+  borderRight: '1px solid #e0e0e0',
+  backgroundColor: '#f9f9f9',
+  padding: '10px',
+  boxSizing: 'border-box',
+}}>
+  <div style={{
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#1f2937',
+    marginBottom: '8px',
+    textAlign: 'center',
+    flexShrink: 0,
+  }}>
+    Similar Clusters
+  </div>
+  <div style={{
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+    display: 'flex',
+  }}>
+    <RadialSimilarityHub
+      selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+      onNodeClick={(clusterId) => {
+        setSelectedClusters(new Set([clusterId]));
+        try { focusClusterByOrbit(clusterId); } catch (_ignore) {}
+      }}
+      clusterColors={clusterColorsFromAPI}
+    />
+  </div>
+</div>
 
               {/* Right column: MetaClusterTree */}
               <div style={{
