@@ -589,7 +589,11 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
         "Figure out what the content is in a broader sense rather than what it is on the surface. Avoid trying to include all the topic words in the title itself; that just infers the contents and general ideas. "
         "Do NOT start the name with the word \"cluster\" (case-insensitive) or with any phrase that begins with it — for example: \"Cluster Summary:\", \"Cluster Overview:\", \"Cluster Title:\", \"Cluster Of\", or \"Cluster: \". It's acceptable if the word \"cluster\" appears at the end of the name. "
         "Rules: Plain English only. No emojis. No hashtags. No special characters except spaces. "
-        "Return ONLY the name."
+        "CRITICAL: Your response must contain ONLY the title itself — nothing else. "
+        "Do NOT include any apologies, disclaimers, caveats, explanations, alternative suggestions, "
+        "markdown formatting, or any text other than the title. "
+        "Do NOT say things like \"I'm sorry\", \"Please note\", \"However\", \"If you need\", or offer alternatives. "
+        "Output the title on a single line and stop."
     )
 
     try:
@@ -597,11 +601,15 @@ def _generate_label_task(topic_id: str, obj: Dict[str, Any]) -> tuple:
             "model": "phi4-mini:3.8b",
             "prompt": prompt,
             "stream": False
+            # ,
+            # "options": {
+            #     "stop": ["\n", "I'm sorry", "Please note", "However,", "If "]
+            # }
         }, timeout=120)
         if resp.status_code == 200:
             new_label = resp.json().get('response', '').strip()
             # Clean up quotes and newlines
-            new_label = new_label.strip('"').strip("'").split('\n')[0]
+            new_label = new_label.strip('"').strip("'").split('\n')[0].rstrip('.,;:').strip()
             # if len(new_label) > 100: # sanity check
             #      new_label = new_label[:100]
             if is_subtopic and new_label and new_label != old_label:

@@ -39,21 +39,38 @@ TFIDF_TOP_K: int = 5
 
 
 # ---------------------------------------------------------------------------
-# LLM Prompt Templates
+# LLM Prompt Templates & Schema
 # ---------------------------------------------------------------------------
 
-#: Prompt template for LLM-based metacluster naming.
-META_CLUSTER_LABEL_PROMPT = """<|user|>
-I have a group of related topic clusters. Each cluster has been given an individual descriptive title.
-Here are the titles of all clusters in this group:
-<cluster_titles>
-[CLUSTER_TITLES]
-</cluster_titles>
+#: JSON schema for structured Ollama output — enforces a single "label" field.
+META_CLUSTER_LABEL_SCHEMA = {
+     "type": "object",
+     "properties": {
+         "label": {
+             "type": "string",
+             "description": "A concise meta-cluster label, ideally 3 to 6 words."
+         }
+     },
+     "required": ["label"]
+}
 
-Task: Based on these cluster titles, provide a single concise, professional label (3-6 words) that captures the overarching theme shared by all of them.
-Do NOT start the label with the word "cluster" (case-insensitive) or any phrase beginning with it.
-Output ONLY the label string. No preamble, no quotes, no punctuation at the end.
-<|assistant|>"""
+#: Prompt template for LLM-based metacluster naming (returns JSON with schema).
+META_CLUSTER_LABEL_PROMPT = (
+     "I have a group of related topic clusters. Each cluster has been given an individual descriptive title.\n"
+     "Here are the titles of all clusters in this group:\n"
+     "<cluster_titles>\n"
+     "[CLUSTER_TITLES]\n"
+     "</cluster_titles>\n\n"
+     "Task: Based on these cluster titles, provide a single concise, professional label (3 to 6 words) "
+     "that captures the overarching theme shared by all of them.\n\n"
+     "Rules:\n"
+     "- Return ONLY a JSON object with a single key \"label\" containing the label string.\n"
+     "- Do NOT start the label with the word \"cluster\" (case-insensitive) or any phrase beginning with it.\n"
+     "- The label must be 3 to 6 words long — no more, no less.\n"
+     "CRITICAL: Your ENTIRE response must be valid JSON only. No markdown code fences, no backticks, no preamble, no explanation.\n"
+     "Do NOT include any apologies, disclaimers, caveats, explanations, or alternative suggestions.\n"
+     'Output format example: {{"label": "Sports Culture and History"}}'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -101,19 +118,43 @@ def _generate_meta_label_via_tfidf(
 
 
 def _generate_meta_label_via_llm(child_labels: List[str], model: str) -> Optional[str]:
-    """Call Ollama to produce a metacluster name from child cluster titles."""
-    try:
-        import ollama
-        titles_block = "\n".join(f"- {label}" for label in child_labels if label.strip())
-        if not titles_block:
-            return None
-        prompt = META_CLUSTER_LABEL_PROMPT.replace("[CLUSTER_TITLES]", titles_block)
-        response = ollama.generate(model=model, prompt=prompt)
-        label = response["response"].strip().strip('"\'').rstrip(".,;:")
-        return label if label else None
-    except Exception as e:
-        print(f"   Ollama metacluster naming failed ({e}) - falling back to TF-IDF.")
-        return None
+     """Call Ollama to produce a metacluster name from child cluster titles.
+     
+     Uses structured JSON output with format=schema and temperature=0
+     for deterministic, schema-enforced results.
+     """
+     try:
+         import ollama
+         import json
+         titles_block = "\n".join(f"- {label}" for label in child_labels if label.strip())
+         if not titles_block:
+             return None
+         prompt = META_CLUSTER_LABEL_PROMPT.replace("[CLUSTER_TITLES]", titles_block)
+         response = ollama.generate(
+             model=model,
+             prompt=prompt,
+             format=META_CLUSTER_LABEL_SCHEMA,
+              options={"temperature": 0}
+         )
+         raw = response["response"].strip()
+         # The model returns a JSON string like '{"label":"Sports Culture"}'
+         # Strip optional markdown code fences if present
+         raw = raw.strip()
+         for prefix in ('```json\n', '```\n'):
+             if raw.startswith(prefix):
+                 raw = raw[len(prefix):]
+         raw = raw.strip('`').strip()
+         try:
+             parsed = json.loads(raw)
+             label = parsed.get("label", "").strip()
+             return label if label else None
+         except (json.JSONDecodeError, TypeError):
+             # Fallback: strip quotes and return raw text
+             fallback = raw.strip('"\'').rstrip(".,;:")
+             return fallback if fallback else None
+     except Exception as e:
+         print(f"   Ollama metacluster naming failed ({e}) - falling back to TF-IDF.")
+         return None
 
 
 def compute_cluster_centroids(
