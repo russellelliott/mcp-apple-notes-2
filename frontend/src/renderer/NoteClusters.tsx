@@ -115,6 +115,7 @@ interface ClusterGroup {
   clusterId?: string;
   clusterLabel?: string;
   clusterColor?: string;
+  chunkCount?: number;
 }
 
 interface VisualPoint extends ClusterPointMeta {
@@ -1836,14 +1837,15 @@ export default function NoteClusters() {
   const selectedClusterSummaries = useMemo(() => {
     if (selectedClusters.size > 0) {
       return Array.from(selectedClusters)
-        .map((clusterId) => {
+         .map((clusterId) => {
           const group = clusterGroups[clusterId];
           return {
             clusterId: clusterId || '?',
             clusterLabel: group?.clusterLabel || clusterId || 'Unknown cluster',
+            chunkCount: group?.customdata?.length ?? group?.chunkCount ?? null,
           };
-        })
-        .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
+         })
+         .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
     }
 
     if (selectedNode) {
@@ -1851,11 +1853,12 @@ export default function NoteClusters() {
         {
           clusterId: selectedNode.cluster_id && selectedNode.cluster_id !== '-1' ? selectedNode.cluster_id : '?',
           clusterLabel: selectedNode.cluster_label || 'Unknown cluster',
+          chunkCount: selectedNode.total_chunks ?? null,
         },
       ];
     }
 
-    return [] as Array<{ clusterId: string; clusterLabel: string }>;
+    return [] as Array<{ clusterId: string; clusterLabel: string; chunkCount: number | null }>;
   }, [clusterGroups, selectedClusters, selectedNode]);
 
   const resolveClusterForUniqueKey = useCallback(
@@ -2464,21 +2467,26 @@ export default function NoteClusters() {
                       const tint = clusterTints[summary.clusterId] || '#f3f4f6';
                       const border = clusterOpaqueTints[summary.clusterId] || '#e5e7eb';
                       return (
-                        <div
-                          key={summary.clusterId}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            backgroundColor: tint,
-                            border: `1px solid ${border}`,
-                            padding: '6px 8px',
-                            borderRadius: '6px',
-                          }}
-                        >
-                          <div style={{ fontWeight: 700 }}>#{summary.clusterId}</div>
-                          <div style={{ color: '#4b5563', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary.clusterLabel}</div>
-                        </div>
+                         <div
+                           key={summary.clusterId}
+                           style={{
+                             display: 'flex',
+                             alignItems: 'flex-start',
+                             gap: '8px',
+                             backgroundColor: tint,
+                             border: `1px solid ${border}`,
+                             padding: '6px 8px',
+                             borderRadius: '6px',
+                            }}
+                           >
+                            <div style={{ fontWeight: 700, flexShrink: 0 }}>#{summary.clusterId}</div>
+                            <div style={{ flex: 1, color: '#4b5563', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3, minWidth: 0 }}>{summary.clusterLabel}</div>
+                            {summary.chunkCount != null && (
+                              <div style={{ flexShrink: 0, marginLeft: 'auto', color: '#9ca3af', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                                {summary.chunkCount} chunks
+                              </div>
+                            )}
+                          </div>
                       );
                     })}
                   </div>

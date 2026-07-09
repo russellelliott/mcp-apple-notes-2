@@ -133,9 +133,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           ▶
         </span>
         <span style={{ fontSize: 14 }}>📁</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-          {meta.label}
-        </span>
+          <span style={{ flex: 1, wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3 }}>
+            {meta.label}
+          </span>
         <span style={{ fontSize: 10, color: '#9ca3af' }}>
           {filteredChildren.length}
         </span>
@@ -151,9 +151,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
              key={child.cluster_id}
              onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
              style={{
-               display: 'flex',
-               alignItems: 'center',
-               cursor: 'pointer',
+             display: 'flex',
+             alignItems: 'flex-start',
+             cursor: 'pointer',
                padding: '3px 6px',
                borderRadius: 4,
                fontSize: 11,
@@ -171,18 +171,17 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                 flex: '0 0 8px',
               }}
             />
-            {/* cluster_id */}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 0, minWidth: 0, fontFamily: 'monospace', fontSize: 10 }}>
-              {child.cluster_id}
-            </span>
-            {/* cluster name / label */}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 4, flexShrink: 1, minWidth: 0 }}>
-              {child.label}
-            </span>
-            {/* chunk count */}
-            <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, marginLeft: 2 }}>
-              {child.chunk_count}
-            </span>
+              <span style={{ fontFamily: 'monospace', fontSize: 10, flexShrink: 0, marginRight: 4 }}>
+                {child.cluster_id}
+              </span>
+              {/* cluster name — wraps freely, fills remaining space */}
+              <span style={{ flex: 1, minWidth: 0, marginRight: 4, wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3 }}>
+                {child.label}
+              </span>
+              {/* chunk count — always right-aligned */}
+              <span style={{ fontSize: 10, color: isSelected ? '#bfdbfe' : '#9ca3af', flexShrink: 0, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                {child.chunk_count}
+              </span>
           </div>
         );
       })}

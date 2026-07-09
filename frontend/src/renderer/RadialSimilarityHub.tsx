@@ -65,6 +65,46 @@ function wrapText(text: string, maxLineWidthPx: number, fontSizePx: number): str
   return lines;
 }
 
+// ── Tooltip with text-wrapping for orbiting node hover ───────────────────────
+interface TooltipBoxProps {
+  cx: number;
+  cy: number;
+  node: { x: number; y: number; radius: number; label: string; chunk_count: number; similarity: number };
+}
+function TooltipBox({ cx, cy, node }: TooltipBoxProps) {
+  const fontSize = 10;
+  const avgCharW = fontSize * 0.55;
+  const maxTooltipW = 200;
+  const textAreaW = maxTooltipW - 20;
+  const maxChars = Math.floor(textAreaW / avgCharW);
+  const words = node.label.split(/\s+/);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const cand = cur ? `${cur} ${w}` : w;
+    if (cand.length > maxChars && cur) { lines.push(cur); cur = w; } else { cur = cand; }
+  }
+  if (cur) lines.push(cur);
+  const lineH = fontSize + 3;
+  const metaLine = `${node.chunk_count} chunks · ${Math.round(node.similarity * 100)}% similar`;
+  const totalHeight = lines.length * lineH + lineH + 14;
+  const boxX = (cx + node.x) - maxTooltipW / 2;
+  const boxY = (cy + node.y) - node.radius - totalHeight - 6;
+  return (
+    <g>
+      <rect x={boxX} y={boxY} width={maxTooltipW} height={totalHeight} rx={6} fill="#1f2937" opacity={0.95} />
+      {lines.map((line: string, li: number) => (
+        <text key={li} x={cx + node.x} y={boxY + 8 + (li + 1) * lineH} textAnchor="middle" fill="#fff" fontSize={fontSize} fontWeight={600}>
+          {line}
+        </text>
+      ))}
+      <text x={cx + node.x} y={boxY + 8 + (lines.length + 1) * lineH} textAnchor="middle" fill="#d1d5db" fontSize={9}>
+        {metaLine}
+      </text>
+    </g>
+  );
+}
+
 // ── RadialHub component ──────────────────────────────────────────────────────
 export const RadialSimilarityHub: React.FC<Props> = ({
   selectedClusterId,
@@ -286,8 +326,8 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     </linearGradient>
   ));
 
-  // Compute center label sizing and wrapping
-  const centerLabelFontSize = Math.min(12, CENTER_NODE_RADIUS * 0.28);
+   // Compute center label sizing and wrapping
+   const centerLabelFontSize = Math.min(10, CENTER_NODE_RADIUS * 0.22);
   const availableWidthForText = (CENTER_NODE_RADIUS * 2) - 8; // minus small padding
   const wrappedCenterLines = wrapText(targetLabel, availableWidthForText, centerLabelFontSize);
   const lineCount = wrappedCenterLines.length;
@@ -409,39 +449,10 @@ export const RadialSimilarityHub: React.FC<Props> = ({
               {node.cluster_id.length > 8 ? node.cluster_id.slice(0, 6) + '…' : node.cluster_id}
             </text>
 
-            {/* Similarity percentage on hover */}
-            {isHovered && (
-              <g>
-                <rect
-                  x={(cx + node.x) - 60}
-                  y={(cy + node.y) - node.radius - 38}
-                  width={120}
-                  height={44}
-                  rx={6}
-                  fill="#1f2937"
-                  opacity={0.95}
-                />
-                <text
-                  x={cx + node.x}
-                  y={(cy + node.y) - node.radius - 24}
-                  textAnchor="middle"
-                  fill="#fff"
-                  fontSize="10"
-                  fontWeight={600}
-                >
-                  {node.label.length > 18 ? node.label.slice(0, 17) + '…' : node.label}
-                </text>
-                <text
-                  x={cx + node.x}
-                  y={(cy + node.y) - node.radius - 8}
-                  textAnchor="middle"
-                  fill="#d1d5db"
-                  fontSize="9"
-                >
-                  {node.chunk_count} chunks · {Math.round(node.similarity * 100)}% similar
-                </text>
-              </g>
-            )}
+              {/* Similarity percentage on hover — full title, text-wrapped */}
+              {isHovered && (
+                <TooltipBox cx={cx} cy={cy} node={node} />
+              )}
           </g>
         );
       })}
