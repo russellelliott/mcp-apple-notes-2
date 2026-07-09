@@ -27,8 +27,12 @@ from umap import UMAP
 from hdbscan import HDBSCAN
 from sentence_transformers import SentenceTransformer
 
+# Ollama model used for both individual cluster labels and meta-cluster labels.
+OLLAMA_MODEL = "phi4-mini:3.8b"
+
+
 class Ollama(BaseRepresentation):
-    def __init__(self, model="phi4-mini:3.8b", prompt=None, tokenizer=None):
+    def __init__(self, model=OLLAMA_MODEL, prompt=None, tokenizer=None):
         self.model = model
         self.prompt = prompt if prompt else """
         I have a topic that contains the following documents: 
@@ -733,6 +737,10 @@ else:
     print("  ℹ️ No oversized clusters requiring recursive splitting.")
 
 # --- 5. SCHEMA MAPPING & PERSISTENCE ---
+
+# Re-define locally for the meta-clustering call so both references point to the
+# same constant.  (The value above is the canonical source.)
+OLLAMA_MODEL = "phi4-mini:3.8b"
 topic_info = topic_model.get_topic_info()
 print(f"DEBUG: topic_info columns: {topic_info.columns.tolist()}")
 
@@ -803,7 +811,7 @@ df['cluster_confidence'] = confidences
 df['last_clustered'] = datetime.now().isoformat()
 
 # --- 5.5. META-CLUSTERING (Cluster-of-Clusters Hierarchy) ---
-print("🔗 Building meta-cluster hierarchy (cluster-of-clusters)...")
+print(" Building meta-cluster hierarchy (cluster-of-clusters)...")
 try:
     df = compute_meta_clusters(
         df,
@@ -811,7 +819,8 @@ try:
         docs=docs,
         vector_col="vector",
         topic_col="display_topic_id",
-    )
+        ollama_model=OLLAMA_MODEL,    # NEW: drives LLM metacluster naming
+     )
     print(f"   ✅ Meta-clustering complete.")
 except Exception as e:
     print(f"   ⚠️ Meta-clustering failed ({e}) — continuing without meta-clusters.")

@@ -7,7 +7,7 @@ Computes a hierarchy of clusters by grouping BERTopic clusters into
 Pipeline:
   1. Compute cluster centroids (average of chunk embeddings)
   2. Run AgglomerativeClustering on centroids with cosine distance
-  3. Assign meta-cluster labels via TF-IDF keyword extraction
+  3. Assign meta-cluster labels via LLM (primary) or TF-IDF (fallback)
   4. Return DataFrame with added meta_cluster_id and meta_cluster_label columns
 
 Constants can be tuned to adjust grouping granularity.
@@ -39,8 +39,82 @@ TFIDF_TOP_K: int = 5
 
 
 # ---------------------------------------------------------------------------
+# LLM Prompt Templates
+# ---------------------------------------------------------------------------
+
+#: Prompt template for LLM-based metacluster naming.
+META_CLUSTER_LABEL_PROMPT = """<|user|>
+I have a group of related topic clusters. Each cluster has been given an individual descriptive title.
+Here are the titles of all clusters in this group:
+<cluster_titles>
+[CLUSTER_TITLES]
+</cluster_titles>
+
+Task: Based on these cluster titles, provide a single concise, professional label (3-6 words) that captures the overarching theme shared by all of them.
+Do NOT start the label with the word "cluster" (case-insensitive) or any phrase beginning with it.
+Output ONLY the label string. No preamble, no quotes, no punctuation at the end.
+<|assistant|>"""
+
+
+# ---------------------------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------------------------
+
+def _generate_meta_label_via_tfidf(
+    child_indices_in_df: List[int],
+    docs: List[str],
+    meta_id: int,
+) -> str:
+    """Generate a meta-cluster label using TF-IDF on child document texts.
+
+    Parameters
+    ----------
+    child_indices_in_df : list of int
+        Row indices (into ``docs``) belonging to this meta-cluster.
+    docs : list of str
+        Raw document texts.
+    meta_id : int
+        Meta-cluster identifier (used for fallback label).
+
+    Returns
+    -------
+    str
+        TF-IDF based label or "Topic Group <id>" on failure.
+    """
+    child_docs = [docs[i] for i in child_indices_in_df if i < len(docs) and docs[i].strip()]
+    if not child_docs:
+        return f"Topic Group {meta_id}"
+
+    combined_text = " ".join(child_docs)
+    tfidf = TfidfVectorizer(stop_words="english", max_features=500, ngram_range=(1, 2))
+    try:
+        tfidf_matrix = tfidf.fit_transform([combined_text])
+        feature_names = tfidf.get_feature_names_out()
+        scores = tfidf_matrix.toarray().mean(axis=0)
+        top_k_indices = np.argsort(scores)[::-1][:TFIDF_TOP_K]
+        keyword_parts = [feature_names[i] for i in top_k_indices if scores[i] > 0]
+        if keyword_parts:
+            return " & ".join(keyword_parts[:TFIDF_TOP_K])
+    except Exception:
+        pass
+    return f"Topic Group {meta_id}"
+
+
+def _generate_meta_label_via_llm(child_labels: List[str], model: str) -> Optional[str]:
+    """Call Ollama to produce a metacluster name from child cluster titles."""
+    try:
+        import ollama
+        titles_block = "\n".join(f"- {label}" for label in child_labels if label.strip())
+        if not titles_block:
+            return None
+        prompt = META_CLUSTER_LABEL_PROMPT.replace("[CLUSTER_TITLES]", titles_block)
+        response = ollama.generate(model=model, prompt=prompt)
+        label = response["response"].strip().strip('"\'').rstrip(".,;:")
+        return label if label else None
+    except Exception as e:
+        print(f"   Ollama metacluster naming failed ({e}) - falling back to TF-IDF.")
+        return None
+
 
 def compute_cluster_centroids(
     df: pd.DataFrame,
@@ -63,7 +137,7 @@ def compute_cluster_centroids(
     DataFrame
         Index = cluster_id, columns = centroid (array), cluster_label, chunk_count
     """
-     # Group vectors by cluster and compute mean
+    # Group vectors by cluster and compute mean
     rows: List[Dict[str, object]] = []
     for cluster_id, group in df.groupby(topic_col):
         vectors = np.stack(group[vector_col].values)
@@ -85,6 +159,7 @@ def compute_meta_clusters(
     docs: Optional[List[str]] = None,
     vector_col: str = "vector",
     topic_col: str = "display_topic_id",
+    ollama_model: Optional[str] = None,
 ) -> pd.DataFrame:
     """Assign each cluster to a meta-cluster and return the updated DataFrame.
 
@@ -96,19 +171,23 @@ def compute_meta_clusters(
         Pre-computed embedding array matching df rows. If provided, centroids
         are computed directly from these vectors rather than from df[vector_col].
     docs : list of str, optional
-        Raw document texts for TF-IDF meta-cluster naming.
+        Raw document texts for TF-IDF / LLM meta-cluster naming.
     vector_col : str
         Column name holding embedding vectors in ``df`` (used when ``vectors``
         is not provided).
     topic_col : str
         Column name holding the cluster identifier per row.
+    ollama_model : str, optional
+        Ollama model name (e.g. ``"phi4-mini:3.8b"``) for LLM-based meta-cluster
+        naming.  When provided, child cluster titles are sent to the model; TF-IDF
+        is used as a fallback if the call fails.
 
     Returns
     -------
     DataFrame
         A copy of ``df`` with two new columns added:
-        - ``meta_cluster_id``  (string, e.g. "0", "1")
-        - ``meta_cluster_label`` (human-readable label for the meta-cluster)
+         - ``meta_cluster_id``    (string, e.g. "0", "1")
+         - ``meta_cluster_label`` (human-readable label for the meta-cluster)
     """
     df_out = df.copy()
 
@@ -137,8 +216,8 @@ def compute_meta_clusters(
     norms[norms == 0] = 1.0
     centroid_normalized = centroid_matrix / norms
 
-    sim_matrix = centroid_normalized @ centroid_normalized.T  # shape: (n_clusters, n_clusters)
-    dist_matrix = 1.0 - sim_matrix  # convert similarity → distance
+    sim_matrix = centroid_normalized @ centroid_normalized.T   # shape: (n_clusters, n_clusters)
+    dist_matrix = 1.0 - sim_matrix   # convert similarity → distance
     # Guard against tiny negative values from floating point
     np.clip(dist_matrix, 0, None, out=dist_matrix)
 
@@ -208,66 +287,44 @@ def compute_meta_clusters(
     meta_labels_final = np.array([id_map[int(x)] for x in meta_labels_raw], dtype=int)
 
     # ------------------------------------------------------------------
-    # Step 5: Assign TF-IDF based labels to each meta-cluster
+    # Step 5: Collect child cluster labels & doc indices per metacluster
+    # ------------------------------------------------------------------
+    child_cluster_labels_map: Dict[int, List[str]] = {}
+    child_doc_indices_map: Dict[int, List[int]] = {}
+
+    for ci, cid in enumerate(cluster_ids):
+        meta_id = int(meta_labels_final[ci])
+        child_label = labels_list[ci] if labels_list[ci] else f"Cluster {cid}"
+        child_cluster_labels_map.setdefault(meta_id, []).append(child_label)
+        mask = df_out[topic_col] == cid
+        child_doc_indices_map.setdefault(meta_id, []).extend(mask[mask].index.tolist())
+
+    # ------------------------------------------------------------------
+    # Step 6: Generate metacluster labels (LLM primary, TF-IDF fallback)
     # ------------------------------------------------------------------
     meta_cluster_label_map: Dict[int, str] = {}
 
-    if docs is not None and len(docs) > 0:
-        for meta_id in np.unique(meta_labels_final):
-            # Find all child clusters in this meta-cluster
-            child_indices_in_df = []
-            for ci, cid in enumerate(cluster_ids):
-                if meta_labels_final[ci] == meta_id:
-                    # Find all rows in df belonging to this child cluster
-                    mask = df_out[topic_col] == cid
-                    child_indices_in_df.extend(mask[mask].index.tolist())
+    for meta_id in np.unique(meta_labels_final):
+        child_labels = child_cluster_labels_map.get(int(meta_id), [])
+        child_doc_indices = child_doc_indices_map.get(int(meta_id), [])
 
-            if not child_indices_in_df:
-                meta_cluster_label_map[int(meta_id)] = f"Topic Group {meta_id}"
+        # Primary: LLM
+        if ollama_model and child_labels:
+            llm_label = _generate_meta_label_via_llm(child_labels, ollama_model)
+            if llm_label:
+                meta_cluster_label_map[int(meta_id)] = llm_label
                 continue
 
-            # Concatenate documents from child clusters for TF-IDF
-            child_docs = [
-                docs[i] for i in child_indices_in_df
-                if i < len(docs) and docs[i].strip()
-            ]
-
-            if not child_docs:
-                meta_cluster_label_map[int(meta_id)] = f"Topic Group {meta_id}"
-                continue
-
-            combined_text = " ".join(child_docs)
-
-            # Run TF-IDF vectorizer
-            tfidf = TfidfVectorizer(
-                stop_words="english",
-                max_features=500,
-                ngram_range=(1, 2),
+        # Fallback: TF-IDF
+        if docs is not None and len(docs) > 0 and child_doc_indices:
+            meta_cluster_label_map[int(meta_id)] = _generate_meta_label_via_tfidf(
+                child_doc_indices, docs, int(meta_id)
             )
-            try:
-                tfidf_matrix = tfidf.fit_transform([combined_text])
-                feature_names = tfidf.get_feature_names_out()
-
-                # Average TF-IDF score across all terms in the document
-                scores = tfidf_matrix.toarray().mean(axis=0)
-                top_k_indices = np.argsort(scores)[::-1][:TFIDF_TOP_K]
-                keyword_parts = [feature_names[i] for i in top_k_indices if scores[i] > 0]
-
-                if keyword_parts:
-                    meta_cluster_label_map[int(meta_id)] = " & ".join(
-                        keyword_parts[:TFIDF_TOP_K]
-                    )
-                else:
-                    meta_cluster_label_map[int(meta_id)] = f"Topic Group {meta_id}"
-            except Exception:
-                meta_cluster_label_map[int(meta_id)] = f"Topic Group {meta_id}"
-    else:
-        # No docs provided — fallback labels
-        for meta_id in np.unique(meta_labels_final):
+        else:
             meta_cluster_label_map[int(meta_id)] = f"Topic Group {meta_id}"
 
     # ------------------------------------------------------------------
-    # Step 6: Build cluster-to-meta-cluster mapping
+    # Step 7: Build cluster-to-meta-cluster mapping
     # ------------------------------------------------------------------
     cluster_to_meta: Dict[str, Tuple[int, str]] = {}
     for ci, cid in enumerate(cluster_ids):
@@ -276,7 +333,7 @@ def compute_meta_clusters(
         cluster_to_meta[cid] = (meta_id, label)
 
     # ------------------------------------------------------------------
-    # Step 7: Assign meta-cluster info to every row in the DataFrame
+    # Step 8: Assign meta-cluster info to every row in the DataFrame
     # ------------------------------------------------------------------
     def _resolve_meta(row_topic: str) -> Tuple[str, str]:
         """Resolve meta_cluster_id and label for a single row topic."""
