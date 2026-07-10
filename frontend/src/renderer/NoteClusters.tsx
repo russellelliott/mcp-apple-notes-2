@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import LanguageIcon from '@mui/icons-material/Language';
 import HistoryIcon from '@mui/icons-material/History';
@@ -118,22 +116,6 @@ interface ClusterGroup {
   chunkCount?: number;
 }
 
-interface VisualPoint extends ClusterPointMeta {
-  x: number;
-  y: number;
-  z: number;
-  dotColor: string;
-}
-
-interface PointBucket {
-  key: string;
-  sizeMetric: number;
-  color: string;
-  glowOpacity: number;
-  opacity: number;
-  points: VisualPoint[];
-}
-
 const colorToRgba = (color: THREE.Color, alpha: number) => {
   const r = Math.round(color.r * 255);
   const g = Math.round(color.g * 255);
@@ -145,19 +127,6 @@ const mixColorWithWhite = (baseColor: string, whiteMix: number) => {
   const mixed = new THREE.Color(baseColor).lerp(new THREE.Color('#ffffff'), whiteMix);
   return mixed.getStyle();
 };
-
-const mixColorWithDark = (baseColor: string, darkMix: number) => {
-  const mixed = new THREE.Color(baseColor).lerp(new THREE.Color('#101827'), darkMix);
-  return mixed.getStyle();
-};
-
-const getDotSurfaceTint = (dotColor: string) => mixColorWithWhite(dotColor, 0.35);
-const NOTE_SURFACE_SATURATION = 0.5;
-
-const DOT_RADIUS_BASE = 0.016;
-const GLOBAL_LAYOUT_SPREAD = 2.45;
-const CLUSTER_CENTROID_SPREAD = 2.4;
-const CLUSTER_POINT_SPREAD = 6.0;
 
 const compareTopicIds = (a: string, b: string) => {
   const aParts = String(a).split('.').map((part) => (part.match(/^-?\d+$/) ? Number(part) : part));
@@ -177,152 +146,6 @@ const compareTopicIds = (a: string, b: string) => {
     }
   }
   return 0;
-};
-
-const DotInstances = ({
-  bucket,
-  sphereRadius,
-  hoveredId,
-  highlightedId,
-  onPointerOver,
-  onPointerMove,
-  onPointerOut,
-  onClick,
-}: {
-  bucket: PointBucket;
-  sphereRadius: number;
-  hoveredId: string | null;
-  highlightedId: string | null;
-  onPointerOver: (event: ThreeEvent<PointerEvent>) => void;
-  onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
-  onPointerOut: (event: ThreeEvent<PointerEvent>) => void;
-  onClick: (event: ThreeEvent<MouseEvent>) => void;
-}) => {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const glowMeshRef = useRef<THREE.InstancedMesh>(null);
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    const glowMesh = glowMeshRef.current;
-    if (!mesh) return;
-
-    const temp = new THREE.Object3D();
-    bucket.points.forEach((point, index) => {
-      temp.position.set(point.x, point.y, point.z);
-      // scale up hovered / highlighted nodes for emphasis
-      const isHovered = hoveredId === point.unique_key;
-      const isHighlighted = highlightedId === point.unique_key;
-      const scale = isHovered ? sphereRadius * 1.8 : isHighlighted ? sphereRadius * 1.35 : sphereRadius;
-      temp.scale.setScalar(scale);
-      temp.updateMatrix();
-      mesh.setMatrixAt(index, temp.matrix);
-
-      if (glowMesh) {
-        // only show glow on the hovered/highlighted point, no glow on others
-        let glowScale = 0;
-        if (isHovered) {
-          glowScale = scale * 3.0;
-        } else if (isHighlighted) {
-          glowScale = scale * 2.2;
-        } else if (hoveredId || highlightedId) {
-          glowScale = scale * 0.08;
-        }
-        temp.scale.setScalar(glowScale);
-        temp.updateMatrix();
-        glowMesh.setMatrixAt(index, temp.matrix);
-      }
-    });
-
-    mesh.instanceMatrix.needsUpdate = true;
-    if (glowMesh) {
-      glowMesh.instanceMatrix.needsUpdate = true;
-    }
-  }, [bucket.points, sphereRadius, hoveredId, highlightedId]);
-
-  return (
-    <>
-      {bucket.glowOpacity > 0 && (
-        <instancedMesh ref={glowMeshRef} args={[undefined, undefined, bucket.points.length]}>
-          <sphereGeometry args={[1, 10, 10]} />
-          <meshBasicMaterial
-            color={bucket.color}
-            transparent
-            opacity={bucket.glowOpacity}
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-            toneMapped={false}
-          />
-        </instancedMesh>
-      )}
-
-      <instancedMesh
-        ref={meshRef}
-        args={[undefined, undefined, bucket.points.length]}
-        userData={{ points: bucket.points }}
-        onPointerOver={onPointerOver}
-        onPointerMove={onPointerMove}
-        onPointerOut={onPointerOut}
-        onClick={onClick}
-      >
-        <sphereGeometry args={[1, 12, 12]} />
-        <meshBasicMaterial color={bucket.color} transparent opacity={bucket.opacity} toneMapped={false} />
-      </instancedMesh>
-    </>
-  );
-};
-
-const ClusterLabel = ({
-  label,
-  hasHits,
-  isSelected,
-  isDimmed,
-}: {
-  label: string;
-  hasHits: boolean;
-  isSelected: boolean;
-  isDimmed: boolean;
-}) => {
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  const [marqueeDuration, setMarqueeDuration] = useState(5);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLSpanElement>(null);
-  const marqueeSpeedPxPerSecond = 40;
-
-  const checkOverflow = () => {
-    if (containerRef.current && contentRef.current) {
-      const contentWidth = contentRef.current.scrollWidth;
-      const containerWidth = containerRef.current.clientWidth;
-      setIsOverflowing(contentWidth > containerWidth);
-      setMarqueeDuration(Math.max((contentWidth + 20) / marqueeSpeedPxPerSecond, 1));
-    }
-  };
-
-  useEffect(() => {
-    checkOverflow();
-    window.addEventListener('resize', checkOverflow);
-    return () => window.removeEventListener('resize', checkOverflow);
-  }, [label]);
-
-  return (
-    <div
-      className={`cluster-label-container ${isOverflowing ? 'overflowing' : ''}`}
-      title={label}
-      ref={containerRef}
-      onMouseEnter={checkOverflow}
-    >
-      <span
-        className="cluster-label-content"
-        style={{
-          fontWeight: isSelected ? 700 : hasHits ? 600 : 400,
-          color: isDimmed ? '#8c8c8c' : '#222',
-          animationDuration: `${marqueeDuration}s`,
-        }}
-        ref={contentRef}
-      >
-        {label}
-      </span>
-    </div>
-  );
 };
 
 const SegmentedRail = ({
@@ -412,33 +235,18 @@ export default function NoteClusters() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
   const [hoverSource, setHoverSource] = useState<'canvas' | 'list' | null>(null);
-  const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0, containerWidth: 0 });
   const [selectedNode, setSelectedNode] = useState<NoteContent | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
-   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
-   const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
-   const [clusterColorsFromAPI, setClusterColorsFromAPI] = useState<Record<string, string>>({});
-  const plotAreaRef = useRef<HTMLDivElement>(null);
+  const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
+  const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
+  const [clusterColorsFromAPI, setClusterColorsFromAPI] = useState<Record<string, string>>({});
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
   const notesListRef = useRef<HTMLDivElement | null>(null);
   const recentClusterInfoCache = useRef<Map<string, { clusterId: string; clusterLabel: string; color?: string }>>(new Map());
-  // Orbit controls ref and camera tween state for focus animation
-  const controlsRef = useRef<any>(null);
 
-  const cameraTweenRef = useRef<{
-    active: boolean;
-    startTime: number;
-    duration: number;
-    target: THREE.Vector3;
-    fromAzimuth: number;
-    toAzimuth: number;
-    fromPolar: number;
-    toPolar: number;
-    fromRadius: number;
-    toRadius: number;
-  } | null>(null);
+
 
   const makePointCacheKey = useCallback(
     (uniqueKey: string, _creationDate?: string | null, _modificationDate?: string | null) => uniqueKey, // Drop dates to ensure hits match
@@ -476,24 +284,24 @@ export default function NoteClusters() {
       const display_topic_id = response.data?.display_topic_id || initialDisplayTopicId;
       const base_topic_id = response.data?.base_topic_id || initialBaseTopicId;
 
-       // Compute cluster_color from the resolved display_topic_id / cluster_id
-       const resolvedClusterKey = display_topic_id || cluster_id || '-1';
-       const computedClusterColor = clusterColors[resolvedClusterKey]
-         || response.data?.dot_color
-         || response.data?.cluster_color
-         || null;
+      // Compute cluster_color from the resolved display_topic_id / cluster_id
+      const resolvedClusterKey = display_topic_id || cluster_id || '-1';
+      const computedClusterColor = clusterColors[resolvedClusterKey]
+        || response.data?.dot_color
+        || response.data?.cluster_color
+        || null;
 
-       setSelectedNode({
-          ...response.data,
-         cluster_id,
-         display_topic_id,
-         base_topic_id,
-         cluster_label,
-         cluster_color: computedClusterColor,
-         creation_date: creationDate,
-         modification_date: modificationDate,
-         unique_key: newUniqueKey,
-        });
+      setSelectedNode({
+        ...response.data,
+        cluster_id,
+        display_topic_id,
+        base_topic_id,
+        cluster_label,
+        cluster_color: computedClusterColor,
+        creation_date: creationDate,
+        modification_date: modificationDate,
+        unique_key: newUniqueKey,
+      });
       // Cache the authoritative cluster info from backend for this unique_key
       const cacheClusId = display_topic_id || cluster_id || '-1';
       const color = response.data?.dot_color || response.data?.cluster_color;
@@ -554,55 +362,55 @@ export default function NoteClusters() {
     }).format(t);
   };
 
-   useEffect(() => {
-     const fetchData = async () => {
-       try {
-          // Try shaped points first, fall back to raw points if unavailable
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Try shaped points first, fall back to raw points if unavailable
         let response = null;
         try {
           response = await axios.get('http://127.0.0.1:8000/points_shaped');
-         } catch (err) {
+        } catch (err) {
           console.warn('points_shaped fetch failed, will try /points', err);
-         }
+        }
 
         if (!response || !Array.isArray(response.data) || response.data.length === 0) {
-           // fallback to legacy endpoint
+          // fallback to legacy endpoint
           try {
             response = await axios.get('http://127.0.0.1:8000/points');
-           } catch (err) {
+          } catch (err) {
             console.error('Fallback /points fetch failed', err);
             response = null;
-           }
-         }
+          }
+        }
 
         const points = response && Array.isArray(response.data) ? response.data : [];
         console.info(`Fetched ${points.length} points from backend`);
         setData(points);
-       } catch (error) {
+      } catch (error) {
         console.error('Error fetching data:', error);
-       } finally {
+      } finally {
         setLoading(false);
-       }
-     };
+      }
+    };
 
-     fetchData();
-   }, []);
+    fetchData();
+  }, []);
 
-   // Fetch cluster colors once from the single source of truth
-   useEffect(() => {
-     let active = true;
-     (async () => {
-       try {
-         const res = await axios.get('http://127.0.0.1:8000/cluster_colors');
-         if (active && res.data) {
-           setClusterColorsFromAPI(res.data as Record<string, string>);
-         }
-       } catch (err) {
-         console.warn('Failed to fetch cluster_colors:', err);
-       }
-     })();
-     return () => { active = false; };
-   }, []);
+  // Fetch cluster colors once from the single source of truth
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await axios.get('http://127.0.0.1:8000/cluster_colors');
+        if (active && res.data) {
+          setClusterColorsFromAPI(res.data as Record<string, string>);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch cluster_colors:', err);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -753,96 +561,6 @@ export default function NoteClusters() {
     });
     return map;
   }, [data]);
-
-  // Camera focus helpers: animate orbit to bring a cluster to the front
-  function normalizeAngle(angle: number) {
-    while (angle > Math.PI) angle -= Math.PI * 2;
-    while (angle < -Math.PI) angle += Math.PI * 2;
-    return angle;
-  }
-
-  function shortestAngleDelta(from: number, to: number) {
-    return normalizeAngle(to - from);
-  }
-
-  function focusClusterByOrbit(clusterId: string) {
-    const controls = controlsRef.current;
-    const focusMetrics = getClusterFocusMetrics(clusterId);
-    if (!controls || !focusMetrics) return;
-    if (cameraTweenRef.current?.active) return;
-
-    const { center: centroid, radius: clusterRadius } = focusMetrics;
-    const center = sceneBounds.center;
-    const dir = new THREE.Vector3(centroid.x - center.x, centroid.y - center.y, centroid.z - center.z);
-    if (dir.lengthSq() < 1e-8) return;
-
-    const currentAzimuth = controls.getAzimuthalAngle();
-    const currentPolar = controls.getPolarAngle();
-    const currentRadius = controls.getDistance();
-
-    const desiredAzimuth = Math.atan2(dir.x, dir.z);
-    const desiredPolar = Math.atan2(Math.sqrt(dir.x * dir.x + dir.z * dir.z), dir.y);
-
-    // Keep the focus distance tied to the cluster's own rendered size.
-    // Smaller clusters are shown more tightly; larger clusters get a bit more space.
-    const minFocusDistance = visualSceneRadius * 0.06;
-    const clusterFocusDistance = clusterRadius * 1.1;
-    const desiredRadius = Math.max(minFocusDistance, clusterFocusDistance);
-
-    cameraTweenRef.current = {
-      active: true,
-      startTime: performance.now(),
-      duration: 900,
-      target: centroid.clone(),
-      fromAzimuth: currentAzimuth,
-      toAzimuth: currentAzimuth + shortestAngleDelta(currentAzimuth, desiredAzimuth),
-      fromPolar: currentPolar,
-      toPolar: desiredPolar,
-      fromRadius: currentRadius,
-      toRadius: desiredRadius,
-    };
-  }
-
-  const CameraOrbitAnimator = () => {
-    const { camera } = useThree();
-    useFrame(() => {
-      const controls = controlsRef.current;
-      const tween = cameraTweenRef.current;
-      if (!controls || !tween || !tween.active) return;
-
-      const now = performance.now();
-      const rawT = (now - tween.startTime) / tween.duration;
-      const t = Math.min(Math.max(rawT, 0), 1);
-      const eased = 1 - Math.pow(1 - t, 3);
-
-      const azimuth = THREE.MathUtils.lerp(tween.fromAzimuth, tween.toAzimuth, eased);
-      const polar = THREE.MathUtils.lerp(tween.fromPolar, tween.toPolar, eased);
-      const radius = THREE.MathUtils.lerp(tween.fromRadius, tween.toRadius, eased);
-
-      const sinPolar = Math.sin(polar);
-      camera.position.set(
-        tween.target.x + radius * sinPolar * Math.sin(azimuth),
-        tween.target.y + radius * Math.cos(polar),
-        tween.target.z + radius * sinPolar * Math.cos(azimuth),
-      );
-
-      controls.target.copy(tween.target);
-      controls.update();
-
-      if (t >= 1 && cameraTweenRef.current) cameraTweenRef.current.active = false;
-    });
-    return null;
-  };
-
-
-
-
-
-
-
-
-
-
 
   const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
@@ -1390,35 +1108,6 @@ export default function NoteClusters() {
     return sorted;
   }, [data, notesSortDirection, notesSortMetric, searchResults]);
 
-  const getClusterSectionTitle = useCallback(
-    (label: string) => {
-      if (clusterSortMetric === 'recency' || clusterSortMetric === 'momentum') {
-        const dates = (clusterGroups[label]?.customdata || [])
-          .map((point) => Date.parse(String(point.modification_date || '')))
-          .filter(Number.isFinite) as number[];
-
-        if (dates.length === 0) return 'Unknown date';
-
-        const representativeDate =
-          clusterSortMetric === 'momentum'
-            ? Math.round(dates.reduce((sum, value) => sum + value, 0) / dates.length)
-            : Math.max(...dates);
-
-        const oneDay = 24 * 60 * 60 * 1000;
-        const diffDays = Math.floor((Date.now() - representativeDate) / oneDay);
-        if (diffDays <= 1) return 'Today & Yesterday';
-        if (diffDays <= 7) return 'Last 7 Days';
-        if (diffDays <= 30) return 'Last 30 Days';
-
-        return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(
-          new Date(representativeDate),
-        );
-      }
-
-      return '';
-    },
-    [clusterGroups, clusterSortMetric],
-  );
 
   useEffect(() => {
     if (clusterSortMetric === 'search' && searchResults.length === 0) {
@@ -1570,282 +1259,19 @@ export default function NoteClusters() {
     sidebarNotes,
   ]);
 
-  const sceneBounds = useMemo(() => {
-    if (data.length === 0) {
-      return {
-        center: new THREE.Vector3(0, 0, 0),
-        radius: 10,
-      };
-    }
-
-    let minX = Infinity;
-    let minY = Infinity;
-    let minZ = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let maxZ = -Infinity;
-
-    data.forEach((point) => {
-      const x = point.display_x as number;
-      const y = point.display_y as number;
-      const z = point.display_z as number;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      minZ = Math.min(minZ, z);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-      maxZ = Math.max(maxZ, z);
-    });
-
-    const center = new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
-    const dx = maxX - minX;
-    const dy = maxY - minY;
-    const dz = maxZ - minZ;
-    const radius = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5, 1);
-
-    return { center, radius };
-  }, [data]);
-
-  const pointPositionMap = useMemo(() => {
-    const map = new Map<string, { log: THREE.Vector3 }>();
-    data.forEach((point) => {
-      if (point.display_x === undefined || point.display_y === undefined || point.display_z === undefined) {
-        return;
-      }
-      map.set(point.unique_key, { log: new THREE.Vector3(point.display_x, point.display_y, point.display_z) });
-    });
-    return map;
-  }, [data]);
-
-  const displayPointPositionMap = useMemo(() => {
-    const map = new Map<string, { log: THREE.Vector3 }>();
-    const sceneCenter = sceneBounds.center;
-
-    Object.keys(clusterGroups).forEach((label) => {
-      const centroid = clusterCentroids.get(label);
-      const group = clusterGroups[label];
-      if (!group || group.customdata.length === 0) return;
-
-      const centroidVector = centroid ? new THREE.Vector3(centroid.x, centroid.y, centroid.z) : null;
-
-      group.customdata.forEach((meta) => {
-        const positioned = pointPositionMap.get(meta.unique_key);
-        if (!positioned) return;
-
-        if (!centroidVector) {
-          map.set(meta.unique_key, positioned);
-          return;
-        }
-
-        const scaledCentroid = sceneCenter.clone().lerp(centroidVector, CLUSTER_CENTROID_SPREAD);
-        const offset = positioned.log.clone().sub(centroidVector);
-        map.set(meta.unique_key, {
-          log: scaledCentroid.clone().add(offset.multiplyScalar(CLUSTER_POINT_SPREAD)),
-        });
-      });
-    });
-
-    return map;
-  }, [clusterCentroids, clusterGroups, pointPositionMap, sceneBounds.center]);
-
-  const getClusterFocusMetrics = useCallback(
-    (clusterId: string) => {
-      const group = clusterGroups[clusterId];
-      if (!group || group.customdata.length === 0) return null;
-
-      const points = group.customdata
-        .map((meta) => displayPointPositionMap.get(meta.unique_key)?.log)
-        .filter((point): point is THREE.Vector3 => !!point);
-
-      if (points.length === 0) return null;
-      if (points.length === 1) {
-        return { center: points[0].clone(), radius: 0 };
-      }
-
-      const initialCenter = points.reduce(
-        (acc, point) => acc.add(point),
-        new THREE.Vector3(0, 0, 0),
-      ).divideScalar(points.length);
-
-      const rankedPoints = points
-        .map((point) => ({ point, distance: point.distanceTo(initialCenter) }))
-        .sort((a, b) => a.distance - b.distance);
-
-      const keepCount = Math.max(3, Math.ceil(rankedPoints.length * 0.8));
-      const focusPoints = rankedPoints.slice(0, keepCount).map((entry) => entry.point);
-
-      const center = focusPoints
-        .reduce((acc, point) => acc.add(point), new THREE.Vector3(0, 0, 0))
-        .divideScalar(focusPoints.length);
-
-      const radius = focusPoints.reduce((max, point) => Math.max(max, point.distanceTo(center)), 0);
-
-      return { center, radius };
-    },
-    [clusterGroups, displayPointPositionMap],
-  );
-
-  const visualSceneRadius = sceneBounds.radius * CLUSTER_POINT_SPREAD;
-
-  const authoritativeClusterByKey = useMemo(() => {
-    const map = new Map<string, { key: string; label: string; color?: string }>();
-
-    data.forEach((point) => {
-      const key = point.display_topic_id || point.cluster_id || '-1';
-      const mapKey = makePointCacheKey(point.unique_key, point.creation_date, point.modification_date);
-      map.set(mapKey, {
-        key,
-        label: point.cluster_label || clusterNameById.get(key) || '',
-      });
-    });
-
-    // Backend-opened modal rows are treated as authoritative overrides.
-    recentClusterInfoCache.current.forEach((info, compositeKey) => {
-      map.set(compositeKey, {
-        key: info.clusterId || '-1',
-        label: info.clusterLabel || clusterNameById.get(info.clusterId || '-1') || '',
-        color: info.color,
-      });
-    });
-
-    if (selectedNode) {
-      const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
-      const mapKey = makePointCacheKey(selectedNode.unique_key);
-      map.set(mapKey, {
-        key,
-        label: selectedNode.cluster_label || clusterNameById.get(key) || '',
-        color: selectedNode.dot_color || selectedNode.cluster_color,
-      });
-    }
-
-    return map;
-  }, [data, selectedNode, clusterNameById, makePointCacheKey]);
-
-  const { buckets, pointLookup } = useMemo(() => {
-    const bucketMap = new Map<string, PointBucket>();
-    const lookup = new Map<string, VisualPoint>();
-    const isSearchMode = !isHistoryMode && debouncedQuery.trim().length > 0;
-    const hasSearchHits = !isHistoryMode && searchResults.length > 0;
-
-    visibleLabels.forEach((label) => {
-      const group = clusterGroups[label];
-      const clusterColorBase = clusterColors[label] || '#4b5563';
-
-      group.customdata.forEach((meta, index) => {
-        const isHistoryHit = isHistoryMode && historyTitleSet.has(meta.title);
-        const isHit = isHistoryMode ? isHistoryHit : hasSearchHits && searchScoreMap.has(meta.unique_key);
-        const pointKey = makePointCacheKey(meta.unique_key);
-        const authoritative = authoritativeClusterByKey.get(pointKey);
-        const pointClusterKey = authoritative?.key || label;
-        const pointClusterLabel = authoritative?.label || clusterNameById.get(pointClusterKey) || meta.cluster_label;
-
-        // Search/history hits get a larger, brighter glyph; misses get a smaller, muted one.
-        const size = isSearchMode || isHistoryMode ? (isHit ? 0.05 : 0.015) : 0.028;
-
-        // SOURCE OF TRUTH: Use the color the server calculated for this specific row.
-        // Fallback only if it's missing (which it shouldn't be now).
-        const dotColor = authoritative?.color || meta.dot_color || clusterColors[label] || '#6b7280';
-        const visualColor = (isSearchMode || isHistoryMode)
-          ? (isHit ? mixColorWithWhite(dotColor, 0.12) : mixColorWithDark(dotColor, 0.72))
-          : dotColor;
-
-        // Glow: strong for hits in search/history mode, otherwise no glow by default (only on hover).
-        const glowOpacity = (isSearchMode || isHistoryMode) ? (isHit ? 0.42 : 0.02) : 0.0;
-        const opacity = (isSearchMode || isHistoryMode) ? (isHit ? 0.98 : 0.18) : 0.9;
-        const quantizedSize = Math.max(0.012, Math.round(size * 1000) / 1000);
-        const bucketKey = `${quantizedSize}|${visualColor}|${glowOpacity}|${opacity}`;
-        if (!bucketMap.has(bucketKey)) {
-          bucketMap.set(bucketKey, {
-            key: bucketKey,
-            sizeMetric: quantizedSize,
-            color: visualColor,
-            glowOpacity,
-            opacity,
-            points: [],
-          });
-        }
-
-        const positionData = displayPointPositionMap.get(meta.unique_key);
-        const targetPos = positionData
-          ? positionData.log
-          : new THREE.Vector3(group.x[index], group.y[index], group.z[index]);
-
-        const visualPoint: VisualPoint = {
-          ...meta,
-          cluster_id: pointClusterKey,
-          display_topic_id: pointClusterKey,
-          cluster_label: pointClusterLabel,
-          x: targetPos.x,
-          y: targetPos.y,
-          z: targetPos.z,
-          dotColor,
-        };
-        lookup.set(meta.unique_key, visualPoint);
-
-        const bucket = bucketMap.get(bucketKey)!;
-        bucket.points.push(visualPoint);
-      });
-    });
-
-    return {
-      buckets: Array.from(bucketMap.values()).sort((a, b) => a.sizeMetric - b.sizeMetric),
-      pointLookup: lookup,
-    };
-  }, [
-    authoritativeClusterByKey,
-    clusterNameById,
-    clusterColors,
-    clusterGroups,
-    debouncedQuery,
-    makePointCacheKey,
-    displayPointPositionMap,
-    historyTitleSet,
-    isHistoryMode,
-    searchResults.length,
-    searchScoreMap,
-    visibleLabels,
-  ]);
-
-  const hoveredPoint = hoveredId ? pointLookup.get(hoveredId) || null : null;
-  const hoveredClusterColor = hoveredPoint ? hoveredPoint.dotColor : '#ffffff';
-  const hoveredClusterSurfaceColor = hoveredPoint
-    ? mixColorWithWhite(hoveredClusterColor, 1 - NOTE_SURFACE_SATURATION)
-    : hoveredClusterColor;
-
-  const renderedClusterCenters = useMemo(() => {
-    const centers = new Map<string, THREE.Vector3>();
-    Object.keys(clusterGroups).forEach((label) => {
-      const focusMetrics = getClusterFocusMetrics(label);
-      if (focusMetrics) {
-        centers.set(label, focusMetrics.center);
-      }
-    });
-    return centers;
-  }, [clusterGroups, getClusterFocusMetrics]);
-
-  // Auto-rotate group helper
-  const AutoRotateGroup = ({ children, speed = 0 }: { children: React.ReactNode; speed?: number }) => {
-    const ref = useRef<THREE.Group>(null);
-    useFrame(() => {
-      if (ref.current && speed !== 0) {
-        ref.current.rotation.y += speed;
-      }
-    });
-    return <group ref={ref}>{children}</group>;
-  };
 
   const selectedClusterSummaries = useMemo(() => {
     if (selectedClusters.size > 0) {
       return Array.from(selectedClusters)
-         .map((clusterId) => {
+        .map((clusterId) => {
           const group = clusterGroups[clusterId];
           return {
             clusterId: clusterId || '?',
             clusterLabel: group?.clusterLabel || clusterId || 'Unknown cluster',
             chunkCount: group?.customdata?.length ?? group?.chunkCount ?? null,
           };
-         })
-         .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
+        })
+        .sort((a, b) => a.clusterId.localeCompare(b.clusterId, undefined, { numeric: true }));
     }
 
     if (selectedNode) {
@@ -1861,200 +1287,6 @@ export default function NoteClusters() {
     return [] as Array<{ clusterId: string; clusterLabel: string; chunkCount: number | null }>;
   }, [clusterGroups, selectedClusters, selectedNode]);
 
-  const resolveClusterForUniqueKey = useCallback(
-    (uniqueKey: string, creationDate?: string, modificationDate?: string) => {
-      // If the selected (open) modal corresponds to this unique key, prefer its authoritative cluster info
-      if (selectedNode && selectedNode.unique_key === uniqueKey) {
-        const key = selectedNode.display_topic_id || selectedNode.cluster_id || '-1';
-        return { key, label: selectedNode.cluster_label || clusterNameById.get(key) || '' };
-      }
-
-      // Check cache for recently loaded backend cluster info (from successfully opened modals)
-      // This ensures we use fresh backend data even for points not currently in selectedNode
-      const compositeKey = makePointCacheKey(uniqueKey, creationDate, modificationDate);
-      const cached = recentClusterInfoCache.current.get(compositeKey);
-      if (cached) {
-        return { key: cached.clusterId, label: cached.clusterLabel || clusterNameById.get(cached.clusterId) || '' };
-      }
-
-      // Otherwise, consult the initial `data` set (best-effort local authority)
-      const row = data.find((d) => d.unique_key === uniqueKey);
-      if (row) {
-        const key = row.display_topic_id || row.cluster_id || '-1';
-        return { key, label: row.cluster_label || clusterNameById.get(key) || '' };
-      }
-
-      // Fallback: empty values
-      return { key: '-1', label: '' };
-    },
-    [selectedNode, data, clusterNameById, makePointCacheKey],
-  );
-
-  const selectedNodeColor = useMemo(() => {
-    if (!selectedNode) return '#ffffff';
-    const selectedClusterKey = selectedNode.display_topic_id || selectedNode.cluster_id || '';
-    return clusterColors[selectedClusterKey] || '#ffffff';
-  }, [clusterColors, selectedNode]);
-
-  const selectedNodeSurfaceColor = useMemo(() => {
-    if (!selectedNode) return '#ffffff';
-    return mixColorWithWhite(selectedNodeColor, 1 - NOTE_SURFACE_SATURATION);
-  }, [selectedNode, selectedNodeColor]);
-
-  const updateTooltipPosition = useCallback((nativeEvent: PointerEvent | MouseEvent) => {
-    if (!plotAreaRef.current) return;
-    const rect = plotAreaRef.current.getBoundingClientRect();
-    setTooltipPosition({
-      x: nativeEvent.clientX - rect.left,
-      y: nativeEvent.clientY - rect.top,
-      containerWidth: rect.width,
-    });
-  }, []);
-
-  const handleCanvasPointMove = useCallback(
-    (point: VisualPoint, event: ThreeEvent<PointerEvent>) => {
-      event.stopPropagation();
-      setHoveredId(point.unique_key);
-      setHoverSource('canvas');
-      updateTooltipPosition(event.nativeEvent);
-    },
-    [updateTooltipPosition],
-  );
-
-  const resolvePointFromIntersections = useCallback(
-    (intersections: ThreeEvent<PointerEvent | MouseEvent>['intersections']) => {
-      if (!intersections || intersections.length === 0) {
-        return null;
-      }
-
-      let best: VisualPoint | null = null;
-      let bestDistance = Number.POSITIVE_INFINITY;
-
-      intersections.forEach((intersection) => {
-        const sourcePoints = intersection.object.userData?.points as VisualPoint[] | undefined;
-        if (!sourcePoints) return;
-        const hitIndex = intersection.instanceId ?? intersection.index;
-        if (hitIndex === undefined || hitIndex === null) return;
-
-        const point = sourcePoints[hitIndex];
-        if (!point) return;
-
-        if (intersection.distance < bestDistance) {
-          best = point;
-          bestDistance = intersection.distance;
-        }
-      });
-
-      return best;
-    },
-    [],
-  );
-
-  const resolvePointFromEvent = useCallback(
-    (event: ThreeEvent<PointerEvent | MouseEvent>) => {
-      const points = (event.eventObject as THREE.Object3D).userData?.points as VisualPoint[] | undefined;
-      if (points && event.instanceId !== undefined && event.instanceId !== null) {
-        return points[event.instanceId] || null;
-      }
-      return resolvePointFromIntersections(event.intersections);
-    },
-    [resolvePointFromIntersections],
-  );
-
-  const handleCanvasPointClick = useCallback(
-    (point: VisualPoint, event: ThreeEvent<MouseEvent>) => {
-      event.stopPropagation();
-      setHoveredId(null);
-      setHoverSource(null);
-
-      setHighlightedNodeId(point.unique_key);
-      fetchNoteContent(
-        point.title,
-        point.chunk_index,
-        point.cluster_id,
-        point.cluster_label,
-        point.display_topic_id,
-        point.base_topic_id,
-        point.creation_date,
-        point.modification_date,
-      );
-    },
-    [],
-  );
-
-  const tooltipStyle = useMemo(() => {
-    const OFFSET = 12;
-    const containerWidth = tooltipPosition.containerWidth || 0;
-    const shouldPositionLeft = tooltipPosition.x > containerWidth * 0.5;
-
-    if (shouldPositionLeft) {
-      return {
-        positionLeft: true,
-        left: 'auto',
-        right: containerWidth - tooltipPosition.x + OFFSET,
-        top: tooltipPosition.y + OFFSET,
-      };
-    }
-
-    return {
-      positionLeft: false,
-      left: tooltipPosition.x + OFFSET,
-      right: 'auto',
-      top: tooltipPosition.y + OFFSET,
-    };
-  }, [tooltipPosition]);
-
-  const modalStyle = useMemo(() => {
-    const OFFSET = 20;
-    const plotWidth = plotAreaRef.current?.getBoundingClientRect().width || window.innerWidth;
-    const shouldPositionLeft = tooltipPosition.x > plotWidth * 0.5;
-
-    const baseStyle: React.CSSProperties = {
-      position: 'absolute',
-      top: '20px',
-      width: '400px',
-      maxHeight: '80vh',
-      border: '1px solid #ccc',
-      borderRadius: '8px',
-      paddingTop: '20px',
-      paddingBottom: '20px',
-      paddingLeft: shouldPositionLeft ? '10px' : '10px',
-      paddingRight: shouldPositionLeft ? '20px' : '20px',
-      boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
-      zIndex: 100,
-      display: 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-      textAlign: 'left',
-      ...(shouldPositionLeft
-        ? { right: Math.max(0, plotWidth - tooltipPosition.x + OFFSET) }
-        : { right: '20px' }),
-    };
-
-    const headerStyle: React.CSSProperties = {
-      display: 'flex',
-      justifyContent: 'flex-start',
-      alignItems: 'flex-start',
-      marginBottom: '10px',
-      flexDirection: 'row',
-    };
-
-    return {
-      positionLeft: shouldPositionLeft,
-      base: baseStyle,
-      header: headerStyle,
-    };
-  }, [tooltipPosition]);
-
-  const cameraPosition = useMemo(() => {
-    const { center } = sceneBounds;
-    const spreadRadius = visualSceneRadius * GLOBAL_LAYOUT_SPREAD;
-    return [
-      center.x + spreadRadius * 0.18,
-      center.y + spreadRadius * 0.14,
-      center.z + spreadRadius * 0.18,
-    ] as [number, number, number];
-  }, [sceneBounds, visualSceneRadius]);
 
   const openSidebarNote = useCallback(
     (note: SidebarNoteData, preferredChunkIndex?: number) => {
@@ -2106,7 +1338,7 @@ export default function NoteClusters() {
 
   const handleInactiveRailClick = useCallback(
     (note: SidebarNoteData, chunk: SidebarChunkData, e?: React.MouseEvent) => {
-       // Immediately scroll the note to the top of the notes list
+      // Immediately scroll the note to the top of the notes list
       const leftContainer = notesListRef.current;
       const cardEl = sidebarCardRefs.current[note.note_key];
       if (leftContainer && cardEl) {
@@ -2114,35 +1346,34 @@ export default function NoteClusters() {
         const containerRect = leftContainer.getBoundingClientRect();
         const offsetFromTop = cardRect.top - containerRect.top;
         leftContainer.scrollTop += offsetFromTop;
-       }
+      }
 
-       // Always select sole cluster — no multi-select
-       setSelectedClusters(new Set([chunk.cluster_id]));
-       focusClusterByOrbit(chunk.cluster_id);
+      // Always select sole cluster — no multi-select
+      setSelectedClusters(new Set([chunk.cluster_id]));
 
-       setPendingScrollNoteKey(note.note_key);
-       setPendingScrollNoteTitle(note.title);
-       setPendingScrollTargetCluster(chunk.cluster_id);
+      setPendingScrollNoteKey(note.note_key);
+      setPendingScrollNoteTitle(note.title);
+      setPendingScrollTargetCluster(chunk.cluster_id);
 
-        // After state updates, scroll legend cluster into view (centered)
-       setTimeout(() => {
-         const legendEl = legendClusterRefs.current[chunk.cluster_id];
-         const legendContainer = legendContainerRef.current;
-         if (legendEl && legendContainer) {
-           const parentRect = legendContainer.getBoundingClientRect();
-           const elRect = legendEl.getBoundingClientRect();
-           const offset = elRect.top - parentRect.top;
-           const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
-           try {
-             legendContainer.scrollTo({ top: target, behavior: 'smooth' });
-            } catch (err) {
-             legendContainer.scrollTop = target;
-            }
+      // After state updates, scroll legend cluster into view (centered)
+      setTimeout(() => {
+        const legendEl = legendClusterRefs.current[chunk.cluster_id];
+        const legendContainer = legendContainerRef.current;
+        if (legendEl && legendContainer) {
+          const parentRect = legendContainer.getBoundingClientRect();
+          const elRect = legendEl.getBoundingClientRect();
+          const offset = elRect.top - parentRect.top;
+          const target = offset - legendContainer.clientHeight / 2 + elRect.height / 2;
+          try {
+            legendContainer.scrollTo({ top: target, behavior: 'smooth' });
+          } catch (err) {
+            legendContainer.scrollTop = target;
           }
-        }, 60);
-       },
-       [],
-     );
+        }
+      }, 60);
+    },
+    [],
+  );
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
@@ -2271,25 +1502,25 @@ export default function NoteClusters() {
   }, [clusterNameById, data, selectedNode]);
 
   const handleModalChunkJump = useCallback(
-      (chunkIndexOrChunk: number | SidebarChunkData) => {
-        if (!selectedNode) return;
-        // Handle both number and chunk object for backward compatibility
-        const idx = typeof chunkIndexOrChunk === 'number'
-          ? chunkIndexOrChunk
-          : chunkIndexOrChunk.chunk_index;
-        fetchNoteContent(
-          selectedNode.title,
-          idx,
-          selectedNode.cluster_id,
-          selectedNode.cluster_label,
-          selectedNode.display_topic_id,
-          selectedNode.base_topic_id,
-          selectedNode.creation_date,
-          selectedNode.modification_date,
-        );
-      },
-      [selectedNode, fetchNoteContent],
-    );
+    (chunkIndexOrChunk: number | SidebarChunkData) => {
+      if (!selectedNode) return;
+      // Handle both number and chunk object for backward compatibility
+      const idx = typeof chunkIndexOrChunk === 'number'
+        ? chunkIndexOrChunk
+        : chunkIndexOrChunk.chunk_index;
+      fetchNoteContent(
+        selectedNode.title,
+        idx,
+        selectedNode.cluster_id,
+        selectedNode.cluster_label,
+        selectedNode.display_topic_id,
+        selectedNode.base_topic_id,
+        selectedNode.creation_date,
+        selectedNode.modification_date,
+      );
+    },
+    [selectedNode, fetchNoteContent],
+  );
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -2324,20 +1555,20 @@ export default function NoteClusters() {
           >
             {/* removed Peak Recency / Momentum UI as requested */}
 
-              <div
-               style={{
-                 display: 'none',
-                 alignItems: 'center',
-                 justifyContent: 'space-between',
-                 gap: '8px',
-                 marginBottom: '10px',
-                 padding: '8px 10px',
-                 borderRadius: '8px',
-                 border: '1px solid #e5e7eb',
-                 background: '#fff',
-               }}
-             >
-               <button
+            <div
+              style={{
+                display: 'none',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                marginBottom: '10px',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                border: '1px solid #e5e7eb',
+                background: '#fff',
+              }}
+            >
+              <button
                 type="button"
                 onClick={() => {
                   if (!canGoBackHistory) return;
@@ -2360,13 +1591,13 @@ export default function NoteClusters() {
               >
                 <ArrowForwardIcon style={{ transform: 'rotate(180deg)' }} />
               </button>
-                {/* Day header hidden for now — will be dealt with later */}
-                <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
-                 <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px', display: 'none' }}>Day</div>
-                 <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'none' }}>
-                   {selectedHistoryDate || 'No history dates'}
-                 </div>
-               </div>
+              {/* Day header hidden for now — will be dealt with later */}
+              <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
+                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px', display: 'none' }}>Day</div>
+                <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'none' }}>
+                  {selectedHistoryDate || 'No history dates'}
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -2469,26 +1700,26 @@ export default function NoteClusters() {
                       const tint = clusterTints[summary.clusterId] || '#f3f4f6';
                       const border = clusterOpaqueTints[summary.clusterId] || '#e5e7eb';
                       return (
-                         <div
-                           key={summary.clusterId}
-                           style={{
-                             display: 'flex',
-                             alignItems: 'flex-start',
-                             gap: '8px',
-                             backgroundColor: tint,
-                             border: `1px solid ${border}`,
-                             padding: '6px 8px',
-                             borderRadius: '6px',
-                            }}
-                           >
-                            <div style={{ fontWeight: 700, flexShrink: 0 }}>#{summary.clusterId}</div>
-                            <div style={{ flex: 1, color: '#4b5563', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3, minWidth: 0 }}>{summary.clusterLabel}</div>
-                            {summary.chunkCount != null && (
-                              <div style={{ flexShrink: 0, marginLeft: 'auto', color: '#9ca3af', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                                {summary.chunkCount} chunks
-                              </div>
-                            )}
-                          </div>
+                        <div
+                          key={summary.clusterId}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '8px',
+                            backgroundColor: tint,
+                            border: `1px solid ${border}`,
+                            padding: '6px 8px',
+                            borderRadius: '6px',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, flexShrink: 0 }}>#{summary.clusterId}</div>
+                          <div style={{ flex: 1, color: '#4b5563', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3, minWidth: 0 }}>{summary.clusterLabel}</div>
+                          {summary.chunkCount != null && (
+                            <div style={{ flexShrink: 0, marginLeft: 'auto', color: '#9ca3af', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                              {summary.chunkCount} chunks
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -2593,10 +1824,10 @@ export default function NoteClusters() {
                             const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
 
                             if (isActiveChunk) {
-                               // Show dot chunk - only if we have a selection, or show all if no selection
+                              // Show dot chunk - only if we have a selection, or show all if no selection
                               if (selectedClusters.size > 0) {
                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                 // Resolve cluster color from API to match right column
+                                // Resolve cluster color from API to match right column
                                 const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
                                 const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
                                 const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
@@ -2625,10 +1856,10 @@ export default function NoteClusters() {
                                     {preview.length > 180 ? '...' : ''}
                                   </button>,
                                 );
-                               } else {
-                                 // No selection - show all chunks
+                              } else {
+                                // No selection - show all chunks
                                 const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                 // Resolve cluster color from API to match right column
+                                // Resolve cluster color from API to match right column
                                 const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
                                 const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
                                 const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
@@ -2873,12 +2104,12 @@ export default function NoteClusters() {
                       let i = 0;
                       while (i < note.chunks.length) {
                         const chunk = note.chunks[i];
-                         if (chunk.in_cluster) {
-                           const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                           // Resolve cluster color from the API so it matches the right column
-                           const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
-                           const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
-                           const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
+                        if (chunk.in_cluster) {
+                          const preview = (chunk.text || '').trim() || '(Empty chunk)';
+                          // Resolve cluster color from the API so it matches the right column
+                          const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
+                          const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
+                          const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                           rows.push(
                             <button
                               type="button"
@@ -2937,73 +2168,71 @@ export default function NoteClusters() {
           </div>
 
 
-{/* Center column: RadialSimilarityHub */}
-<div style={{
-  flex: 1,
-  minWidth: '200px',
-  display: 'flex',
-  flexDirection: 'column',
-  minHeight: 0,
-  borderLeft: '1px solid #e0e0e0',
-  borderRight: '1px solid #e0e0e0',
-  backgroundColor: '#f9f9f9',
-  padding: '10px',
-  boxSizing: 'border-box',
-}}>
-  <div style={{
-    fontSize: '13px',
-    fontWeight: 700,
-    color: '#1f2937',
-    marginBottom: '8px',
-    textAlign: 'center',
-    flexShrink: 0,
-  }}>
-    Similar Clusters
-  </div>
-  <div style={{
-    flex: 1,
-    minHeight: 0,
-    minWidth: 0,
-    display: 'flex',
-  }}>
-    <RadialSimilarityHub
-      selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-      onNodeClick={(clusterId) => {
-        setSelectedClusters(new Set([clusterId]));
-        try { focusClusterByOrbit(clusterId); } catch (_ignore) {}
-      }}
-      clusterColors={clusterColorsFromAPI}
-    />
-  </div>
-</div>
-
-              {/* Right column: MetaClusterTree */}
-              <div style={{
-             width: '26%',
-             flexShrink: 0,
-             display: 'flex',
-             flexDirection: 'column',
-             borderLeft: '1px solid #e0e0e0',
-             backgroundColor: '#f9f9f9',
-             padding: '10px',
-             boxSizing: 'border-box',
-             fontSize: '11px',
-             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-              }}>
-               <MetaClusterTree
-               onClusterSelect={(clusterId) => {
-                 setSelectedClusters(new Set([clusterId]));
-                 try { focusClusterByOrbit(clusterId); } catch (_ignore) { }
+          {/* Center column: RadialSimilarityHub */}
+          <div style={{
+            flex: 1,
+            minWidth: '200px',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            borderLeft: '1px solid #e0e0e0',
+            borderRight: '1px solid #e0e0e0',
+            backgroundColor: '#f9f9f9',
+            padding: '10px',
+            boxSizing: 'border-box',
+          }}>
+            <div style={{
+              fontSize: '13px',
+              fontWeight: 700,
+              color: '#1f2937',
+              marginBottom: '8px',
+              textAlign: 'center',
+              flexShrink: 0,
+            }}>
+              Similar Clusters
+            </div>
+            <div style={{
+              flex: 1,
+              minHeight: 0,
+              minWidth: 0,
+              display: 'flex',
+            }}>
+              <RadialSimilarityHub
+                selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+                onNodeClick={(clusterId) => {
+                  setSelectedClusters(new Set([clusterId]));
                 }}
-               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-               sortMetric={clusterSortMetric}
-               clusterColors={clusterColorsFromAPI}
-               />
-           </div>
+                clusterColors={clusterColorsFromAPI}
+              />
+            </div>
+          </div>
 
-           {/* Modal Popup for Note Content */}
-           {selectedNode && (
-             <div
+          {/* Right column: MetaClusterTree */}
+          <div style={{
+            width: '26%',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid #e0e0e0',
+            backgroundColor: '#f9f9f9',
+            padding: '10px',
+            boxSizing: 'border-box',
+            fontSize: '11px',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          }}>
+            <MetaClusterTree
+              onClusterSelect={(clusterId) => {
+                setSelectedClusters(new Set([clusterId]));
+              }}
+              selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+              sortMetric={clusterSortMetric}
+              clusterColors={clusterColorsFromAPI}
+            />
+          </div>
+
+          {/* Modal Popup for Note Content */}
+          {selectedNode && (
+            <div
               style={{
                 position: 'fixed',
                 top: 0,
@@ -3018,8 +2247,8 @@ export default function NoteClusters() {
                 pointerEvents: 'auto',
               }}
               onClick={closePopup}
-             >
-               <div
+            >
+              <div
                 style={{
                   position: 'relative',
                   width: 'min(520px, 90vw)',
@@ -3032,10 +2261,10 @@ export default function NoteClusters() {
                   overflow: 'hidden',
                   pointerEvents: 'auto',
                 }}
-                 onClick={(e) => e.stopPropagation()}
-                 >
-                   {/* Close button (X) in upper right */}
-                  <button
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Close button (X) in upper right */}
+                <button
                   type="button"
                   onClick={closePopup}
                   style={{
@@ -3060,102 +2289,102 @@ export default function NoteClusters() {
                   onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f3f4f6'; e.currentTarget.style.color = '#111827'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
                   title="Close"
-                 >
-                   ×
+                >
+                  ×
                 </button>
 
-                  {/* Header with cluster color accent */}
+                {/* Header with cluster color accent */}
+                <div style={{
+                  padding: '16px 16px 12px 16px',
+                  borderBottom: `1px solid ${modalApiColor ? mixColorWithWhite(modalApiColor, 0.85) : '#e5e7eb'}`,
+                  backgroundColor: modalApiColor
+                    ? mixColorWithWhite(modalApiColor, 0.88)
+                    : '#f9fafb',
+                }}>
                   <div style={{
-                    padding: '16px 16px 12px 16px',
-                   borderBottom: `1px solid ${modalApiColor ? mixColorWithWhite(modalApiColor, 0.85) : '#e5e7eb'}`,
-                   backgroundColor: modalApiColor
-                        ? mixColorWithWhite(modalApiColor, 0.88)
-                        : '#f9fafb',
+                    fontWeight: 700,
+                    fontSize: '15px',
+                    color: '#111827',
+                    marginBottom: '4px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}>
-                      <div style={{
-                        fontWeight: 700,
-                        fontSize: '15px',
-                        color: '#111827',
-                        marginBottom: '4px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}>
-                        {selectedNode.title}
-                      </div>
-
-                      {/* Thin colored accent bar at top of header */}
-                      {modalApiColor && (
-                        <div style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          height: '3px',
-                          backgroundColor: modalApiColor,
-                        }} />
-                      )}
-
-                      <div style={{
-                     fontSize: '12px',
-                     color: '#6b7280',
-                     display: 'flex',
-                     alignItems: 'center',
-                     gap: '8px',
-                    }}>
-                      {selectedNode.cluster_label && (
-                        <span style={{
-                         color: selectedNode.cluster_color || '#4b5563',
-                         fontWeight: 600,
-                        }}>
-                          {selectedNode.cluster_label}
-                        </span>
-                      )}
-                      <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
-                    </div>
-
-                    {/* Dot/Dash Segmented Rail for cluster navigation in modal */}
-                    {modalRailChunks.length > 0 && (
-                      <SegmentedRail
-                       chunks={modalRailChunks}
-                       activeClusterIds={new Set([selectedNode.display_topic_id || selectedNode.cluster_id || ''])}
-                       currentChunkIndex={selectedNode.chunk_index}
-                       getClusterColor={(clusterId) => clusterColors[clusterId] || '#6b7280'}
-                      onActiveDotClick={(chunk) => handleModalChunkJump(chunk.chunk_index)}
-                        onInactiveDashClick={(chunk) => {
-                           // Clicking a dash: select that cluster, navigate to the chunk
-                          setSelectedClusters(new Set([chunk.cluster_id]));
-                          fetchNoteContent(
-                            selectedNode.title,
-                            chunk.chunk_index,
-                            selectedNode.cluster_id,
-                            selectedNode.cluster_label,
-                            chunk.cluster_id,
-                            selectedNode.base_topic_id,
-                            selectedNode.creation_date,
-                            selectedNode.modification_date,
-                           );
-                         }}
-                      />
-                    )}
+                    {selectedNode.title}
                   </div>
 
-                 {/* Navigation and Content */}
-                 <div style={{
-                   flex: 1,
-                   overflowY: 'auto',
-                   padding: '16px',
-                   display: 'flex',
-                   flexDirection: 'column',
-                   gap: '12px',
-                 }}>
-                   {/* Navigation buttons */}
-                   <div style={{
-                     display: 'flex',
-                     justifyContent: 'space-between',
-                     alignItems: 'center',
-                   }}>
-                     <button
+                  {/* Thin colored accent bar at top of header */}
+                  {modalApiColor && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '3px',
+                      backgroundColor: modalApiColor,
+                    }} />
+                  )}
+
+                  <div style={{
+                    fontSize: '12px',
+                    color: '#6b7280',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}>
+                    {selectedNode.cluster_label && (
+                      <span style={{
+                        color: selectedNode.cluster_color || '#4b5563',
+                        fontWeight: 600,
+                      }}>
+                        {selectedNode.cluster_label}
+                      </span>
+                    )}
+                    <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
+                  </div>
+
+                  {/* Dot/Dash Segmented Rail for cluster navigation in modal */}
+                  {modalRailChunks.length > 0 && (
+                    <SegmentedRail
+                      chunks={modalRailChunks}
+                      activeClusterIds={new Set([selectedNode.display_topic_id || selectedNode.cluster_id || ''])}
+                      currentChunkIndex={selectedNode.chunk_index}
+                      getClusterColor={(clusterId) => clusterColors[clusterId] || '#6b7280'}
+                      onActiveDotClick={(chunk) => handleModalChunkJump(chunk.chunk_index)}
+                      onInactiveDashClick={(chunk) => {
+                        // Clicking a dash: select that cluster, navigate to the chunk
+                        setSelectedClusters(new Set([chunk.cluster_id]));
+                        fetchNoteContent(
+                          selectedNode.title,
+                          chunk.chunk_index,
+                          selectedNode.cluster_id,
+                          selectedNode.cluster_label,
+                          chunk.cluster_id,
+                          selectedNode.base_topic_id,
+                          selectedNode.creation_date,
+                          selectedNode.modification_date,
+                        );
+                      }}
+                    />
+                  )}
+                </div>
+
+                {/* Navigation and Content */}
+                <div style={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}>
+                  {/* Navigation buttons */}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                    <button
                       type="button"
                       onClick={handlePrevChunk}
                       style={{
@@ -3167,13 +2396,13 @@ export default function NoteClusters() {
                         fontSize: '13px',
                         fontWeight: 600,
                       }}
-                     >
-                       ← Previous
-                     </button>
-                     <span style={{ fontSize: '12px', color: '#6b7280' }}>
-                       {selectedNode.chunk_index + 1} / {selectedNode.total_chunks}
-                     </span>
-                     <button
+                    >
+                      ← Previous
+                    </button>
+                    <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                      {selectedNode.chunk_index + 1} / {selectedNode.total_chunks}
+                    </span>
+                    <button
                       type="button"
                       onClick={handleNextChunk}
                       style={{
@@ -3185,35 +2414,34 @@ export default function NoteClusters() {
                         fontSize: '13px',
                         fontWeight: 600,
                       }}
-                     >
-                       Next →
-                     </button>
-                   </div>
+                    >
+                      Next →
+                    </button>
+                  </div>
 
-                   {/* Content area */}
-                   <div style={{
-                     flex: 1,
-                     overflowY: 'auto',
-                     fontSize: '13px',
-                     lineHeight: '1.6',
-                     color: '#374151',
-                     whiteSpace: 'pre-wrap',
-                     wordBreak: 'break-word',
-                   }}>
-                     {isLoadingContent ? (
-                       <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af' }}>
-                         Loading...
-                       </div>
-                     ) : (
-                       selectedNode.content || '(No content)'
-                     )}
-                   </div>
-                 </div>
-               </div>
-             </div>
-           )}
-
-         </div>
+                  {/* Content area */}
+                  <div style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    fontSize: '13px',
+                    lineHeight: '1.6',
+                    color: '#374151',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}>
+                    {isLoadingContent ? (
+                      <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af' }}>
+                        Loading...
+                      </div>
+                    ) : (
+                      selectedNode.content || '(No content)'
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
