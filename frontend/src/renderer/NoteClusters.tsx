@@ -1623,48 +1623,7 @@ export default function NoteClusters() {
               </button>
             </div>
 
-            {/* {!isHistoryMode && <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
-                  Sort Notes By
-                </label>
-                <select
-                  value={notesSortMetric}
-                  onChange={(e) => setNotesSortMetric(e.target.value as NotesSortMetric)}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}
-                >
-                  <option value="modified">Modification Date</option>
-                  <option value="size">Note Size (Chunks)</option>
-                  <option value="search">Search Order</option>
-                </select>
-              </div>
-              <div style={{ width: '130px' }}>
-                <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
-                  Direction
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setNotesSortDirection((dir) => (dir === 'asc' ? 'desc' : 'asc'))}
-                  title={notesSortDirection === 'asc' ? 'Increasing' : 'Decreasing'}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    borderRadius: '6px',
-                    border: '1px solid #ccc',
-                    background: '#fff',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {notesSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
-                </button>
-              </div>
-            </div>} */}
-
             {!isHistoryMode && <div style={{ marginBottom: '15px' }}>
-              <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
               <input
                 type="text"
                 placeholder="Search..."
