@@ -1,12 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import * as THREE from 'three';
-import LanguageIcon from '@mui/icons-material/Language';
-import HistoryIcon from '@mui/icons-material/History';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { RadialSimilarityHub } from './RadialSimilarityHub';
 import { MetaClusterTree } from './MetaClusterTree';
 
@@ -443,9 +437,6 @@ export default function NoteClusters() {
     };
   }, []);
 
-  const selectedHistoryDate = selectedHistoryDateIndex >= 0 ? historyDates[selectedHistoryDateIndex] || null : null;
-  const canGoBackHistory = historyDates.length > 0 && selectedHistoryDateIndex > 0;
-  const canGoForwardHistory = historyDates.length > 0 && selectedHistoryDateIndex >= 0 && selectedHistoryDateIndex < historyDates.length - 1;
   const historyClusterFirstSeenRank = useMemo(() => {
     const rankMap = new Map<string, number>();
     historySidebarNotes.forEach((note, noteIndex) => {
@@ -560,7 +551,7 @@ export default function NoteClusters() {
     return map;
   }, [data]);
 
-  const { clusterGroups, clusterColors, clusterTints, clusterHoverTints, clusterOpaqueTints } = useMemo(() => {
+  const { clusterGroups, clusterColors, clusterTints, clusterOpaqueTints } = useMemo(() => {
     const processingGroups: Record<string, ClusterGroup> = {};
 
     if (data.length > 0) {
