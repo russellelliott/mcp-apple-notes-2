@@ -1623,7 +1623,7 @@ export default function NoteClusters() {
               </button>
             </div>
 
-            {!isHistoryMode && <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+            {/* {!isHistoryMode && <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '12px', color: '#4b5563', marginBottom: '4px' }}>
                   Sort Notes By
@@ -1661,7 +1661,7 @@ export default function NoteClusters() {
                   {notesSortDirection === 'asc' ? <ArrowUpwardIcon /> : <ArrowDownwardIcon />}
                 </button>
               </div>
-            </div>}
+            </div>} */}
 
             {!isHistoryMode && <div style={{ marginBottom: '15px' }}>
               <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Search Notes</h3>
