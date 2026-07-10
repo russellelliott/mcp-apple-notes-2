@@ -444,8 +444,6 @@ export default function NoteClusters() {
   }, []);
 
   const selectedHistoryDate = selectedHistoryDateIndex >= 0 ? historyDates[selectedHistoryDateIndex] || null : null;
-  const isHistoryMode = viewMode === 'history';
-  const historyTitleSet = useMemo(() => new Set(historySidebarNotes.map((note) => note.title)), [historySidebarNotes]);
   const canGoBackHistory = historyDates.length > 0 && selectedHistoryDateIndex > 0;
   const canGoForwardHistory = historyDates.length > 0 && selectedHistoryDateIndex >= 0 && selectedHistoryDateIndex < historyDates.length - 1;
   const historyClusterFirstSeenRank = useMemo(() => {
@@ -1188,42 +1186,7 @@ export default function NoteClusters() {
     };
   }, [selectedClusters, viewMode]);
 
-  useEffect(() => {
-    let active = true;
 
-    const fetchHistorySidebar = async () => {
-      if (!isHistoryMode || !selectedHistoryDate) {
-        if (active) {
-          setHistorySidebarNotes([]);
-          setIsLoadingHistory(false);
-        }
-        return;
-      }
-
-      setIsLoadingHistory(true);
-      try {
-        const response = await axios.get(`http://127.0.0.1:8000/history/day/${encodeURIComponent(selectedHistoryDate)}`);
-        const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
-
-        if (active) {
-          setHistorySidebarNotes(notes);
-        }
-      } catch (error) {
-        console.error('Error loading day history:', error);
-        if (active) {
-          setHistorySidebarNotes([]);
-        }
-      } finally {
-        if (active) setIsLoadingHistory(false);
-      }
-    };
-
-    fetchHistorySidebar();
-
-    return () => {
-      active = false;
-    };
-  }, [isHistoryMode, selectedHistoryDate]);
 
   useEffect(() => {
     if (!pendingScrollNoteKey) return;
@@ -1289,30 +1252,35 @@ export default function NoteClusters() {
 
 
   const openSidebarNote = useCallback(
-    (note: SidebarNoteData, preferredChunkIndex?: number) => {
-      const inClusterChunk = note.chunks.find((chunk) => chunk.in_cluster);
-      const fallbackChunk = note.chunks[0];
-      const chunkIndex = preferredChunkIndex ?? inClusterChunk?.chunk_index ?? fallbackChunk?.chunk_index ?? 0;
+  (note: SidebarNoteData, preferredChunkIndex?: number) => {
+    const inClusterChunk = note.chunks.find((chunk) => chunk.in_cluster);
+    const fallbackChunk = note.chunks[0];
+    const chunkIndex =
+      preferredChunkIndex ??
+      inClusterChunk?.chunk_index ??
+      fallbackChunk?.chunk_index ??
+      0;
 
-      // Use the first selected cluster or the note's cluster
-      const targetCluster = isHistoryMode
-        ? inClusterChunk?.cluster_id || fallbackChunk?.cluster_id
-        : Array.from(selectedClusters)[0] || inClusterChunk?.cluster_id || fallbackChunk?.cluster_id;
-      const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
+    const targetCluster =
+      Array.from(selectedClusters)[0] ||
+      inClusterChunk?.cluster_id ||
+      fallbackChunk?.cluster_id;
 
-      fetchNoteContent(
-        note.title,
-        chunkIndex,
-        fallbackChunk?.cluster_id || undefined,
-        clusterGroup?.clusterLabel,
-        targetCluster || undefined,
-        targetCluster || undefined,
-        note.creation_date,
-        note.modification_date,
-      );
-    },
-    [clusterGroups, isHistoryMode, selectedClusters],
-  );
+    const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
+
+    fetchNoteContent(
+      note.title,
+      chunkIndex,
+      fallbackChunk?.cluster_id || undefined,
+      clusterGroup?.clusterLabel,
+      targetCluster || undefined,
+      targetCluster || undefined,
+      note.creation_date,
+      note.modification_date,
+    );
+  },
+  [clusterGroups, selectedClusters],
+);
 
   const handleActiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
     const uniqueKey = `${note.title}_${chunk.chunk_index}`;
@@ -1439,30 +1407,6 @@ export default function NoteClusters() {
     return sorted;
   }, [notesSortDirection, notesSortMetric, sidebarNotes]);
 
-  const displayedHistorySidebarNotes = useMemo(() => {
-    const deduped = historySidebarNotes.map((note) => {
-      const seen = new Set<number>();
-      const chunks = note.chunks
-        .slice()
-        .sort((a, b) => a.chunk_index - b.chunk_index)
-        .filter((chunk) => {
-          if (seen.has(chunk.chunk_index)) return false;
-          seen.add(chunk.chunk_index);
-          return true;
-        });
-      return { ...note, chunks };
-    });
-
-    return deduped.slice().sort((a, b) => {
-      const leftTs = Date.parse(String(a.opened_at || a.modification_date || ''));
-      const rightTs = Date.parse(String(b.opened_at || b.modification_date || ''));
-      const safeLeft = Number.isFinite(leftTs) ? leftTs : Number.NEGATIVE_INFINITY;
-      const safeRight = Number.isFinite(rightTs) ? rightTs : Number.NEGATIVE_INFINITY;
-      if (safeRight !== safeLeft) return safeRight - safeLeft;
-      return a.title.localeCompare(b.title, undefined, { numeric: true });
-    });
-  }, [historySidebarNotes]);
-
   // Resolve authoritative cluster color from the API for header accent
   const modalClusterKey = selectedNode?.display_topic_id || selectedNode?.cluster_id || '';
   const modalApiColor = modalClusterKey
@@ -1553,77 +1497,9 @@ export default function NoteClusters() {
               zIndex: 10,
             }}
           >
-            {/* removed Peak Recency / Momentum UI as requested */}
+            {/* Search Bar and such */}
 
-            <div
-              style={{
-                display: 'none',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '8px',
-                marginBottom: '10px',
-                padding: '8px 10px',
-                borderRadius: '8px',
-                border: '1px solid #e5e7eb',
-                background: '#fff',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  if (!canGoBackHistory) return;
-                  setSelectedHistoryDateIndex((current) => Math.max(0, current - 1));
-                  setViewMode('history');
-                }}
-                disabled={!canGoBackHistory}
-                title="Previous day"
-                style={{
-                  width: '34px',
-                  height: '34px',
-                  borderRadius: '6px',
-                  border: '1px solid #d1d5db',
-                  background: '#f9fafb',
-                  cursor: canGoBackHistory ? 'pointer' : 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <ArrowForwardIcon style={{ transform: 'rotate(180deg)' }} />
-              </button>
-              {/* Day header hidden for now — will be dealt with later */}
-              <div style={{ flex: 1, textAlign: 'center', minWidth: 0, display: 'none' }}>
-                <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '2px', display: 'none' }}>Day</div>
-                <div style={{ fontWeight: 700, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'none' }}>
-                  {selectedHistoryDate || 'No history dates'}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!canGoForwardHistory) return;
-                  setSelectedHistoryDateIndex((current) => Math.min(historyDates.length - 1, Math.max(0, current + 1)));
-                  setViewMode('history');
-                }}
-                disabled={!canGoForwardHistory}
-                title="Next day"
-                style={{
-                  width: '34px',
-                  height: '34px',
-                  borderRadius: '6px',
-                  border: '1px solid #d1d5db',
-                  background: '#f9fafb',
-                  cursor: canGoForwardHistory ? 'pointer' : 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <ArrowForwardIcon />
-              </button>
-            </div>
-
-            {!isHistoryMode && <div style={{ marginBottom: '15px' }}>
+            <div style={{ marginBottom: '15px' }}>
               <input
                 type="text"
                 placeholder="Search..."
@@ -1653,7 +1529,6 @@ export default function NoteClusters() {
                 >
                   <div style={{ fontWeight: 700, marginBottom: '6px' }}>Selected Cluster</div>
 
-
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {selectedClusterSummaries.map((summary) => {
                       const tint = clusterTints[summary.clusterId] || '#f3f4f6';
@@ -1672,9 +1547,28 @@ export default function NoteClusters() {
                           }}
                         >
                           <div style={{ fontWeight: 700, flexShrink: 0 }}>#{summary.clusterId}</div>
-                          <div style={{ flex: 1, color: '#4b5563', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1.3, minWidth: 0 }}>{summary.clusterLabel}</div>
+                          <div
+                            style={{
+                              flex: 1,
+                              color: '#4b5563',
+                              wordBreak: 'break-word',
+                              whiteSpace: 'normal',
+                              lineHeight: 1.3,
+                              minWidth: 0,
+                            }}
+                          >
+                            {summary.clusterLabel}
+                          </div>
                           {summary.chunkCount != null && (
-                            <div style={{ flexShrink: 0, marginLeft: 'auto', color: '#9ca3af', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                            <div
+                              style={{
+                                flexShrink: 0,
+                                marginLeft: 'auto',
+                                color: '#9ca3af',
+                                fontSize: '11px',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
                               {summary.chunkCount} chunks
                             </div>
                           )}
@@ -1684,205 +1578,9 @@ export default function NoteClusters() {
                   </div>
                 </div>
               )}
-            </div>}
+            </div>
 
-            {isHistoryMode && (
-              <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto' }}>
-                <div style={{ color: '#6b7280', fontSize: '12px', marginBottom: '10px', lineHeight: 1.4 }}>
-                  {isLoadingHistory
-                    ? 'Loading notes opened on this day...'
-                    : selectedHistoryDate
-                      ? `Notes opened on ${selectedHistoryDate}`
-                      : 'No daily history available.'}
-                </div>
-
-                {displayedHistorySidebarNotes.length === 0 && !isLoadingHistory && (
-                  <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>
-                    No notes were opened on this day.
-                  </div>
-                )}
-
-                {displayedHistorySidebarNotes.map((note) => {
-                  const openLabel = note.opened_at ? formatTimeHHMM(note.opened_at) : '';
-                  // Use selectedClusters for dots/dashes logic (same as regular mode)
-                  // If no clusters selected, show all chunks as dots
-                  const historyActiveClusterIds = selectedClusters.size > 0
-                    ? selectedClusters
-                    : new Set(note.chunks.map((chunk) => chunk.cluster_id));
-                  const isSelectedNote = !!selectedNode
-                    && selectedNode.title === note.title
-                    && selectedNode.creation_date === note.creation_date
-                    && selectedNode.modification_date === note.modification_date;
-                  const currentChunkIndex = isSelectedNote ? selectedNode!.chunk_index : null;
-                  return (
-                    <div
-                      key={note.note_key}
-                      ref={(el) => {
-                        sidebarCardRefs.current[note.note_key] = el;
-                      }}
-                      style={{
-                        padding: '10px',
-                        marginBottom: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid #e5e7eb',
-                        backgroundColor: '#ffffff',
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: 0,
-                          margin: 0,
-                          fontWeight: 700,
-                          color: '#111827',
-                          textAlign: 'left',
-                          width: '100%',
-                          overflowWrap: 'anywhere',
-                          userSelect: 'none',
-                        }}
-                        title={note.title}
-                      >
-                        <span>{note.title}</span>
-                        {note.creation_date && (
-                          <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
-                            {formatDateMMDDYYYY(note.creation_date)}
-                          </span>
-                        )}
-                        {openLabel && (
-                          <span style={{ marginLeft: 8, fontWeight: 600, color: '#92400e', fontSize: '0.85em' }}>
-                            Open at {openLabel}
-                          </span>
-                        )}
-                        {note.opened_count ? (
-                          <span style={{ marginLeft: 8, fontWeight: 500, color: '#a16207', fontSize: '0.82em' }}>
-                            {note.opened_count}x
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {note.chunks.length >= 1 && (
-                        <SegmentedRail
-                          chunks={note.chunks}
-                          activeClusterIds={historyActiveClusterIds}
-                          currentChunkIndex={currentChunkIndex}
-                          getClusterColor={getClusterColor}
-                          onActiveDotClick={(chunk, _e) => openSidebarNote(note, chunk.chunk_index)}
-                          onInactiveDashClick={(chunk, _e) => {
-                            // In history mode, clicking a dash selects that cluster instead of opening the note
-                            handleInactiveRailClickForHistory(chunk);
-                          }}
-                        />
-                      )}
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {(() => {
-                          const rows: React.ReactNode[] = [];
-                          let i = 0;
-                          while (i < note.chunks.length) {
-                            const chunk = note.chunks[i];
-                            const isActiveChunk = historyActiveClusterIds.has(chunk.cluster_id);
-
-                            if (isActiveChunk) {
-                              // Show dot chunk - only if we have a selection, or show all if no selection
-                              if (selectedClusters.size > 0) {
-                                const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                // Resolve cluster color from API to match right column
-                                const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
-                                const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
-                                rows.push(
-                                  <button
-                                    type="button"
-                                    key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
-                                    onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                                    style={{
-                                      border: `1px solid ${resolvedColor}`,
-                                      background: lightenedColor,
-                                      borderRadius: '6px',
-                                      padding: '6px 8px',
-                                      cursor: 'pointer',
-                                      textAlign: 'left',
-                                      color: '#374151',
-                                      fontSize: '12px',
-                                      lineHeight: 1.35,
-                                      whiteSpace: 'normal',
-                                      overflowWrap: 'anywhere',
-                                      wordBreak: 'break-word',
-                                    }}
-                                    title={`Open chunk ${chunk.chunk_index + 1}`}
-                                  >
-                                    <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                                    {preview.length > 180 ? '...' : ''}
-                                  </button>,
-                                );
-                              } else {
-                                // No selection - show all chunks
-                                const preview = (chunk.text || '').trim() || '(Empty chunk)';
-                                // Resolve cluster color from API to match right column
-                                const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
-                                const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
-                                const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
-                                rows.push(
-                                  <button
-                                    type="button"
-                                    key={`history-snippet-${note.note_key}-${chunk.chunk_index}`}
-                                    onClick={() => openSidebarNote(note, chunk.chunk_index)}
-                                    style={{
-                                      border: `1px solid ${resolvedColor}`,
-                                      background: lightenedColor,
-                                      borderRadius: '6px',
-                                      padding: '6px 8px',
-                                      cursor: 'pointer',
-                                      textAlign: 'left',
-                                      color: '#374151',
-                                      fontSize: '12px',
-                                      lineHeight: 1.35,
-                                      whiteSpace: 'normal',
-                                      overflowWrap: 'anywhere',
-                                      wordBreak: 'break-word',
-                                    }}
-                                    title={`Open chunk ${chunk.chunk_index + 1}`}
-                                  >
-                                    <strong>Chunk {chunk.chunk_index + 1}:</strong> {preview.slice(0, 180)}
-                                    {preview.length > 180 ? '...' : ''}
-                                  </button>,
-                                );
-                              }
-                              i += 1;
-                              continue;
-                            }
-
-                            // Chunk is not in selected cluster - show as gap
-                            let gapCount = 0;
-                            while (i < note.chunks.length && !historyActiveClusterIds.has(note.chunks[i].cluster_id)) {
-                              gapCount += 1;
-                              i += 1;
-                            }
-
-                            rows.push(
-                              <div
-                                key={`history-gap-${note.note_key}-${i}-${gapCount}`}
-                                style={{
-                                  fontSize: '11px',
-                                  color: '#6b7280',
-                                  fontStyle: 'italic',
-                                  padding: '2px 4px',
-                                }}
-                              >
-                                --- {gapCount} Chunks ---
-                              </div>,
-                            );
-                          }
-                          return rows;
-                        })()}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto', display: isHistoryMode ? 'none' : 'block' }}>
+            <div ref={notesListRef} style={{ flex: 1, overflowY: 'auto', display: 'block' }}>
               {searchResults.length === 0 && searchQuery && (
                 <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>No results found.</div>
               )}
