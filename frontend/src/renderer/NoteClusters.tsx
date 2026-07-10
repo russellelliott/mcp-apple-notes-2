@@ -2461,7 +2461,9 @@ export default function NoteClusters() {
                     color: '#1f2937',
                   }}
                 >
-                  <div style={{ fontWeight: 700, marginBottom: '6px' }}>Selected Clusters</div>
+                  <div style={{ fontWeight: 700, marginBottom: '6px' }}>Selected Cluster</div>
+
+
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {selectedClusterSummaries.map((summary) => {
                       const tint = clusterTints[summary.clusterId] || '#f3f4f6';
