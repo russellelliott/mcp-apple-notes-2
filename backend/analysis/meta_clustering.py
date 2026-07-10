@@ -269,7 +269,7 @@ def compute_meta_clusters(
         n_clusters=None,
         metric="precomputed",
         distance_threshold=META_CLUSTER_DISTANCE_THRESHOLD,
-        linkage="average",
+        linkage="complete",
     )
     meta_labels_raw = meta_clusterer.fit_predict(dist_matrix)
 
