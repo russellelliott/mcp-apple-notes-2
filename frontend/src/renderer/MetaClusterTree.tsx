@@ -258,14 +258,6 @@ export const MetaClusterTree: React.FC<Props> = ({
       });
     }, [selectedClusterId, metaData]); // ← expandedMetaIds removed
 
-  const handleExpandAll = useCallback(() => {
-    setExpandedMetaIds(new Set(metaData.map((m) => m.meta_cluster_id)));
-  }, [metaData]);
-
-  const handleCollapseAll = useCallback(() => {
-    setExpandedMetaIds(new Set());
-  }, []);
-
   if (loading) return <div style={{ padding: 12, color: '#9ca3af', fontSize: 12 }}>Loading meta-clusters…</div>;
   if (error) return <div style={{ padding: 12, color: '#dc2626', fontSize: 12 }}>Error: {error}</div>;
   if (metaData.length === 0) return <div style={{ padding: 12, color: '#9ca3af', fontSize: 12 }}>No meta-clusters yet. Run the clustering pipeline.</div>;
@@ -282,24 +274,6 @@ export const MetaClusterTree: React.FC<Props> = ({
       <div style={{ padding: '8px 10px', borderBottom: '1px solid #e5e7eb' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: '#1f2937' }}>Meta-Clusters</span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <button
-              type="button"
-              onClick={handleExpandAll}
-              style={{
-                fontSize: 10, padding: '2px 6px', cursor: 'pointer',
-                background: 'none', border: '1px solid #d1d5db', borderRadius: 3, color: '#4b5563',
-              }}
-            >Expand All</button>
-            <button
-              type="button"
-              onClick={handleCollapseAll}
-              style={{
-                fontSize: 10, padding: '2px 6px', cursor: 'pointer',
-                background: 'none', border: '1px solid #d1d5db', borderRadius: 3, color: '#4b5563',
-              }}
-            >Collapse All</button>
-          </div>
         </div>
         <div style={{ fontSize: 10, color: '#9ca3af' }}>
           {metaData.length} meta-clusters · {totalClusters} clusters · {totalChunks.toLocaleString()} chunks
