@@ -3,6 +3,7 @@ import math
 import re
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 import lancedb
@@ -635,8 +636,97 @@ async def get_points():
 
 
 @app.get("/search", response_model=SearchResponse)
-async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_distance: float = 0.8):
-    """Search notes and return matches + IDs."""
+async def search(
+    q: Optional[str] = Query(None, min_length=1),
+    limit: int = Query(1000, ge=1),
+    max_distance: float = Query(0.8, ge=0.0, le=1.0),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD inclusive start"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD inclusive end"),
+    date_field: str = Query("both", description="'creation_date', 'modification_date', or 'both'"),
+):
+    """
+    Modes:
+       1. q only             -> semantic search, no date filter
+       2. q + date range     -> semantic search, results filtered to date window
+       3. date range only    -> return all notes created/modified/interacted in window
+                               defaults: if neither date given, window = today only
+    """
+    if state.df_viz.empty:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    has_query = bool(q)
+    has_dates = bool(date_from or date_to)
+
+    # --- Mode 3: date-only defaults ---
+    if not has_query:
+        today = datetime.now().strftime("%Y-%m-%d")
+        if not date_from and not date_to:
+            date_from = today
+            date_to = today
+        elif date_from and not date_to:
+            date_to = datetime.now().strftime("%Y-%m-%d")  # now
+        elif date_to and not date_from:
+            # default 1 week back from date_to
+            dt_end = datetime.strptime(date_to, "%Y-%m-%d")
+            date_from = (dt_end - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    # -- Build the allowed-title set from date range + interactions ---------
+    allowed_titles: Optional[set] = None
+    if date_from or date_to:
+        df = state.df_viz.copy()
+        dt_from = pd.Timestamp(date_from) if date_from else pd.Timestamp.min
+        dt_to = pd.Timestamp(date_to + " 23:59:59") if date_to else pd.Timestamp.max
+
+        # Notes created or modified in window
+        note_mask = pd.Series([False] * len(df), index=df.index)
+        for field in (["creation_date", "modification_date"] if date_field == "both"
+                      else [date_field]):
+            if field in df.columns:
+                parsed = pd.to_datetime(df[field], errors="coerce")
+                note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
+
+        title_from_notes: set = set(df[note_mask]["title"].astype(str).unique())
+
+        # Notes with interactions in window
+        title_from_interactions: set = set()
+        try:
+            db_obj = NotesDatabase(db_path=DB_PATH)
+            _, interactions_table = db_obj.get_interactions_db()
+            if interactions_table is not None:
+                int_df = interactions_table.to_pandas()
+                if not int_df.empty and "interaction_log" in int_df.columns:
+                    for _, row in int_df.iterrows():
+                        title = str(row.get("title", "")).strip()
+                        if not title:
+                            continue
+                        events = _parse_interaction_events(row.get("interaction_log", "[]"))
+                        for ev in events:
+                            ev_date = _event_date(ev.get("dt", ""))
+                            if ev_date:
+                                ev_ts = pd.Timestamp(ev_date)
+                                if dt_from.normalize() <= ev_ts <= dt_to.normalize():
+                                    title_from_interactions.add(title)
+                                    break
+        except Exception as e:
+            print(f"Warning: could not load interactions for date filter: {e}")
+
+        allowed_titles = title_from_notes | title_from_interactions
+
+    # -- Mode 3: no query -> return all notes in date window ----------------
+    if not has_query:
+        if not allowed_titles:
+            return SearchResponse(results=[], match_ids=[],
+                                  stats=SearchStats(total_chunks=0, unique_notes=0))
+
+        filtered = state.df_viz[state.df_viz["title"].astype(str).isin(allowed_titles)]
+        formatted_results, match_ids = _build_search_results(filtered, state.df_viz)
+        unique_notes = len({r.title for r in formatted_results})
+        return SearchResponse(
+            results=formatted_results, match_ids=match_ids,
+            stats=SearchStats(total_chunks=len(formatted_results), unique_notes=unique_notes),
+        )
+
+    # -- Modes 1 & 2: vector search -------------------------------------------
     if state.table is None:
         raise HTTPException(status_code=503, detail="Database not initialized")
 
@@ -653,53 +743,16 @@ async def search(q: str = Query(..., min_length=1), limit: int = 1000, max_dista
         print(f"Search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    formatted_results = []
-    match_ids = []
+    # Post-filter by date window (Mode 2)
+    if allowed_titles is not None:
+        results = [r for r in results if r.get("title", "") in allowed_titles]
 
-    cluster_map = {}
-    cluster_id_map = {}
-    base_topic_id_map = {}
-    display_topic_id_map = {}
-    if not state.df_viz.empty:
-        cluster_map = state.df_viz.set_index('unique_key')['cluster_label'].to_dict()
-        cluster_id_map = state.df_viz.set_index('unique_key')['cluster_id'].to_dict()
-        if 'base_topic_id' in state.df_viz.columns:
-            base_topic_id_map = state.df_viz.set_index('unique_key')['base_topic_id'].to_dict()
-        if 'display_topic_id' in state.df_viz.columns:
-            display_topic_id_map = state.df_viz.set_index('unique_key')['display_topic_id'].to_dict()
-
-    for r in results:
-        title = r.get('title', '')
-        idx = r.get('_chunk_index', r.get('chunk_index', 0))
-        total = r.get('_total_chunks', r.get('total_chunks'))
-        score = r.get('_relevance_score', 0)
-        preview = r.get('_matching_chunk_preview', '') or r.get('chunk_content', '')[:200]
-
-        unique_key = f"{title}_{idx}"
-
-        cluster = cluster_map.get(unique_key, "Unknown")
-        base_topic_id = str(base_topic_id_map.get(unique_key, cluster_id_map.get(unique_key, "-1")))
-        display_topic_id = str(display_topic_id_map.get(unique_key, base_topic_id))
-
-        res_obj = SearchResult(
-            unique_key=unique_key, title=title, chunk_index=idx,
-            total_chunks=total, distance=score,
-            cluster_id=display_topic_id, base_topic_id=base_topic_id,
-            display_topic_id=display_topic_id, cluster_label=cluster, preview=preview,
-        )
-        formatted_results.append(res_obj)
-        match_ids.append(unique_key)
-
-    unique_titles_found = set(r.title for r in formatted_results)
-
-    print(f"Found {len(formatted_results)} matching chunks across {len(unique_titles_found)} notes.")
-    for i, res in enumerate(formatted_results):
-        cid = res.cluster_id if res.cluster_id and res.cluster_id != '-1' else res.cluster_label
-        print(f"  {i+1}. {res.title} (Chunk {res.chunk_index + 1} of {res.total_chunks or '?'}) [Score: {res.distance:.3f}, Cluster: {cid}]")
-
+    formatted_results, match_ids = _build_search_results_from_raw(results, state.df_viz)
+    unique_notes = len({r.title for r in formatted_results})
+    print(f"Found {len(formatted_results)} matching chunks across {unique_notes} notes.")
     return SearchResponse(
         results=formatted_results, match_ids=match_ids,
-        stats=SearchStats(total_chunks=len(formatted_results), unique_notes=len(unique_titles_found)),
+        stats=SearchStats(total_chunks=len(formatted_results), unique_notes=unique_notes),
     )
 
 
@@ -846,6 +899,68 @@ def _event_date(dt_str: Any) -> Optional[str]:
     if re.match(r'^\d{4}-\d{2}-\d{2}$', date_only):
         return date_only
     return None
+
+
+def _build_search_results_from_raw(results, df_viz):
+    """Build SearchResult list from search_and_combine_results output."""
+    cluster_map = {}
+    cluster_id_map = {}
+    base_topic_id_map = {}
+    display_topic_id_map = {}
+    if not df_viz.empty:
+        cluster_map = df_viz.set_index('unique_key')['cluster_label'].to_dict()
+        cluster_id_map = df_viz.set_index('unique_key')['cluster_id'].to_dict()
+        if 'base_topic_id' in df_viz.columns:
+            base_topic_id_map = df_viz.set_index('unique_key')['base_topic_id'].to_dict()
+        if 'display_topic_id' in df_viz.columns:
+            display_topic_id_map = df_viz.set_index('unique_key')['display_topic_id'].to_dict()
+
+    formatted, ids = [], []
+    for r in results:
+        title = r.get('title', '')
+        idx = r.get('_chunk_index', r.get('chunk_index', 0))
+        total = r.get('_total_chunks', r.get('total_chunks'))
+        score = r.get('_relevance_score', 0)
+        preview = r.get('_matching_chunk_preview', '') or r.get('chunk_content', '')[:200]
+        uk = f"{title}_{idx}"
+        dt = str(display_topic_id_map.get(uk, cluster_id_map.get(uk, "-1")))
+        bt = str(base_topic_id_map.get(uk, cluster_id_map.get(uk, "-1")))
+        formatted.append(SearchResult(
+            unique_key=uk, title=title, chunk_index=int(idx) if isinstance(idx, (int, float, str)) else 0,
+            total_chunks=int(total) if total is not None else None,
+            distance=float(score), cluster_id=dt, base_topic_id=bt,
+            display_topic_id=dt, cluster_label=cluster_map.get(uk, "Unknown"), preview=str(preview) if preview else None,
+        ))
+        ids.append(uk)
+    return formatted, ids
+
+
+def _build_search_results(filtered_df, df_viz):
+    """Build SearchResult list directly from a filtered DataFrame (mode 3)."""
+    formatted, ids = [], []
+    for _, row in filtered_df.iterrows():
+        uk = str(row.get('unique_key', f"{row.get('title','')}_{row.get('chunk_index',0)}"))
+        preview = str(row.get('chunk_content', ''))[:200]
+        if pd.isna(preview) or preview == 'nan':
+            preview = ''
+        dt = str(row.get('display_topic_id', row.get('cluster_id', '-1')))
+        bt = str(row.get('base_topic_id', row.get('cluster_id', '-1')))
+        chunk_index_val = row.get('chunk_index', 0)
+        total_chunks_val = row.get('total_chunks', 1)
+        formatted.append(SearchResult(
+            unique_key=uk,
+            title=str(row.get('title', '')),
+            chunk_index=int(chunk_index_val) if pd.notna(chunk_index_val) else 0,
+            total_chunks=int(total_chunks_val) if pd.notna(total_chunks_val) else None,
+            distance=0.0,
+            cluster_id=str(dt),
+            base_topic_id=str(bt),
+            display_topic_id=str(dt),
+            cluster_label=str(row.get('cluster_label', 'Unknown')),
+            preview=preview,
+        ))
+        ids.append(uk)
+    return formatted, ids
 
 
 def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:

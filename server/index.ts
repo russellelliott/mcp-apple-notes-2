@@ -572,19 +572,52 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["title"],
         },
       },
-      {
-        name: "search-notes",
-        description: "Search for notes by title or content",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: z.string(),
+       {
+         name: "search-notes",
+         description: "Search for notes by title or content",
+         inputSchema: {
+           type: "object",
+           properties: {
+             query: z.string(),
+            },
+           required: ["query"],
           },
-          required: ["query"],
-        },
-      },
-      {
-        name: "create-note",
+         },
+        {
+         name: "search-notes-by-date",
+         description: "Search notes by semantic query and/or date range via FastAPI backend. Supports 3 modes: (1) query only for semantic search, (2) query + date range for filtered semantic search, (3) date range only (useful for daily reflection — defaults to today if no dates given). All parameters are optional; modes are inferred server-side.",
+         inputSchema: {
+           type: "object",
+           properties: {
+             query: { 
+               type: "string", 
+               description: "Semantic search query (omit for date-only mode)" 
+              },
+             date_from: { 
+               type: "string", 
+               description: "Start date YYYY-MM-DD (inclusive)" 
+              },
+             date_to: { 
+               type: "string", 
+               description: "End date YYYY-MM-DD (inclusive)" 
+              },
+             date_field: {
+               type: "string",
+               enum: ["creation_date", "modification_date", "both"],
+               default: "both",
+               description: "Which date field(s) to filter on"
+              },
+             limit: { 
+               type: "number", 
+               default: 20,
+               description: "Maximum number of results" 
+              }
+             },
+            required: []
+           }
+         },
+        {
+         name: "create-note",
         description:
           "Create a new Apple Note with specified title and content. Must be in HTML format WITHOUT newlines",
         inputSchema: {
@@ -1844,11 +1877,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
         `✨ Enhanced indexing handles duplicate titles better by using creation dates!\n` +
         `Your notes are now ready for semantic search using the "search-notes" tool!`
       );
-    } else if (name === "search-notes") {
+     } else if (name === "search-notes") {
       const { query } = QueryNotesSchema.parse(args);
       const combinedResults = await searchAndCombineResults(notesTable, query);
       return createTextResponse(JSON.stringify(combinedResults, null, 2));
-    } else if (name === "open-in-apple-notes") {
+     } else if (name === "search-notes-by-date") {
+        // Proxy to FastAPI backend for date-range + interaction-aware search
+       const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+       const params = new URLSearchParams();
+       if ((args as any).query)         params.set("q",          String((args as any).query));
+       if ((args as any).date_from)     params.set("date_from",  String((args as any).date_from));
+       if ((args as any).date_to)       params.set("date_to",    String((args as any).date_to));
+       if ((args as any).date_field)    params.set("date_field", String((args as any).date_field));
+       if ((args as any).limit)         params.set("limit",      String((args as any).limit));
+
+       const resp = await fetch(`${BACKEND_URL}/search?${params.toString()}`);
+       if (!resp.ok) {
+         throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${await resp.text()}`);
+       }
+       const data = await resp.json();
+
+       const summary = (data.results || []).slice(0, 20).map((r: any) =>
+          `• ${r.title} [chunk ${r.chunk_index}/${r.total_chunks}] (cluster: ${r.cluster_label}, score: ${r.distance.toFixed(3)})\n    ${r.preview || ""}`
+        ).join("\n\n");
+
+       return {
+         content: [{
+           type: "text",
+           text: `Found ${data.stats?.unique_notes ?? 0} notes (${data.stats?.total_chunks ?? 0} chunks)\n\n${summary || "No results found."}`
+          }]
+        };
+     } else if (name === "open-in-apple-notes") {
       try {
         const { title, creation_date } = z.object({
           title: z.string(),
