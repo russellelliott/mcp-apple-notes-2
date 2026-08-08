@@ -20,7 +20,7 @@ from sentence_transformers import SentenceTransformer
 # Configuration
 # ============================================================================
 
-DATA_DIR = Path.home() / ".mcp-apple-notes-2"
+DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 
 # Model configuration

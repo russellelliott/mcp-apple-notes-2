@@ -39,7 +39,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # ────────────────────────────────────────────────────────────────────────────
 
-# Configuration
+# Configuration - use the correct data directory for notes
 DATA_DIR = Path.home() / ".mcp-apple-notes"
 DB_PATH = DATA_DIR / "data"
 TABLE_NAME = "notes"
