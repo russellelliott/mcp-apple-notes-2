@@ -52,6 +52,8 @@ interface NoteContent {
   cluster_color?: string;
   creation_date?: string;
   modification_date?: string;
+  meta_cluster_id?: string;
+  meta_cluster_label?: string;
 }
 
 interface SidebarChunkData {
@@ -67,6 +69,9 @@ interface SidebarNoteData {
   title: string;
   creation_date?: string;
   modification_date?: string;
+  latest_interaction_date?: string;   // ← Added for date-range sorting
+  meta_cluster_id?: string | null;
+  meta_cluster_label?: string | null;
   chunks: SidebarChunkData[];
 }
 
@@ -217,7 +222,12 @@ export default function NoteClusters() {
   const [clusterSortDirection, setClusterSortDirection] = useState<SortDirection>('desc');
   const [notesSortMetric, setNotesSortMetric] = useState<NotesSortMetric>('modified');
   const [notesSortDirection, setNotesSortDirection] = useState<SortDirection>('desc');
-  const [selectedSearchNotes, setSelectedSearchNotes] = useState<Set<string>>(new Set());
+
+   // Date range filtering state
+   const [dateFrom, setDateFrom] = useState<string>('');
+   const [dateTo, setDateTo] = useState<string>('');
+   const [allFilteredNotes, setAllFilteredNotes] = useState<Record<string, SidebarNoteData[]> | null>(null);
+   const [selectedSearchNotes, setSelectedSearchNotes] = useState<Set<string>>(new Set());
   const [searchLegendOrderMode, setSearchLegendOrderMode] = useState<SearchLegendOrderMode>('results');
   const [sidebarNotes, setSidebarNotes] = useState<SidebarNoteData[]>([]);
   const [isLoadingSidebar, setIsLoadingSidebar] = useState(false);
@@ -286,16 +296,17 @@ export default function NoteClusters() {
         || null;
 
       setSelectedNode({
-        ...response.data,
+         ...response.data,
         cluster_id,
         display_topic_id,
         base_topic_id,
         cluster_label,
+        meta_cluster_label: response.data?.meta_cluster_label || null,
         cluster_color: computedClusterColor,
         creation_date: creationDate,
         modification_date: modificationDate,
         unique_key: newUniqueKey,
-      });
+       });
       // Cache the authoritative cluster info from backend for this unique_key
       const cacheClusId = display_topic_id || cluster_id || '-1';
       const color = response.data?.dot_color || response.data?.cluster_color;
@@ -458,15 +469,25 @@ export default function NoteClusters() {
     }
   };
 
-  const formatDateMMDDYYYY = (iso?: string | number | null) => {
-    if (!iso) return '';
-    const t = typeof iso === 'number' ? new Date(iso) : new Date(String(iso));
-    if (Number.isNaN(t.getTime())) return '';
-    const mm = String(t.getMonth() + 1).padStart(2, '0');
-    const dd = String(t.getDate()).padStart(2, '0');
-    const yyyy = String(t.getFullYear());
+const formatDateMMDDYYYY = (value?: string | number | null) => {
+  if (!value) return "";
+
+  // API interaction dates are YYYY-MM-DD calendar values.
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [yyyy, mm, dd] = value.split("-");
     return `${mm}/${dd}/${yyyy}`;
-  };
+  }
+
+  // Retain timestamp handling for modification/creation dates.
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = String(date.getFullYear());
+
+  return `${mm}/${dd}/${yyyy}`;
+};
 
   useEffect(() => {
     if (searchQuery === '') return;
@@ -1114,31 +1135,120 @@ export default function NoteClusters() {
   const hasActiveClusterFilter = selectedClusters.size > 0;
   const visibleLabels = displayedClusterLabels;
 
-  useEffect(() => {
-    let active = true;
+  // Helper: fetch interaction data for a list of note titles → Map<title -> latest_date>
+  const fetchInteractionMap = useCallback(async (titles: string[]): Promise<Map<string, string>> => {
+     // Returns Map<title -> latest interaction date string (YYYY-MM-DD) or undefined>
+    const result = new Map<string, string>();
+    if (titles.length === 0) return result;
 
-    const fetchSidebar = async () => {
-      if (viewMode === 'history') {
-        if (active) {
-          setSidebarNotes([]);
-          setLoadedSidebarCluster(null);
-        }
-        return;
-      }
+    try {
+      const titlesParam = encodeURIComponent(JSON.stringify(titles));
+      const res = await axios.get(
+         `http://127.0.0.1:8000/interactions_by_titles?titles=${titlesParam}` +
+         (dateFrom ? `&date_from=${dateFrom}` : '') +
+         (dateTo ? `&date_to=${dateTo}` : ''),
+       );
+      const data = res.data;
+      if (data && Array.isArray(data.titles)) {
+        data.titles.forEach((item: { title: string; latest_date?: string }) => {
+          result.set(item.title, item.latest_date ?? '');
+         });
+       }
+     } catch {
+       // Silently fail - we'll fall back to modification dates
+     }
+    return result;
+   }, [dateFrom, dateTo]);
 
-      // Fetch notes for all selected clusters
-      if (selectedClusters.size === 0) {
-        if (active) {
-          setSidebarNotes([]);
-          setLoadedSidebarCluster(null);
-        }
-        return;
-      }
+   // ── Batch fetch all filtered notes when date range changes ──
+   useEffect(() => {
+     let active = true;
+     const fetchAllFiltered = async () => {
+       if (!(dateFrom || dateTo)) {
+         if (active) setAllFilteredNotes(null);
+         return;
+       }
+       try {
+         const params = new URLSearchParams();
+         if (dateFrom) params.set('date_from', dateFrom);
+         if (dateTo) params.set('date_to', dateTo);
+         const res = await axios.get(
+           `http://127.0.0.1:8000/filtered_notes_all?${params.toString()}`,
+         );
+         const data = res.data?.notes_by_cluster;
+         if (active) setAllFilteredNotes(data ?? null);
+       } catch (err) {
+         console.error('Batch filtered notes fetch failed:', err);
+         if (active) setAllFilteredNotes(null);
+       }
+     };
+     fetchAllFiltered();
+     return () => { active = false; };
+   }, [dateFrom, dateTo]);
 
-      const clusterArray = Array.from(selectedClusters);
-      setIsLoadingSidebar(true);
-      try {
-        // Fetch notes for each selected cluster
+   const fetchSidebar = async () => {
+     if (viewMode === 'history') {
+       setSidebarNotes([]);
+       setLoadedSidebarCluster(null);
+       setIsLoadingSidebar(false);
+       return;
+     }
+
+     // Fetch notes for all selected clusters
+    if (selectedClusters.size === 0) {
+      setSidebarNotes([]);
+      setLoadedSidebarCluster(null);
+      setIsLoadingSidebar(false);
+      return;
+     }
+
+    const clusterArray = Array.from(selectedClusters);
+    setIsLoadingSidebar(true);
+    try {
+       // Use cached filtered data when date range is specified
+      if (allFilteredNotes) {
+        const allNotes: SidebarNoteData[] = [];
+        const noteTitles = new Set<string>();
+
+        for (const clusterId of clusterArray) {
+          const notes = allFilteredNotes[clusterId] || [];
+          notes.forEach((note: SidebarNoteData) => {
+            if (!noteTitles.has(note.title)) {
+              allNotes.push(note);
+              noteTitles.add(note.title);
+             }
+           });
+         }
+
+        setSidebarNotes(allNotes);
+        setLoadedSidebarCluster(clusterArray[0]);
+       } else if (dateFrom || dateTo) {
+        // Date range active but batch data not yet loaded — fall back to individual fetches
+        const allNotes: SidebarNoteData[] = [];
+        const noteTitles = new Set<string>();
+
+        for (const clusterId of clusterArray) {
+          const params = new URLSearchParams({
+            active_cluster_id: clusterId,
+             ...(dateFrom && { date_from: dateFrom }),
+             ...(dateTo && { date_to: dateTo }),
+           });
+          const response = await axios.get(
+             `http://127.0.0.1:8000/cluster_sidebar_filtered?${params.toString()}`,
+           );
+          const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
+          notes.forEach((note: SidebarNoteData) => {
+            if (!noteTitles.has(note.title)) {
+              allNotes.push(note);
+              noteTitles.add(note.title);
+             }
+           });
+         }
+
+        setSidebarNotes(allNotes);
+        setLoadedSidebarCluster(clusterArray[0]);
+       } else {
+        // Use normal endpoint when no date range
         const allNotes: SidebarNoteData[] = [];
         const noteTitles = new Set<string>();
 
@@ -1155,28 +1265,67 @@ export default function NoteClusters() {
           });
         }
 
-        if (active) {
-          setSidebarNotes(allNotes);
-          setLoadedSidebarCluster(clusterArray[0]);
-        }
-      } catch (error) {
-        console.error('Error loading sidebar notes:', error);
-        if (active) {
-          setSidebarNotes([]);
-          setLoadedSidebarCluster(null);
-        }
-      } finally {
-        if (active) setIsLoadingSidebar(false);
+        setSidebarNotes(allNotes);
+        setLoadedSidebarCluster(clusterArray[0]);
       }
-    };
+    } catch (error) {
+      console.error('Error loading sidebar notes:', error);
+      setSidebarNotes([]);
+      setLoadedSidebarCluster(null);
+    } finally {
+      setIsLoadingSidebar(false);
+    }
+  };
 
+  // After sidebar notes load, enrich with interaction dates and sort by them (when date range specified)
+  useEffect(() => {
+    let active = true;
+
+    const enrichSidebarDates = async () => {
+      if (sidebarNotes.length === 0 || !dateFrom || !dateTo) {
+         // No enrichment needed — leave as-is
+        return;
+       }
+
+      try {
+        const titles = sidebarNotes.map((n) => n.title);
+        const interactionMap = await fetchInteractionMap(titles);
+
+        // Build enriched notes array with latest_interaction_date attached
+        const enriched: SidebarNoteData[] = sidebarNotes.map((note) => ({
+          ...note,
+          latest_interaction_date: interactionMap.get(note.title) || undefined,
+         }));
+
+        // Sort: prefer latest interaction date (desc), fallback to modification date
+        enriched.sort((a, b) => {
+          const aTs = a.latest_interaction_date
+            ? Date.parse(a.latest_interaction_date + 'T12:00:00')
+            : Date.parse(String(a.modification_date || ''));
+          const bTs = b.latest_interaction_date
+            ? Date.parse(b.latest_interaction_date + 'T12:00:00')
+            : Date.parse(String(b.modification_date || ''));
+          const safeA = Number.isFinite(aTs) ? aTs : Number.NEGATIVE_INFINITY;
+          const safeB = Number.isFinite(bTs) ? bTs : Number.NEGATIVE_INFINITY;
+          return safeB - safeA; // descending: newest first
+         });
+
+        setSidebarNotes(enriched);
+      } catch {
+        // Silently fail — already have sidebar notes
+       }
+     };
+
+    enrichSidebarDates();
+
+    return () => { active = false; };
+   }, [sidebarNotes.length, dateFrom, dateTo, fetchInteractionMap]);
+
+  useEffect(() => {
+    let active = true;
     fetchSidebar();
-
-    return () => {
-      active = false;
-    };
-  }, [selectedClusters, viewMode]);
-
+    return () => { active = false; };
+   }, [selectedClusters, viewMode]);
 
 
   useEffect(() => {
@@ -1243,35 +1392,105 @@ export default function NoteClusters() {
 
 
   const openSidebarNote = useCallback(
-  (note: SidebarNoteData, preferredChunkIndex?: number) => {
-    const inClusterChunk = note.chunks.find((chunk) => chunk.in_cluster);
-    const fallbackChunk = note.chunks[0];
-    const chunkIndex =
-      preferredChunkIndex ??
-      inClusterChunk?.chunk_index ??
-      fallbackChunk?.chunk_index ??
-      0;
+   (note: SidebarNoteData, preferredChunkIndex?: number) => {
+     // When date range is active and we have cached data for this note, use it directly
+     if (allFilteredNotes && (dateFrom || dateTo)) {
+       const inClusterChunk = note.chunks.find((chunk) => chunk.in_cluster);
+       const fallbackChunk = note.chunks[0];
+       const targetCluster = Array.from(selectedClusters)[0] || inClusterChunk?.cluster_id || fallbackChunk?.cluster_id;
+       const clusterIdToUse = targetCluster || (inClusterChunk ? inClusterChunk.cluster_id : fallbackChunk?.cluster_id || '-1');
 
-    const targetCluster =
-      Array.from(selectedClusters)[0] ||
-      inClusterChunk?.cluster_id ||
-      fallbackChunk?.cluster_id;
+       // Look up cached notes for this cluster
+       const cachedNotesForCluster = allFilteredNotes[targetCluster] ?? null;
+       if (cachedNotesForCluster) {
+         // Find exact note by key
+         const cachedNote = cachedNotesForCluster.find(
+           (cn: SidebarNoteData) => cn.note_key === note.note_key,
+         );
+         if (cachedNote) {
+           // Find the preferred chunk
+           const preferredIdx = preferredChunkIndex ?? inClusterChunk?.chunk_index;
+           const chunkToOpen = cachedNote.chunks.find(
+             (c: SidebarChunkData) => c.chunk_index === (preferredIdx !== undefined ? preferredIdx : 0),
+           ) || cachedNote.chunks[0];
+            if (chunkToOpen) {
+                 // Construct full note from cache — no API call needed
+              setSelectedNode({
+                title: cachedNote.title,
+                chunk_index: chunkToOpen.chunk_index,
+                content: chunkToOpen.text ?? '',
+                total_chunks: cachedNote.chunks.length,
+                unique_key: cachedNote.note_key,
+                cluster_id: targetCluster || '-1',
+                display_topic_id: targetCluster || '-1',
+                base_topic_id: targetCluster || '-1',
+                cluster_label: clusterGroups[targetCluster]?.clusterLabel ?? chunkToOpen.cluster_name ?? 'Unclustered',
+                meta_cluster_label: cachedNote.meta_cluster_label ?? undefined,
+                dot_color: clusterColorsFromAPI[targetCluster] ?? undefined,
+                cluster_color: clusterColorsFromAPI[targetCluster] ?? undefined,
+                creation_date: cachedNote.creation_date,
+                modification_date: cachedNote.modification_date,
+                });
+              return;
+            }
+         }
 
-    const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
+            // If preferred chunk not in cache, open first available cached chunk for this note
+          const cachedFirstChunk = cachedNote?.chunks[0] ?? null;
+          if (cachedNote && cachedFirstChunk) {
+            setSelectedNode({
+              title: cachedNote.title,
+              chunk_index: cachedFirstChunk.chunk_index,
+              content: cachedFirstChunk.text ?? '',
+              total_chunks: cachedNote.chunks.length,
+              unique_key: cachedNote.note_key,
+              cluster_id: targetCluster || '-1',
+              display_topic_id: targetCluster || '-1',
+              base_topic_id: targetCluster || '-1',
+              cluster_label: clusterGroups[targetCluster]?.clusterLabel ?? cachedFirstChunk.cluster_name ?? 'Unclustered',
+              meta_cluster_label: cachedNote.meta_cluster_label ?? undefined,
+              dot_color: clusterColorsFromAPI[targetCluster] ?? undefined,
+              cluster_color: clusterColorsFromAPI[targetCluster] ?? undefined,
+              creation_date: cachedNote.creation_date,
+              modification_date: cachedNote.modification_date,
+              });
+            return;
+          }
+       }
 
-    fetchNoteContent(
-      note.title,
-      chunkIndex,
-      fallbackChunk?.cluster_id || undefined,
-      clusterGroup?.clusterLabel,
-      targetCluster || undefined,
-      targetCluster || undefined,
-      note.creation_date,
-      note.modification_date,
-    );
-  },
-  [clusterGroups, selectedClusters],
-);
+        // Fallback: if we have the note but not from this cluster's cache, try other cached clusters
+       // (This block is intentionally left as a no-op since we need a different approach)
+      }
+
+      // Standard path: no date range or no cache — use API
+     const inClusterChunk = note.chunks.find((chunk) => chunk.in_cluster);
+     const fallbackChunk = note.chunks[0];
+     const chunkIndex =
+       preferredChunkIndex ??
+       inClusterChunk?.chunk_index ??
+       fallbackChunk?.chunk_index ??
+        0;
+
+     const targetCluster =
+       Array.from(selectedClusters)[0] ||
+       inClusterChunk?.cluster_id ||
+       fallbackChunk?.cluster_id;
+
+     const clusterGroup = targetCluster ? clusterGroups[targetCluster] : null;
+
+     fetchNoteContent(
+       note.title,
+       chunkIndex,
+       fallbackChunk?.cluster_id || undefined,
+       clusterGroup?.clusterLabel,
+       targetCluster || undefined,
+       targetCluster || undefined,
+       note.creation_date,
+       note.modification_date,
+      );
+    },
+    [clusterGroups, selectedClusters, allFilteredNotes, dateFrom, dateTo, clusterColorsFromAPI],
+  );
 
   const handleActiveRailClick = useCallback((note: SidebarNoteData, chunk: SidebarChunkData) => {
     const uniqueKey = `${note.title}_${chunk.chunk_index}`;
@@ -1407,17 +1626,23 @@ export default function NoteClusters() {
   const modalRailChunks = useMemo(() => {
     if (!selectedNode) return [] as SidebarChunkData[];
 
+    const title = selectedNode.title;
+    const creationDate = selectedNode.creation_date;
+    const modificationDate = selectedNode.modification_date;
+    const displayTopicId = selectedNode.display_topic_id;
+    const clusterId = selectedNode.cluster_id;
+
     const noteRows = data
-      .filter((row) => {
-        if (row.title !== selectedNode.title) return false;
-        if (selectedNode.creation_date && row.creation_date !== selectedNode.creation_date) return false;
-        if (selectedNode.modification_date && row.modification_date !== selectedNode.modification_date) return false;
+       .filter((row) => {
+        if (row.title !== title) return false;
+        if (creationDate && row.creation_date !== creationDate) return false;
+        if (modificationDate && row.modification_date !== modificationDate) return false;
         return true;
-      })
-      .sort((a, b) => a.chunk_index - b.chunk_index);
+       })
+       .sort((a, b) => a.chunk_index - b.chunk_index);
 
     const seen = new Set<number>();
-    const selectedClusterId = selectedNode.display_topic_id || selectedNode.cluster_id || '';
+    const selectedClusterId = displayTopicId || clusterId || '';
     return noteRows
       .filter((row) => {
         if (seen.has(row.chunk_index)) return false;
@@ -1703,24 +1928,30 @@ export default function NoteClusters() {
                   }}
                 >
                   <div
-                    style={{
-                      padding: 0,
-                      margin: 0,
-                      fontWeight: 700,
-                      color: '#111827',
-                      textAlign: 'left',
-                      width: '100%',
-                      overflowWrap: 'anywhere',
-                      userSelect: 'none',
+                   style={{
+                     padding: 0,
+                     margin: 0,
+                     fontWeight: 700,
+                     color: '#111827',
+                     textAlign: 'left',
+                     width: '100%',
+                     overflowWrap: 'anywhere',
+                     userSelect: 'none',
                     }}
-                    title={note.title}
+                   title={note.title}
                   >
-                    <span>{note.title}</span>
-                    {note.modification_date && (
-                      <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
-                        {formatDateMMDDYYYY(note.modification_date)}
-                      </span>
-                    )}
+                   <span>{note.title}</span>
+                   {dateFrom && dateTo && note.latest_interaction_date ? (
+                     // Show interaction date when both dates are specified and note has interactions
+                     <span style={{ marginLeft: 8, fontWeight: 600, color: '#2563eb', fontSize: '0.85em' }}>
+                       {formatDateMMDDYYYY(note.latest_interaction_date)}
+                     </span>
+                   ) : note.modification_date ? (
+                     // Fallback to modification date when no interaction date or date range
+                     <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
+                       {formatDateMMDDYYYY(note.modification_date)}
+                     </span>
+                   ) : null}
                   </div>
 
                   {note.chunks.length > 1 && (
@@ -1816,8 +2047,8 @@ export default function NoteClusters() {
           </div>
 
 
-          {/* Center column: RadialSimilarityHub */}
-          <div style={{
+           {/* Center column: Date range + RadialSimilarityHub */}
+           <div style={{
             flex: 1,
             minWidth: '200px',
             display: 'flex',
@@ -1828,17 +2059,81 @@ export default function NoteClusters() {
             backgroundColor: '#f9f9f9',
             padding: '10px',
             boxSizing: 'border-box',
-          }}>
-            <div style={{
+           }}>
+             <div style={{
               fontSize: '13px',
               fontWeight: 700,
               color: '#1f2937',
               marginBottom: '8px',
               textAlign: 'center',
               flexShrink: 0,
-            }}>
+             }}>
               Similar Clusters
-            </div>
+             </div>
+
+             {/* Date Range Input */}
+             <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              marginBottom: '12px',
+              padding: '8px 10px',
+              backgroundColor: '#ffffff',
+              borderRadius: '6px',
+              border: '1px solid #e5e7eb',
+             }}>
+               <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600 }}>Date Range:</span>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                 <label htmlFor="date-from" style={{ fontSize: '10px', color: '#9ca3af' }}>From</label>
+                 <input
+                  id="date-from"
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: '#f9fafb',
+                   }}
+                 />
+               </div>
+               <span style={{ fontSize: '10px', color: '#9ca3af' }}>→</span>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                 <label htmlFor="date-to" style={{ fontSize: '10px', color: '#9ca3af' }}>To</label>
+                 <input
+                  id="date-to"
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: '#f9fafb',
+                   }}
+                 />
+               </div>
+               {(dateFrom || dateTo) && (
+                 <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  style={{
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: '#ffffff',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                   }}
+                 >
+                  Clear
+                 </button>
+               )}
+             </div>
+
             <div style={{
               flex: 1,
               minHeight: 0,
@@ -1855,7 +2150,8 @@ export default function NoteClusters() {
             </div>
           </div>
 
-          {/* Right column: MetaClusterTree */}
+
+          {/* Right column: MetaClusterTree with date props */}
           <div style={{
             width: '26%',
             flexShrink: 0,
@@ -1875,8 +2171,11 @@ export default function NoteClusters() {
               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
               sortMetric={clusterSortMetric}
               clusterColors={clusterColorsFromAPI}
+              dateFrom={dateFrom || undefined}
+              dateTo={dateTo || undefined}
             />
           </div>
+
 
           {/* Modal Popup for Note Content */}
           {selectedNode && (
@@ -1973,23 +2272,42 @@ export default function NoteClusters() {
                     }} />
                   )}
 
-                  <div style={{
+                   {/* MetaCluster and Cluster info */}
+                   {selectedNode.meta_cluster_label && (
+                     <div style={{
+                       fontSize: '12px',
+                       color: '#6b7280',
+                       marginBottom: '2px',
+                      }}>
+                       <span style={{ fontWeight: 600 }}>MetaCluster:</span>{' '}
+                       <span style={{
+                        color: selectedNode.cluster_color || '#4b5563',
+                        fontWeight: 600,
+                       }}>
+                        {selectedNode.meta_cluster_label}
+                       </span>
+                     </div>
+                   )}
+                    <div style={{
                     fontSize: '12px',
                     color: '#6b7280',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '8px',
-                  }}>
-                    {selectedNode.cluster_label && (
-                      <span style={{
-                        color: selectedNode.cluster_color || '#4b5563',
-                        fontWeight: 600,
-                      }}>
-                        {selectedNode.cluster_label}
-                      </span>
-                    )}
-                    <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
-                  </div>
+                    gap: '4px',
+                    }}>
+                      {selectedNode.display_topic_id && selectedNode.display_topic_id !== '-1' && (
+                        <span>
+                         Cluster <strong>{selectedNode.display_topic_id}</strong>:{' '}
+                        </span>
+                      )}
+                     <span style={{
+                      color: selectedNode.cluster_color || '#4b5563',
+                      fontWeight: 600,
+                     }}>
+                      {selectedNode.cluster_label}
+                     </span>
+                     <span>Chunk {selectedNode.chunk_index + 1} of {selectedNode.total_chunks}</span>
+                   </div>
 
                   {/* Dot/Dash Segmented Rail for cluster navigation in modal */}
                   {modalRailChunks.length > 0 && (

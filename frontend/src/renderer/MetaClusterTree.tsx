@@ -18,16 +18,19 @@ interface MetaClusterInfo {
 type ClusterSortMetric = 'recency' | 'momentum' | 'az' | 'size' | 'search' | 'history' | 'similarity';
 
 interface Props {
-  /**Called when user clicks a cluster (child or meta). Passes the child cluster_id.*/
+   /**Called when user clicks a cluster (child or meta). Passes the child cluster_id.*/
   onClusterSelect: (clusterId: string) => void;
-  /**Currently selected cluster ID — highlights it in the tree */
+   /**Currently selected cluster ID — highlights it in the tree */
   selectedClusterId?: string | null;
-  /**Sort order at both meta and child levels */
+   /**Sort order at both meta and child levels */
   sortMetric: ClusterSortMetric;
-  /**Optional search filter to narrow visible children */
+   /**Optional search filter to narrow visible children */
   filterText?: string;
-  /**Map of cluster_id → hex color (from /cluster_colors API) */
+   /**Map of cluster_id → hex color (from /cluster_colors API) */
   clusterColors?: Record<string, string>;
+   /**Optional date range to filter meta-clusters */
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 // ── Sort helpers ─────────────────────────────────────────────────────────────
@@ -196,44 +199,66 @@ export const MetaClusterTree: React.FC<Props> = ({
   sortMetric,
   filterText,
   clusterColors,
+  dateFrom,
+  dateTo,
 }) => {
   const [metaData, setMetaData] = useState<MetaClusterInfo[]>([]);
   const [expandedMetaIds, setExpandedMetaIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch meta-cluster data
+   // Determine which endpoint to use
+  const useFiltered = useMemo(() => !!(dateFrom || dateTo), [dateFrom, dateTo]);
+
+   // Fetch meta-cluster data
   useEffect(() => {
-    const fetchMetaClusters = async () => {
+    let active = true;
+    (async () => {
       try {
         setLoading(true);
-        const res = await fetch('http://localhost:8000/meta_clusters');
+        let url = 'http://localhost:8000/meta_clusters';
+        if (useFiltered) {
+          // Use the filtered endpoint which properly restricts to notes in date range
+          url = 'http://localhost:8000/meta_clusters_filtered';
+          const params = new URLSearchParams();
+          if (dateFrom) params.set('date_from', dateFrom);
+          if (dateTo) params.set('date_to', dateTo);
+          url += `?${params.toString()}`;
+         }
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: MetaClusterInfo[] = await res.json();
+        if (!active) return;
+
+         // Sort meta-clusters alphabetically by label
+        data.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+
         setMetaData(data);
 
-        // Auto-expand the meta-cluster containing the selected cluster (if any)
+         // Auto-expand the meta-cluster containing the selected cluster (if any)
         if (selectedClusterId && data.length > 0) {
           const targetMeta = data.find((m) =>
             m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
-          );
+           );
           if (targetMeta) {
             setExpandedMetaIds(new Set([targetMeta.meta_cluster_id]));
-          } else if (data.length <= 5) {
-            // If data is small, expand all
+           } else if (data.length <= 5) {
+             // If data is small, expand all
             setExpandedMetaIds(new Set(data.map((m) => m.meta_cluster_id)));
-          }
-        } else if (data.length <= 5) {
+           }
+         } else if (data.length <= 5) {
           setExpandedMetaIds(new Set(data.map((m) => m.meta_cluster_id)));
-        }
-      } catch (e: any) {
+         }
+       } catch (e: any) {
+        if (!active) return;
         setError(e.message || 'Failed to load meta-clusters');
-      } finally {
+       } finally {
+        if (!active) return;
         setLoading(false);
-      }
-    };
-    fetchMetaClusters();
-  }, []);
+       }
+     })();
+     return () => { active = true; };
+   }, [useFiltered, dateFrom, dateTo, selectedClusterId]);
 
   const toggleMeta = useCallback((id: string) => {
     setExpandedMetaIds((prev) => {

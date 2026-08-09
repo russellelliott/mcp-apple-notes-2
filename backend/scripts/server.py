@@ -138,9 +138,22 @@ def load_and_process_data():
         else:
             df['display_topic_id'] = df['display_topic_id'].astype(str).fillna(df['base_topic_id'])
 
-        for col in ['cluster_id', 'base_topic_id', 'display_topic_id']:
+        if 'meta_cluster_id' not in df.columns:
+            df['meta_cluster_id'] = '-1'
+        else:
+            df['meta_cluster_id'] = df['meta_cluster_id'].astype(str).fillna('-1')
+
+        if 'meta_cluster_label' not in df.columns:
+            df['meta_cluster_label'] = 'Uncategorized'
+        else:
+            df['meta_cluster_label'] = df['meta_cluster_label'].fillna('Uncategorized')
+
+        for col in ['cluster_id', 'base_topic_id', 'display_topic_id', 'meta_cluster_id']:
             if col in df.columns:
                 df[col] = df[col].astype(str).replace(['nan', 'None', '-1.0'], '-1')
+
+        if 'meta_cluster_label' in df.columns:
+            df['meta_cluster_label'] = df['meta_cluster_label'].replace(['nan', 'None'], 'Uncategorized')
 
         # Compute 5-dim UMAP
         print("Computing 5-dim UMAP embeddings...")
@@ -241,6 +254,8 @@ class NoteContent(BaseModel):
     cluster_label: Optional[str] = None
     base_topic_id: Optional[str] = None
     display_topic_id: Optional[str] = None
+    meta_cluster_id: Optional[str] = None
+    meta_cluster_label: Optional[str] = None
 
 
 class SidebarChunk(BaseModel):
@@ -526,7 +541,9 @@ async def get_note_content(
             cluster_label=(str(row.iloc[0].get('cluster_label')) if row.iloc[0].get('cluster_label') is not None else None),
             base_topic_id=(str(row.iloc[0].get('base_topic_id')) if row.iloc[0].get('base_topic_id') is not None else None),
             display_topic_id=(str(row.iloc[0].get('display_topic_id')) if row.iloc[0].get('display_topic_id') is not None else None),
-        )
+            meta_cluster_id=(str(row.iloc[0].get('meta_cluster_id')) if row.iloc[0].get('meta_cluster_id') is not None else None),
+            meta_cluster_label=(str(row.iloc[0].get('meta_cluster_label')) if row.iloc[0].get('meta_cluster_label') is not None else None),
+         )
     except Exception as e:
         print(f"Error fetching content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -682,7 +699,7 @@ async def search(
         for field in (["creation_date", "modification_date"] if date_field == "both"
                       else [date_field]):
             if field in df.columns:
-                parsed = pd.to_datetime(df[field], errors="coerce")
+                parsed = pd.to_datetime(df[field], errors="coerce", format="%Y-%m-%d")
                 note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
 
         title_from_notes: set = set(df[note_mask]["title"].astype(str).unique())
@@ -868,6 +885,346 @@ async def list_interactions(limit: Optional[int] = None):
         return {"interactions": interactions, "count": len(interactions)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list interactions: {str(e)}")
+
+
+# ── Date Range Filtering Endpoints ─────────────────────────────────────────
+class InteractionsByDateResponse(BaseModel):
+    titles: List[str]
+
+
+def _get_titles_in_date_range(date_from: Optional[str], date_to: Optional[str]) -> set:
+    """Get note titles that were interacted with in the specified date range."""
+    db = NotesDatabase(db_path=DB_PATH)
+    _, interactions_table = db.get_interactions_db()
+    if interactions_table is None:
+        return set()
+
+    interactions_df = interactions_table.to_pandas()
+    if interactions_df.empty or "interaction_log" not in interactions_df.columns:
+        return set()
+
+    # Set defaults if date range is partially specified
+    dt_from = pd.Timestamp(date_from + " 00:00:00") if date_from else pd.Timestamp.min
+    dt_to = pd.Timestamp((date_to + " 23:59:59") if date_to else "9999-12-31 23:59:59")
+
+    titles_set: set = set()
+    for _, row in interactions_df.iterrows():
+        title = str(row.get("title", "")).strip()
+        if not title:
+            continue
+        events = _parse_interaction_events(row.get("interaction_log", "[]"))
+        for ev in events:
+            ev_date = _event_date(ev.get("dt", ""))
+            if ev_date:
+                ev_ts = pd.Timestamp(ev_date + " 12:00:00")
+                if dt_from <= ev_ts <= dt_to:
+                    titles_set.add(title)
+                    break
+
+    # Also include notes that were created/modified in the date range
+    df_viz = state.df_viz
+    if not df_viz.empty:
+        note_mask = pd.Series([False] * len(df_viz), index=df_viz.index)
+        for field in ["creation_date", "modification_date"]:
+            if field in df_viz.columns:
+                parsed = pd.to_datetime(df_viz[field], errors="coerce", format="%Y-%m-%d")
+                note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
+        titles_from_notes = set(df_viz[note_mask]["title"].astype(str).unique())
+        titles_set = titles_set | titles_from_notes
+
+    return titles_set
+
+
+@app.get("/interactions_by_date", response_model=InteractionsByDateResponse)
+async def get_interactions_by_date(
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """Get note titles that were interacted with in the specified date range."""
+    titles = _get_titles_in_date_range(date_from, date_to)
+    return InteractionsByDateResponse(titles=sorted(list(titles)))
+
+
+@app.get("/meta_clusters_filtered", response_model=List[MetaClusterInfo])
+async def get_meta_clusters_filtered(
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """Return meta-clusters filtered to only those containing notes from the date range."""
+    if state.df_viz.empty:
+        return []
+
+    # Get allowed titles from date range
+    allowed_titles = _get_titles_in_date_range(date_from, date_to)
+
+    # If no dates specified, return all meta-clusters
+    if not date_from and not date_to:
+        return await get_meta_clusters()
+
+    # Filter df_viz to only allowed titles
+    working_df = state.df_viz[state.df_viz["title"].isin(allowed_titles)]
+    if working_df.empty:
+        return []
+
+    # Temporarily replace df_viz for meta cluster computation
+    original_df = state.df_viz
+    state.df_viz = working_df
+
+    result = await get_meta_clusters()
+
+    state.df_viz = original_df
+    return result
+
+
+@app.get("/cluster_sidebar_filtered")
+async def get_cluster_sidebar_filtered(
+    active_cluster_id: str = Query(...),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """Return note cards for a cluster, filtered by date range."""
+    if state.df_viz.empty:
+        return {"active_cluster_id": active_cluster_id, "notes": []}
+
+    # Get allowed titles from date range
+    allowed_titles = _get_titles_in_date_range(date_from, date_to)
+
+    # If no dates specified, use normal sidebar logic
+    if not date_from and not date_to:
+        sidebar_resp = await get_cluster_sidebar(active_cluster_id)
+        return {"active_cluster_id": sidebar_resp.active_cluster_id, "notes": sidebar_resp.notes}
+
+    # Filter to allowed titles only
+    working_df = state.df_viz[
+        (state.df_viz["title"].isin(allowed_titles)) &
+        (state.df_viz["display_topic_id"] == active_cluster_id)
+    ].copy()
+
+    if working_df.empty:
+        return {"active_cluster_id": active_cluster_id, "notes": []}
+
+    # Build notes structure manually
+    working_df['title'] = working_df['title'].astype(str)
+    for col in ['creation_date', 'modification_date', 'cluster_label', 'display_topic_id']:
+        if col not in working_df.columns:
+            working_df[col] = '-1' if col in ['creation_date', 'modification_date'] else 'Unclustered'
+        else:
+            working_df[col] = working_df[col].astype(str)
+
+    note_identity_cols = ['title', 'creation_date', 'modification_date']
+    note_keys_df = working_df[note_identity_cols].drop_duplicates().copy()
+    note_keys_df['note_key'] = (
+        note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
+    )
+
+    merged = working_df.merge(note_keys_df, on=note_identity_cols, how='inner')
+    merged = merged.sort_values(['note_key', 'chunk_index'])
+
+    notes_list = []
+    for note_key, group in merged.groupby('note_key', sort=False):
+        title = str(group.iloc[0].get('title', ''))
+        creation_date = str(group.iloc[0].get('creation_date', ''))
+        modification_date = str(group.iloc[0].get('modification_date', ''))
+
+        chunks = []
+        seen_chunk_indexes = set()
+        for _, row in group.iterrows():
+            chunk_index_val = int(row.get('chunk_index', 0))
+            if chunk_index_val in seen_chunk_indexes:
+                continue
+            seen_chunk_indexes.add(chunk_index_val)
+
+            chunk_cluster_id = str(row.get('display_topic_id', '-1'))
+            in_cluster = chunk_cluster_id == active_cluster_id
+
+            chunk_text = row.get('chunk_content', '')
+            if pd.isna(chunk_text) or chunk_text == '':
+                chunk_text = row.get('text', '')
+            if pd.isna(chunk_text):
+                chunk_text = ''
+
+            chunks.append({
+                "chunk_index": chunk_index_val,
+                "cluster_id": chunk_cluster_id,
+                "cluster_name": str(row.get('cluster_label', 'Unclustered')),
+                "in_cluster": in_cluster,
+                "text": str(chunk_text),
+            })
+
+        notes_list.append({
+            "note_key": str(note_key),
+            "title": title,
+            "creation_date": creation_date,
+            "modification_date": modification_date,
+            "chunks": chunks,
+        })
+
+    return {"active_cluster_id": active_cluster_id, "notes": notes_list}
+
+
+class FilteredNotesAllResponse(BaseModel):
+    notes_by_cluster: Dict[str, List[Dict[str, Any]]]
+
+
+@app.get("/filtered_notes_all", response_model=FilteredNotesAllResponse)
+async def get_filtered_notes_all(
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """Return ALL notes (with full chunk content) for ALL clusters within the specified date range in one call."""
+    if state.df_viz.empty:
+        return {"notes_by_cluster": {}}
+
+     # Get allowed titles from date range
+    allowed_titles = _get_titles_in_date_range(date_from, date_to)
+
+    if not allowed_titles:
+        return {"notes_by_cluster": {}}
+
+     # Filter to allowed titles only — preserve all clustering columns
+    working_df = state.df_viz[state.df_viz["title"].isin(allowed_titles)].copy()
+
+    if working_df.empty:
+        return {"notes_by_cluster": {}}
+
+     # Normalize columns
+    working_df['title'] = working_df['title'].astype(str)
+    for col in ['creation_date', 'modification_date', 'cluster_label', 'display_topic_id']:
+        if col not in working_df.columns:
+            working_df[col] = '-1' if col in ['creation_date', 'modification_date'] else 'Unclustered'
+        else:
+            working_df[col] = working_df[col].astype(str)
+
+    notes_by_cluster: Dict[str, List[Dict[str, Any]]] = {}
+
+    for cluster_id_val in working_df['display_topic_id'].unique():
+        cluster_df = working_df[working_df['display_topic_id'] == cluster_id_val].copy()
+        if cluster_df.empty:
+            continue
+
+        note_identity_cols = ['title', 'creation_date', 'modification_date']
+        note_keys_df = cluster_df[note_identity_cols].drop_duplicates().copy()
+        note_keys_df['note_key'] = (
+            note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
+         )
+
+        merged = cluster_df.merge(note_keys_df, on=note_identity_cols, how='inner')
+        merged = merged.sort_values(['note_key', 'chunk_index'])
+
+        notes_list: List[Dict[str, Any]] = []
+        for note_key, group in merged.groupby('note_key', sort=False):
+            title = str(group.iloc[0].get('title', ''))
+            creation_date = str(group.iloc[0].get('creation_date', ''))
+            modification_date = str(group.iloc[0].get('modification_date', ''))
+
+            chunks_list: List[Dict[str, Any]] = []
+            seen_chunk_indexes: set = set()
+            for _, row in group.iterrows():
+                chunk_index_val = int(row.get('chunk_index', 0))
+                if chunk_index_val in seen_chunk_indexes:
+                    continue
+                seen_chunk_indexes.add(chunk_index_val)
+
+                chunk_cluster_id = str(row.get('display_topic_id', '-1'))
+                in_cluster = chunk_cluster_id == cluster_id_val
+
+                chunk_text = row.get('chunk_content', '')
+                if pd.isna(chunk_text) or chunk_text == '':
+                    chunk_text = row.get('text', '')
+                if pd.isna(chunk_text):
+                    chunk_text = ''
+
+                meta_cid = str(row.get('meta_cluster_id', ''))
+                meta_clabel = str(row.get('meta_cluster_label', ''))
+                if not meta_cid or meta_cid in ('nan', 'None', '', '-1'):
+                    meta_cid = None
+                if not meta_clabel or meta_clabel in ('nan', 'None', '', 'Uncategorized'):
+                    meta_clabel = None
+
+                chunks_list.append({
+                      "note_key": str(note_key),
+                      "chunk_index": chunk_index_val,
+                      "cluster_id": chunk_cluster_id,
+                      "cluster_name": str(row.get('cluster_label', 'Unclustered')),
+                      "in_cluster": in_cluster,
+                      "text": str(chunk_text),
+                      "meta_cluster_id": meta_cid,
+                      "meta_cluster_label": meta_clabel,
+                  })
+
+            # Attach meta_cluster info at note level (from first chunk with valid label)
+            notes_list.append({
+                  "note_key": str(note_key),
+                  "title": title,
+                  "creation_date": creation_date,
+                  "modification_date": modification_date,
+                  "chunks": chunks_list,
+                  "meta_cluster_id": next(
+                      (c.get("meta_cluster_id") for c in chunks_list if c.get("meta_cluster_id")),
+                      None,
+                  ),
+                  "meta_cluster_label": next(
+                      (c.get("meta_cluster_label") for c in chunks_list if c.get("meta_cluster_label")),
+                      None,
+                  ),
+              })
+
+        if notes_list:
+            notes_by_cluster[cluster_id_val] = notes_list
+
+    return {"notes_by_cluster": notes_by_cluster}
+
+
+@app.get("/interactions_by_titles")
+async def get_interactions_by_titles(
+    titles: str = Query(..., description="JSON-encoded list of note titles"),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    """Return interaction dates for specific note titles within an optional date range."""
+    import json as _json
+    try:
+        title_list = _json.loads(titles) if isinstance(titles, str) else titles
+        if not isinstance(title_list, list):
+            raise HTTPException(status_code=400, detail="titles must be a JSON array of strings")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid titles format: {e}")
+
+    if not title_list:
+        return {"titles": []}
+
+    # Set defaults for date range
+    dt_from = pd.Timestamp(date_from + " 00:00:00") if date_from else pd.Timestamp.min
+    dt_to = pd.Timestamp((date_to + " 23:59:59") if date_to else "9999-12-31 23:59:59")
+
+    db = NotesDatabase(db_path=DB_PATH)
+    _, interactions_table = db.get_interactions_db()
+    
+    result: Dict[str, Optional[str]] = {t: None for t in title_list}
+    
+    if interactions_table is not None:
+        int_df = interactions_table.to_pandas()
+        if not int_df.empty and "interaction_log" in int_df.columns:
+            for _, row in int_df.iterrows():
+                row_title = str(row.get("title", "")).strip()
+                if row_title not in result:
+                    continue
+                    
+                events = _parse_interaction_events(row.get("interaction_log", "[]"))
+                latest_dt: Optional[str] = None
+                
+                for ev in events:
+                    ev_date_str = _event_date(ev.get("dt", ""))
+                    if ev_date_str:
+                        ev_ts = pd.Timestamp(ev_date_str + " 12:00:00")
+                        if dt_from <= ev_ts <= dt_to:
+                            # Track the latest interaction date within range
+                            if latest_dt is None or ev_date_str > latest_dt:
+                                latest_dt = ev_date_str
+                
+                result[row_title] = latest_dt
+
+    return {"titles": [{"title": t, "latest_date": result.get(t)} for t in title_list]}
 
 
 # ── Daily History Endpoints ────────────────────────────────────────────────
