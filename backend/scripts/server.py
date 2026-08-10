@@ -1087,7 +1087,7 @@ async def get_filtered_notes_all(
     if working_df.empty:
         return {"notes_by_cluster": {}}
 
-     # Normalize columns
+    # Normalize columns
     working_df['title'] = working_df['title'].astype(str)
     for col in ['creation_date', 'modification_date', 'cluster_label', 'display_topic_id']:
         if col not in working_df.columns:
@@ -1095,79 +1095,116 @@ async def get_filtered_notes_all(
         else:
             working_df[col] = working_df[col].astype(str)
 
+    # Build note keys from ALL working_df rows (not just current cluster)
+    # This ensures each note includes ALL its chunks, so dots/dashes and gap labels render correctly
+    note_identity_cols = ['title', 'creation_date', 'modification_date']
+    note_keys_df = working_df[note_identity_cols].drop_duplicates().copy()
+    note_keys_df['note_key'] = (
+        note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
+    )
+
+    # Group ALL rows by note_key to get every chunk for each note
+    all_merged = working_df.merge(note_keys_df, on=note_identity_cols, how='inner')
+    all_merged = all_merged.sort_values(['note_key', 'chunk_index'])
+
+    # Build a map of note_key -> list of chunks (across ALL clusters)
+    note_chunks_map: Dict[str, List[Dict[str, Any]]] = {}
+    note_meta_map: Dict[str, Dict[str, Any]] = {}
+
+    for note_key, group in all_merged.groupby('note_key', sort=False):
+        title_val = str(group.iloc[0].get('title', ''))
+        creation_date_val = str(group.iloc[0].get('creation_date', ''))
+        modification_date_val = str(group.iloc[0].get('modification_date', ''))
+
+        chunks_list: List[Dict[str, Any]] = []
+        seen_chunk_indexes: set = set()
+        for _, row in group.iterrows():
+            chunk_index_val = int(row.get('chunk_index', 0))
+            if chunk_index_val in seen_chunk_indexes:
+                continue
+            seen_chunk_indexes.add(chunk_index_val)
+
+            chunk_cluster_id = str(row.get('display_topic_id', '-1'))
+
+            chunk_text = row.get('chunk_content', '')
+            if pd.isna(chunk_text) or chunk_text == '':
+                chunk_text = row.get('text', '')
+            if pd.isna(chunk_text):
+                chunk_text = ''
+
+            meta_cid = str(row.get('meta_cluster_id', ''))
+            meta_clabel = str(row.get('meta_cluster_label', ''))
+            if not meta_cid or meta_cid in ('nan', 'None', '', '-1'):
+                meta_cid = None
+            if not meta_clabel or meta_clabel in ('nan', 'None', '', 'Uncategorized'):
+                meta_clabel = None
+
+            chunks_list.append({
+                "note_key": str(note_key),
+                "chunk_index": chunk_index_val,
+                "cluster_id": chunk_cluster_id,
+                "cluster_name": str(row.get('cluster_label', 'Unclustered')),
+                "in_cluster": False,  # Will be set by caller based on selectedClusters
+                "text": str(chunk_text),
+                "meta_cluster_id": meta_cid,
+                "meta_cluster_label": meta_clabel,
+            })
+
+        note_chunks_map[note_key] = chunks_list
+        note_meta_map[note_key] = {
+            "note_key": str(note_key),
+            "title": title_val,
+            "creation_date": creation_date_val,
+            "modification_date": modification_date_val,
+            "meta_cluster_id": next(
+                (c.get("meta_cluster_id") for c in chunks_list if c.get("meta_cluster_id")),
+                None,
+            ),
+            "meta_cluster_label": next(
+                (c.get("meta_cluster_label") for c in chunks_list if c.get("meta_cluster_label")),
+                None,
+            ),
+        }
+
+    # Now organize notes by cluster: for each cluster, find notes that have chunks belonging to it
+    # and mark those chunks as in_cluster=True
     notes_by_cluster: Dict[str, List[Dict[str, Any]]] = {}
-
     for cluster_id_val in working_df['display_topic_id'].unique():
-        cluster_df = working_df[working_df['display_topic_id'] == cluster_id_val].copy()
-        if cluster_df.empty:
-            continue
-
-        note_identity_cols = ['title', 'creation_date', 'modification_date']
-        note_keys_df = cluster_df[note_identity_cols].drop_duplicates().copy()
-        note_keys_df['note_key'] = (
-            note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
-         )
-
-        merged = cluster_df.merge(note_keys_df, on=note_identity_cols, how='inner')
-        merged = merged.sort_values(['note_key', 'chunk_index'])
-
         notes_list: List[Dict[str, Any]] = []
-        for note_key, group in merged.groupby('note_key', sort=False):
-            title = str(group.iloc[0].get('title', ''))
-            creation_date = str(group.iloc[0].get('creation_date', ''))
-            modification_date = str(group.iloc[0].get('modification_date', ''))
 
-            chunks_list: List[Dict[str, Any]] = []
-            seen_chunk_indexes: set = set()
-            for _, row in group.iterrows():
-                chunk_index_val = int(row.get('chunk_index', 0))
-                if chunk_index_val in seen_chunk_indexes:
-                    continue
-                seen_chunk_indexes.add(chunk_index_val)
+        # Get all unique note_keys that have at least one chunk in this cluster
+        cluster_note_keys = set()
+        cluster_chunks_for_marking: Dict[str, Set[int]] = {}  # note_key -> set of chunk_indexes in this cluster
 
-                chunk_cluster_id = str(row.get('display_topic_id', '-1'))
-                in_cluster = chunk_cluster_id == cluster_id_val
+        for _, row in working_df[working_df['display_topic_id'] == cluster_id_val].iterrows():
+            title_match = note_keys_df[note_keys_df['title'] == row['title']]
+            if len(title_match) > 0:
+                nk = str(title_match.iloc[0]['note_key'])
+                if nk and nk in note_chunks_map:
+                    chunk_idx = int(row.get('chunk_index', 0))
+                    cluster_note_keys.add(nk)
+                    if nk not in cluster_chunks_for_marking:
+                        cluster_chunks_for_marking[nk] = set()
+                    cluster_chunks_for_marking[nk].add(chunk_idx)
 
-                chunk_text = row.get('chunk_content', '')
-                if pd.isna(chunk_text) or chunk_text == '':
-                    chunk_text = row.get('text', '')
-                if pd.isna(chunk_text):
-                    chunk_text = ''
+        for note_key in cluster_note_keys:
+            note_meta = note_meta_map.get(note_key)
+            all_chunks = note_chunks_map.get(note_key, [])
+            if not note_meta or not all_chunks:
+                continue
 
-                meta_cid = str(row.get('meta_cluster_id', ''))
-                meta_clabel = str(row.get('meta_cluster_label', ''))
-                if not meta_cid or meta_cid in ('nan', 'None', '', '-1'):
-                    meta_cid = None
-                if not meta_clabel or meta_clabel in ('nan', 'None', '', 'Uncategorized'):
-                    meta_clabel = None
+            # Mark chunks that belong to this cluster as in_cluster=True
+            marked_chunks = []
+            for chunk in all_chunks:
+                if chunk["chunk_index"] in cluster_chunks_for_marking.get(note_key, set()):
+                    marked_chunks.append({**chunk, "in_cluster": True})
+                else:
+                    marked_chunks.append(chunk)
 
-                chunks_list.append({
-                      "note_key": str(note_key),
-                      "chunk_index": chunk_index_val,
-                      "cluster_id": chunk_cluster_id,
-                      "cluster_name": str(row.get('cluster_label', 'Unclustered')),
-                      "in_cluster": in_cluster,
-                      "text": str(chunk_text),
-                      "meta_cluster_id": meta_cid,
-                      "meta_cluster_label": meta_clabel,
-                  })
-
-            # Attach meta_cluster info at note level (from first chunk with valid label)
             notes_list.append({
-                  "note_key": str(note_key),
-                  "title": title,
-                  "creation_date": creation_date,
-                  "modification_date": modification_date,
-                  "chunks": chunks_list,
-                  "meta_cluster_id": next(
-                      (c.get("meta_cluster_id") for c in chunks_list if c.get("meta_cluster_id")),
-                      None,
-                  ),
-                  "meta_cluster_label": next(
-                      (c.get("meta_cluster_label") for c in chunks_list if c.get("meta_cluster_label")),
-                      None,
-                  ),
-              })
+                **note_meta,
+                "chunks": marked_chunks,
+            })
 
         if notes_list:
             notes_by_cluster[cluster_id_val] = notes_list
