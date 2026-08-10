@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // ── API types ────────────────────────────────────────────────────────────────
 interface MetaChildCluster {
@@ -207,10 +207,11 @@ export const MetaClusterTree: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-   // Determine which endpoint to use
-  const useFiltered = useMemo(() => !!(dateFrom || dateTo), [dateFrom, dateTo]);
+    // Determine which endpoint to use — memoized but only changes when date range actually changes
+    const useFiltered = useMemo(() => !!(dateFrom || dateTo), [dateFrom, dateTo]);
 
-   // Fetch meta-cluster data
+     // Fetch meta-cluster data — only when date range changes (not on cluster select)
+  // Uses the memoized `useFiltered` to decide endpoint, but never re-fetches just because selection changed
   useEffect(() => {
     let active = true;
     (async () => {
@@ -218,47 +219,45 @@ export const MetaClusterTree: React.FC<Props> = ({
         setLoading(true);
         let url = 'http://localhost:8000/meta_clusters';
         if (useFiltered) {
-          // Use the filtered endpoint which properly restricts to notes in date range
+           // Use the filtered endpoint which properly restricts to notes in date range
           url = 'http://localhost:8000/meta_clusters_filtered';
           const params = new URLSearchParams();
           if (dateFrom) params.set('date_from', dateFrom);
           if (dateTo) params.set('date_to', dateTo);
           url += `?${params.toString()}`;
-         }
+          }
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: MetaClusterInfo[] = await res.json();
         if (!active) return;
 
-         // Sort meta-clusters alphabetically by label
+          // Sort meta-clusters alphabetically by label
         data.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
 
         setMetaData(data);
 
-         // Auto-expand the meta-cluster containing the selected cluster (if any)
-        if (selectedClusterId && data.length > 0) {
-          const targetMeta = data.find((m) =>
-            m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
-           );
-          if (targetMeta) {
-            setExpandedMetaIds(new Set([targetMeta.meta_cluster_id]));
-           } else if (data.length <= 5) {
-             // If data is small, expand all
-            setExpandedMetaIds(new Set(data.map((m) => m.meta_cluster_id)));
-           }
-         } else if (data.length <= 5) {
-          setExpandedMetaIds(new Set(data.map((m) => m.meta_cluster_id)));
-         }
-       } catch (e: any) {
+          // Initialize expanded state on first load (if still empty)
+        setExpandedMetaIds((prev) => {
+          if (prev.size > 0) return prev; // already initialized
+          if (selectedClusterId && data.length > 0) {
+            const targetMeta = data.find((m) =>
+              m.child_clusters.some((c) => c.cluster_id === selectedClusterId),
+              );
+            if (targetMeta) return new Set([targetMeta.meta_cluster_id]);
+          }
+          return data.length <= 5 ? new Set(data.map((m) => m.meta_cluster_id)) : prev;
+        });
+        } catch (e: any) {
         if (!active) return;
         setError(e.message || 'Failed to load meta-clusters');
-       } finally {
+        setLoading(false);
+        } finally {
         if (!active) return;
         setLoading(false);
-       }
-     })();
+        }
+      })();
      return () => { active = true; };
-   }, [useFiltered, dateFrom, dateTo, selectedClusterId]);
+     }, [useFiltered, dateFrom, dateTo]); // ← selection only updates highlight, never re-fetches
 
   const toggleMeta = useCallback((id: string) => {
     setExpandedMetaIds((prev) => {
