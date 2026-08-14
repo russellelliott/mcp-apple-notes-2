@@ -292,6 +292,7 @@ class MetaClusterInfo(BaseModel):
     meta_cluster_id: str
     label: str
     child_clusters: List[MetaChildCluster]
+    last_modified: Optional[str] = None
 
 
 class SimilarClusterInfo(BaseModel):
@@ -376,15 +377,49 @@ async def get_meta_clusters():
     for mid in meta_groups:
         meta_groups[mid]["children"].sort(key=lambda c: -c["chunk_count"])
 
-    result = [
-        MetaClusterInfo(
+    # Compute last_modified per meta-cluster: max(modification_date) across all chunks in all clusters
+    def _parse_mod_date(d) -> Optional[str]:
+        """Return ISO date string or None."""
+        if pd.isna(d) or d is None:
+            return None
+        s = str(d).strip()
+        if not s or s in ('nan', 'None', ''):
+            return None
+        # Return just the YYYY-MM-DD part if there's a full timestamp
+        return s[:10]
+
+    def _meta_last_modified(mg: Dict[str, Any]) -> Optional[str]:
+        """Find the most recent modification_date among all chunks in this meta-cluster."""
+        best: Optional[str] = None
+        for child in mg["children"]:
+            cid = child["cluster_id"]
+            # Find all rows in df for this cluster_id
+            mask = df["display_topic_id"] == cid
+            mod_dates = df.loc[mask, "modification_date"]
+            for d in mod_dates:
+                date_str = _parse_mod_date(d)
+                if date_str:
+                    if best is None or date_str > best:
+                        best = date_str
+        return best
+
+    result = []
+    for mg in meta_groups.values():
+        last_mod = _meta_last_modified(mg)
+        result.append(MetaClusterInfo(
             meta_cluster_id=mg["id"],
             label=mg["label"],
             child_clusters=[MetaChildCluster(**c) for c in mg["children"]],
-        )
-        for mg in meta_groups.values()
-    ]
-    result.sort(key=lambda m: -sum(c.chunk_count for c in m.child_clusters))
+            last_modified=last_mod,
+         ))
+
+    # Sort by last_modified DESC (nulls last)
+    def _sort_key(m: MetaClusterInfo):
+        if m.last_modified is None:
+            return ""  # Nulls go to end when sorting descending
+        return m.last_modified
+
+    result.sort(key=_sort_key, reverse=True)
     return result
 
 

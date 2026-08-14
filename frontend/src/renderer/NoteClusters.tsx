@@ -2134,47 +2134,55 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                )}
              </div>
 
-            <div style={{
+             <div style={{
               flex: 1,
               minHeight: 0,
               minWidth: 0,
               display: 'flex',
-            }}>
-              <RadialSimilarityHub
+             }}>
+               <RadialSimilarityHub
                 selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
                 onNodeClick={(clusterId) => {
                   setSelectedClusters(new Set([clusterId]));
-                }}
+                 }}
                 clusterColors={clusterColorsFromAPI}
+                searchResults={debouncedQuery && searchResults.length > 0 && selectedClusters.size === 0 ? searchResults : undefined}
+               />
+             </div>
+          </div>
+
+
+            {/* Right column: MetaClusterTree with date props */}
+            <div style={{
+             width: '26%',
+             flexShrink: 0,
+             display: 'flex',
+             flexDirection: 'column',
+             borderLeft: '1px solid #e0e0e0',
+             backgroundColor: '#f9f9f9',
+             padding: '10px',
+             boxSizing: 'border-box',
+             fontSize: '11px',
+             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+            }}>
+              <MetaClusterTree
+               onClusterSelect={(clusterId) => {
+                 setSelectedClusters(new Set([clusterId]));
+                }}
+               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+               sortMetric={clusterSortMetric}
+               clusterColors={clusterColorsFromAPI}
+               dateFrom={dateFrom || undefined}
+               dateTo={dateTo || undefined}
+               searchClusterIds={debouncedQuery && searchResults.length > 0 ? (() => {
+                 const ids = new Set<string>();
+                 searchResults.forEach((r) => {
+                   ids.add(r.display_topic_id || r.cluster_id || '-1');
+                  });
+                 return ids;
+                })() : undefined}
               />
             </div>
-          </div>
-
-
-          {/* Right column: MetaClusterTree with date props */}
-          <div style={{
-            width: '26%',
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            borderLeft: '1px solid #e0e0e0',
-            backgroundColor: '#f9f9f9',
-            padding: '10px',
-            boxSizing: 'border-box',
-            fontSize: '11px',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-          }}>
-            <MetaClusterTree
-              onClusterSelect={(clusterId) => {
-                setSelectedClusters(new Set([clusterId]));
-              }}
-              selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-              sortMetric={clusterSortMetric}
-              clusterColors={clusterColorsFromAPI}
-              dateFrom={dateFrom || undefined}
-              dateTo={dateTo || undefined}
-            />
-          </div>
 
 
           {/* Modal Popup for Note Content */}

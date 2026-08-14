@@ -10,14 +10,29 @@ interface SimilarClusterInfo {
 }
 
 interface Props {
-    /**The currently selected cluster ID. When set, computes its neighborhood. */
+     /**The currently selected cluster ID. When set, computes its neighborhood. */
   selectedClusterId: string | null;
-    /**Callback when user clicks an orbiting node (promotes it to center) */
+     /**Callback when user clicks an orbiting node (promotes it to center) */
   onNodeClick: (clusterId: string) => void;
-    /**Current note chunk index for tooltip */
+     /**Current note chunk index for tooltip */
   activeNoteKey?: string | null;
-    /**Map of cluster_id → color for coloring the center node */
+     /**Map of cluster_id → color for coloring the center node */
   clusterColors?: Record<string, string>;
+     /**When search results are active, render a spiral layout instead. Cluster dots radiate from semantic center. */
+  searchResults?: SearchResultItem[];
+}
+
+interface SearchResultItem {
+  unique_key: string;
+  title: string;
+  chunk_index: number;
+  total_chunks?: number;
+  distance: number;
+  cluster_id?: string;
+  base_topic_id?: string;
+  display_topic_id?: string;
+  cluster_label: string;
+  preview: string;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -105,12 +120,22 @@ function TooltipBox({ cx, cy, node }: TooltipBoxProps) {
   );
 }
 
+// ── Aggregated cluster node for search mode spiral layout ─────────────────────
+interface SearchClusterNode {
+  cluster_id: string;
+  label: string;
+  avgDistance: number;
+  color: string;
+  chunkCount: number;
+}
+
 // ── RadialHub component ──────────────────────────────────────────────────────
 export const RadialSimilarityHub: React.FC<Props> = ({
   selectedClusterId,
   onNodeClick,
   activeNoteKey,
   clusterColors: propClusterColors,
+  searchResults: searchResultsProp,
 }) => {
   const [similarData, setSimilarData] = useState<SimilarClusterInfo[]>([]);
   const [targetLabel, setTargetLabel] = useState<string>('');
@@ -155,11 +180,80 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     fetchSimilar();
   }, [selectedClusterId]);
 
-  // Resolve center node color from the clusterColors map or API data
+   // Resolve center node color from the clusterColors map or API data
   const centerNodeColor = useMemo(() => {
     if (!selectedClusterId) return DEFAULT_CENTER_COLOR;
     return propClusterColors?.[selectedClusterId] || similarData.find((c) => c.cluster_id === selectedClusterId)?.color || DEFAULT_CENTER_COLOR;
-  }, [selectedClusterId, propClusterColors, similarData]);
+   }, [selectedClusterId, propClusterColors, similarData]);
+
+  // ── Search mode cluster aggregation + spiral positions ────────────────────
+   // Determine if search mode is active: searchResultsProp provided AND non-empty, and no selectedClusterId
+  const isSearchMode = !!(searchResultsProp && searchResultsProp.length > 0 && !selectedClusterId);
+
+   // Aggregate search results by cluster_id → compute avg distance
+  const searchClusterNodes = useMemo<SearchClusterNode[]>(() => {
+    if (!isSearchMode) return [];
+    const byCluster = new Map<string, { distances: number[]; label: string; color: string }>();
+    searchResultsProp.forEach((r) => {
+      const cid = r.display_topic_id || r.cluster_id || '-1';
+      let entry = byCluster.get(cid);
+      if (!entry) {
+        entry = { distances: [], label: r.cluster_label, color: propClusterColors?.[cid] || '#6b7280' };
+        byCluster.set(cid, entry);
+       }
+      // distance is already the score from search (lower = more relevant)
+      entry.distances.push(r.distance);
+    });
+    return Array.from(byCluster.entries()).map(([cid, info]) => ({
+      cluster_id: cid,
+      label: info.label,
+      avgDistance: info.distances.reduce((a, b) => a + b, 0) / info.distances.length,
+      color: info.color,
+      chunkCount: info.distances.length,
+    }));
+  }, [isSearchMode, searchResultsProp, propClusterColors]);
+
+   // Spiral layout positions — cluster dots radiate outward from center by avg distance
+  const searchNodePositions = useMemo<{ node: SearchClusterNode; x: number; y: number; radius: number; angle: number }[]>(() => {
+    if (searchClusterNodes.length === 0) return [];
+    // Sort by avg distance ascending (closest first → innermost ring)
+    const sorted = [...searchClusterNodes].sort((a, b) => a.avgDistance - b.avgDistance);
+    const minDist = sorted[0]?.avgDistance ?? 0;
+    const maxDist = sorted[sorted.length - 1]?.avgDistance ?? 1;
+    const distRange = maxDist - minDist || 1e-6;
+
+    const svgWidth = 500;
+    const centerX = svgWidth / 2;
+    // Same radius bounds as similarity mode for consistency
+    const rMin = CENTER_NODE_RADIUS + NODE_MAX_RADIUS * 0.8 + 4;
+    const maxOrbitRadiusLocal = Math.min(200, (svgWidth / 2) - 50);
+
+    return sorted.map((node, i) => {
+      // Radius from center scales with avg distance (closer = closer to center)
+      const normalizedDist = (node.avgDistance - minDist) / distRange;
+      const radius = rMin + (maxOrbitRadiusLocal - rMin) * normalizedDist;
+
+      // Evenly distributed angle, staggered by radius so inner nodes don't block outer ones
+      const totalRings = Math.max(1, Math.ceil(sorted.length / 12));
+      const ringIndex = Math.floor(i / 12);
+      const positionInRing = i % 12;
+      const anglePerNode = (Math.PI * 2) / Math.min(sorted.length - i, 12);
+      const startAngle = -Math.PI / 2 + ringIndex * 0.15; // slight spiral offset
+      const baseAngle = startAngle + positionInRing * anglePerNode;
+
+      const x = radius * Math.cos(baseAngle);
+      const y = radius * Math.sin(baseAngle);
+
+      // Node size based on chunk count (more chunks = bigger dot)
+      const maxChunks = sorted.reduce((max, nd) => Math.max(max, nd.chunkCount), 1);
+      const minChunks = sorted.reduce((min, nd) => Math.min(min, nd.chunkCount), 1);
+      const chunkRange = maxChunks - minChunks || 1;
+      const chunkNorm = (node.chunkCount - minChunks) / chunkRange;
+      const nodeRadius = NODE_MIN_RADIUS + chunkNorm * (NODE_MAX_RADIUS - NODE_MIN_RADIUS) * 0.5;
+
+      return { node, x, y, radius: nodeRadius, angle: baseAngle };
+    });
+  }, [searchClusterNodes, propClusterColors]);
 
   // Compute the effective color for any orbiting node — prefer its own API color, fall back to assigned palette
   const getNodeColor = useCallback(
@@ -290,7 +384,7 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     );
   }
 
-  if (!selectedClusterId) {
+  if (!selectedClusterId && !isSearchMode) {
     return (
       <svg
         width="100%"
@@ -301,13 +395,13 @@ export const RadialSimilarityHub: React.FC<Props> = ({
       >
         <text x={cx} y={cy - 10} textAnchor="middle" fill="#6b7280" fontSize="14">
           Select a cluster to view its semantic neighborhood
-        </text>
+         </text>
         <text x={cx} y={cy + 14} textAnchor="middle" fill="#9ca3af" fontSize="11">
           Click a cluster in the meta-cluster tree to begin
-        </text>
-      </svg>
-    );
-  }
+         </text>
+       </svg>
+     );
+   }
 
   // Draw connections from center to orbiting nodes
   const connections = nodePositions.map((node) => ({
@@ -346,9 +440,9 @@ export const RadialSimilarityHub: React.FC<Props> = ({
     >
       <defs>{gradients}</defs>
 
-      {/* Grid circles */}
-      {[0.33, 0.66, 1.0].map((factor, i) => (
-        <circle
+     {/* Grid circles */}
+       {[0.33, 0.66, 1.0].map((factor, i) => (
+         <circle
           key={`grid-${i}`}
           cx={cx}
           cy={cy}
@@ -357,53 +451,115 @@ export const RadialSimilarityHub: React.FC<Props> = ({
           stroke="#e5e7eb"
           strokeWidth={1}
           strokeDasharray={i === 2 ? 'none' : '4 4'}
-        />
-      ))}
+         />
+       ))}
 
-      {/* Connection lines */}
-      {connections.map((conn, i) => (
-        <line
-          key={`conn-${i}`}
-          x1={conn.x1}
-          y1={conn.y1}
-          x2={conn.x2}
-          y2={conn.y2}
-          stroke={`url(#hub-grad-${i})`}
-          strokeWidth={1 + conn.similarity * 2}
-          opacity={0.4 + conn.similarity * 0.3}
-        />
-      ))}
+       {/* Center label — "Search" mode indicator */}
+       {isSearchMode && searchClusterNodes.length > 0 && (
+         <g style={{ cursor: 'default' }}>
+           <circle cx={cx} cy={cy} r={CENTER_NODE_RADIUS - 4} fill="#1e3a5f" />
+           <text x={cx} y={cy - 6} textAnchor="middle" dominantBaseline="middle" fill="#fff" fontSize={10} fontWeight={700}>Search</text>
+           <text x={cx} y={cy + 8} textAnchor="middle" dominantBaseline="middle" fill="#bfdbfe" fontSize={9}>{searchClusterNodes.length} cluster{searchClusterNodes.length > 1 ? 's' : ''}</text>
+         </g>
+       )}
 
-      {/* Center node — selected cluster */}
-      <g style={{ cursor: 'default' }}>
-        <circle cx={cx} cy={cy} r={CENTER_NODE_RADIUS} fill={centerNodeColor} />
-        {wrappedCenterLines.map((line, li) => (
-          <text
-            key={li}
-            x={cx}
-            y={centerTextStartY + li * (centerLabelFontSize + 2)}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fill="#fff"
-            fontSize={centerLabelFontSize}
-            fontWeight={700}
-          >
-            {line}
-          </text>
-        ))}
-        <text
-          x={cx}
-          y={cy + CENTER_NODE_RADIUS - 14}
-          textAnchor="middle"
-          fill="#bfdbfe"
-          fontSize="9"
-        >
-          {selectedClusterId}
-        </text>
-      </g>
+       {/* Normal mode: connections + center node */}
+       {!isSearchMode && (
+         <>
+           {/* Connection lines */}
+           {connections.map((conn, i) => (
+             <line
+              key={`conn-${i}`}
+              x1={conn.x1}
+              y1={conn.y1}
+              x2={conn.x2}
+              y2={conn.y2}
+              stroke={`url(#hub-grad-${i})`}
+              strokeWidth={1 + conn.similarity * 2}
+              opacity={0.4 + conn.similarity * 0.3}
+             />
+           ))}
 
-      {/* Orbiting nodes */}
-      {nodePositions.map((node) => {
+           {/* Center node — selected cluster */}
+           <g style={{ cursor: 'default' }}>
+             <circle cx={cx} cy={cy} r={CENTER_NODE_RADIUS} fill={centerNodeColor} />
+             {wrappedCenterLines.map((line, li) => (
+               <text
+                key={li}
+                x={cx}
+                y={centerTextStartY + li * (centerLabelFontSize + 2)}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fill="#fff"
+                fontSize={centerLabelFontSize}
+                fontWeight={700}
+               >
+                 {line}
+               </text>
+             ))}
+             <text
+              x={cx}
+              y={cy + CENTER_NODE_RADIUS - 14}
+              textAnchor="middle"
+              fill="#bfdbfe"
+              fontSize="9"
+             >
+               {selectedClusterId}
+             </text>
+           </g>
+         </>
+       )}
+
+       {/* Search mode cluster dots (non-clickable, informational) */}
+       {isSearchMode && searchNodePositions.map((pos) => {
+         const isHovered = hoveredNodeId === pos.node.cluster_id;
+         const dotColor = pos.node.color || '#6b7280';
+         return (
+           <g
+            key={pos.node.cluster_id}
+            onMouseEnter={() => setHoveredNodeId(pos.node.cluster_id)}
+            onMouseLeave={() => setHoveredNodeId(null)}
+            style={{ cursor: 'default' }}
+           >
+             {/* Glow on hover */}
+             {isHovered && (
+               <circle
+                cx={cx + pos.x}
+                cy={cy + pos.y}
+                r={(pos.radius + 6) * 1.3}
+                fill={dotColor}
+                opacity={0.2}
+               />
+             )}
+             {/* Main cluster dot */}
+             <circle
+              cx={cx + pos.x}
+              cy={cy + pos.y}
+              r={isHovered ? pos.radius * 1.15 : pos.radius}
+              fill={dotColor}
+              stroke={isHovered ? '#fff' : 'none'}
+              strokeWidth={isHovered ? 2 : 0}
+              opacity={0.85}
+             />
+             {/* Cluster label below dot */}
+             <text
+              x={cx + pos.x}
+              y={cy + pos.y + pos.radius + 12}
+              textAnchor="middle"
+              fill="#374151"
+              fontSize={isHovered ? 11 : 10}
+              fontWeight={isHovered ? 600 : 400}
+             >
+               {pos.node.label.length > 20 ? pos.node.label.slice(0, 18) + '…' : pos.node.label}
+             </text>
+           </g>
+         );
+       })}
+
+        {/* Normal mode: orbiting nodes */}
+        {!isSearchMode && (<>
+         {/* Orbiting nodes */}
+         {nodePositions.map((node) => {
         const isHovered = hoveredNodeId === node.cluster_id;
         const nodeColor = getNodeColor(node);
 
@@ -453,11 +609,13 @@ export const RadialSimilarityHub: React.FC<Props> = ({
               {isHovered && (
                 <TooltipBox cx={cx} cy={cy} node={node} />
               )}
-          </g>
-        );
-      })}
-    </svg>
-  );
+            </g>
+          );
+        })}
+         </>)}
+
+      </svg>
+    );
 };
 
 export default RadialSimilarityHub;
