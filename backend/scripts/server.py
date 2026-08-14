@@ -295,6 +295,15 @@ class MetaClusterInfo(BaseModel):
     last_modified: Optional[str] = None
 
 
+class MetaClusterDistanceSort(BaseModel):
+    """Meta-cluster info with distance-based sort score."""
+    meta_cluster_id: str
+    label: str
+    child_clusters: List[MetaChildCluster]
+    avg_distance: float
+    last_modified: Optional[str] = None
+
+
 class SimilarClusterInfo(BaseModel):
     cluster_id: str
     label: str
@@ -980,34 +989,263 @@ async def get_interactions_by_date(
     return InteractionsByDateResponse(titles=sorted(list(titles)))
 
 
-@app.get("/meta_clusters_filtered", response_model=List[MetaClusterInfo])
-async def get_meta_clusters_filtered(
-    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
+class SearchDistanceInput(BaseModel):
+    """Input for distance-based meta-cluster sorting."""
+    cluster_distances: Dict[str, List[float]]
+    # Maps cluster_id -> list of distances (one per search result chunk for that cluster)
+
+
+@app.post("/meta_clusters_search_sort", response_model=List[MetaClusterDistanceSort])
+async def get_meta_clusters_search_sort(
+    input: SearchDistanceInput,
 ):
-    """Return meta-clusters filtered to only those containing notes from the date range."""
+    """Return meta-clusters sorted by average cosine distance from search results.
+
+    Lower avg_distance = more relevant to search query = appears first.
+    Within same distance, sorts alphabetically by label.
+    """
     if state.df_viz.empty:
         return []
 
-    # Get allowed titles from date range
-    allowed_titles = _get_titles_in_date_range(date_from, date_to)
+    df = state.df_viz
+    if "meta_cluster_id" not in df.columns or "meta_cluster_label" not in df.columns:
+        return []
 
-    # If no dates specified, return all meta-clusters
-    if not date_from and not date_to:
-        return await get_meta_clusters()
+    # Build reverse lookup: cluster_id -> average distance
+    avg_distance_map: Dict[str, float] = {}
+    for cid, distances in input.cluster_distances.items():
+        if distances:
+            avg_distance_map[cid] = sum(distances) / len(distances)
+        else:
+            avg_distance_map[cid] = float('inf')
 
-    # Filter df_viz to only allowed titles
-    working_df = state.df_viz[state.df_viz["title"].isin(allowed_titles)]
+    meta_centroids_df = _compute_meta_centroids(df)
+    if meta_centroids_df.empty:
+        return []
+
+    centroid_lookup: Dict[str, Dict[str, Any]] = {}
+    for _, row in meta_centroids_df.iterrows():
+        cid = str(row["cluster_id"])
+        centroid_lookup[cid] = {
+            "centroid": row["centroid"],
+            "meta_cluster_id": str(row["meta_cluster_id"]),
+            "chunk_count": int(row["chunk_count"]),
+        }
+
+    # Compute stable color per cluster based on 5D UMAP position
+    all_centroids_arr = np.vstack([v["centroid"] for v in centroid_lookup.values()]) if centroid_lookup else np.zeros((1, 5))
+    global_centroid = all_centroids_arr.mean(axis=0) if len(all_centroids_arr) > 0 else np.zeros(5)
+
+    def _cluster_color(cid: str) -> str:
+        info = centroid_lookup.get(cid)
+        if not info:
+            return "#6b7280"
+        cent = info["centroid"]
+        dx = float(cent[0] - global_centroid[0])
+        dy = float(cent[1] - global_centroid[1])
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            return "#6b7280"
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+            return "hsl(210, 75%, 45%)"
+        angle = math.degrees(math.atan2(dy, dx)) % 360.0
+        return f"hsl({int(round(angle))}, 75%, 45%)"
+
+    # Group by meta_cluster_id
+    meta_groups: Dict[str, Dict[str, Any]] = {}
+    for cid_str in df["display_topic_id"].astype(str).unique():
+        child_df = df[df["display_topic_id"] == cid_str]
+        if child_df.empty:
+            continue
+        mid = str(child_df.iloc[0].get("meta_cluster_id", "unknown"))
+        mlabel = str(child_df.iloc[0].get("meta_cluster_label", f"Meta {mid}"))
+        if mid not in meta_groups:
+            meta_groups[mid] = {
+                "id": mid,
+                "label": mlabel,
+                "children": [],
+                "child_cluster_ids": set(),
+            }
+        color = _cluster_color(cid_str)
+        centroid_list = None
+        cl_info = centroid_lookup.get(cid_str)
+        if cl_info:
+            centroid_list = cl_info["centroid"].tolist()
+        meta_groups[mid]["children"].append({
+            "cluster_id": cid_str,
+            "label": str(child_df.iloc[0].get("cluster_label", cid_str)),
+            "chunk_count": len(child_df),
+            "color": color,
+            "centroid": centroid_list,
+        })
+        meta_groups[mid]["child_cluster_ids"].add(cid_str)
+
+    for mid in meta_groups:
+        meta_groups[mid]["children"].sort(key=lambda c: -c["chunk_count"])
+
+    def _parse_mod_date(d) -> Optional[str]:
+        if pd.isna(d) or d is None:
+            return None
+        s = str(d).strip()
+        if not s or s in ('nan', 'None', ''):
+            return None
+        return s[:10]
+
+    def _meta_last_modified(mg: Dict[str, Any]) -> Optional[str]:
+        best: Optional[str] = None
+        for child in mg["children"]:
+            cid = child["cluster_id"]
+            mask = df["display_topic_id"] == cid
+            mod_dates = df.loc[mask, "modification_date"]
+            for d in mod_dates:
+                date_str = _parse_mod_date(d)
+                if date_str:
+                    if best is None or date_str > best:
+                        best = date_str
+        return best
+
+    # Compute avg distance per meta-cluster: average of all child cluster avg distances
+    result = []
+    for mg in meta_groups.values():
+        child_ids = mg["child_cluster_ids"]
+        distances_for_meta = [avg_distance_map.get(cid, float('inf')) for cid in child_ids]
+        # Filter out inf values for averaging; if all are inf, use inf
+        valid_distances = [d for d in distances_for_meta if math.isfinite(d)]
+        if valid_distances:
+            avg_dist = sum(valid_distances) / len(valid_distances)
+        else:
+            avg_dist = float('inf')
+
+        last_mod = _meta_last_modified(mg)
+        result.append(MetaClusterDistanceSort(
+            meta_cluster_id=mg["id"],
+            label=mg["label"],
+            child_clusters=[MetaChildCluster(**c) for c in mg["children"]],
+            avg_distance=round(avg_dist, 6),
+            last_modified=last_mod,
+        ))
+
+    # Sort by avg_distance ascending (lowest = most relevant first), then alphabetically
+    result.sort(key=lambda m: (m.avg_distance, m.label))
+    return result
+
+
+@app.get("/meta_clusters_search_sort_simple")
+async def get_meta_clusters_search_sort_simple(
+    cluster_ids: str = Query(..., description="Comma-separated cluster_ids that appear in search results"),
+):
+    """Return meta-clusters containing the given cluster_ids, sorted alphabetically.
+
+    This is a simpler alternative used when we just want to filter which meta-clusters show
+    without distance-based sorting (distance info computed on frontend).
+    """
+    if state.df_viz.empty:
+        return []
+
+    df = state.df_viz
+    if "meta_cluster_id" not in df.columns or "meta_cluster_label" not in df.columns:
+        return []
+
+    allowed_clusters = set(cid.strip() for cid in cluster_ids.split(",") if cid.strip())
+    if not allowed_clusters:
+        return []
+
+    # Filter to only rows whose display_topic_id is in the allowed set
+    working_df = df[df["display_topic_id"].isin(allowed_clusters)].copy()
     if working_df.empty:
         return []
 
-    # Temporarily replace df_viz for meta cluster computation
-    original_df = state.df_viz
-    state.df_viz = working_df
+    meta_centroids_df = _compute_meta_centroids(working_df)
+    if meta_centroids_df.empty:
+        return []
 
-    result = await get_meta_clusters()
+    centroid_lookup: Dict[str, Dict[str, Any]] = {}
+    for _, row in meta_centroids_df.iterrows():
+        cid = str(row["cluster_id"])
+        centroid_lookup[cid] = {
+            "centroid": row["centroid"],
+            "meta_cluster_id": str(row["meta_cluster_id"]),
+            "chunk_count": int(row["chunk_count"]),
+        }
 
-    state.df_viz = original_df
+    all_centroids_arr = np.vstack([v["centroid"] for v in centroid_lookup.values()]) if centroid_lookup else np.zeros((1, 5))
+    global_centroid = all_centroids_arr.mean(axis=0) if len(all_centroids_arr) > 0 else np.zeros(5)
+
+    def _cluster_color(cid: str) -> str:
+        info = centroid_lookup.get(cid)
+        if not info:
+            return "#6b7280"
+        cent = info["centroid"]
+        dx = float(cent[0] - global_centroid[0])
+        dy = float(cent[1] - global_centroid[1])
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            return "#6b7280"
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
+            return "hsl(210, 75%, 45%)"
+        angle = math.degrees(math.atan2(dy, dx)) % 360.0
+        return f"hsl({int(round(angle))}, 75%, 45%)"
+
+    # Group by meta_cluster_id
+    meta_groups: Dict[str, Dict[str, Any]] = {}
+    for cid_str in working_df["display_topic_id"].astype(str).unique():
+        child_df = working_df[working_df["display_topic_id"] == cid_str]
+        if child_df.empty:
+            continue
+        mid = str(child_df.iloc[0].get("meta_cluster_id", "unknown"))
+        mlabel = str(child_df.iloc[0].get("meta_cluster_label", f"Meta {mid}"))
+        if mid not in meta_groups:
+            meta_groups[mid] = {
+                "id": mid,
+                "label": mlabel,
+                "children": [],
+            }
+        color = _cluster_color(cid_str)
+        centroid_list = None
+        cl_info = centroid_lookup.get(cid_str)
+        if cl_info:
+            centroid_list = cl_info["centroid"].tolist()
+        meta_groups[mid]["children"].append({
+            "cluster_id": cid_str,
+            "label": str(child_df.iloc[0].get("cluster_label", cid_str)),
+            "chunk_count": len(child_df),
+            "color": color,
+            "centroid": centroid_list,
+        })
+
+    for mid in meta_groups:
+        meta_groups[mid]["children"].sort(key=lambda c: -c["chunk_count"])
+
+    def _parse_mod_date(d) -> Optional[str]:
+        if pd.isna(d) or d is None:
+            return None
+        s = str(d).strip()
+        if not s or s in ('nan', 'None', ''):
+            return None
+        return s[:10]
+
+    def _meta_last_modified(mg: Dict[str, Any]) -> Optional[str]:
+        best: Optional[str] = None
+        for child in mg["children"]:
+            cid = child["cluster_id"]
+            mask = working_df["display_topic_id"] == cid
+            mod_dates = working_df.loc[mask, "modification_date"]
+            for d in mod_dates:
+                date_str = _parse_mod_date(d)
+                if date_str:
+                    if best is None or date_str > best:
+                        best = date_str
+        return best
+
+    # Sort alphabetically by label
+    result = []
+    for mg in sorted(meta_groups.values(), key=lambda m: m["label"]):
+        last_mod = _meta_last_modified(mg)
+        result.append(MetaClusterInfo(
+            meta_cluster_id=mg["id"],
+            label=mg["label"],
+            child_clusters=[MetaChildCluster(**c) for c in mg["children"]],
+            last_modified=last_mod,
+        ))
+
     return result
 
 

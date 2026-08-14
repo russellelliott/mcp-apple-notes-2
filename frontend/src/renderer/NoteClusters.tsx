@@ -2165,23 +2165,28 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
              fontSize: '11px',
              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
             }}>
-              <MetaClusterTree
-               onClusterSelect={(clusterId) => {
-                 setSelectedClusters(new Set([clusterId]));
-                }}
-               selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-               sortMetric={clusterSortMetric}
-               clusterColors={clusterColorsFromAPI}
-               dateFrom={dateFrom || undefined}
-               dateTo={dateTo || undefined}
-               searchClusterIds={debouncedQuery && searchResults.length > 0 ? (() => {
-                 const ids = new Set<string>();
-                 searchResults.forEach((r) => {
-                   ids.add(r.display_topic_id || r.cluster_id || '-1');
-                  });
-                 return ids;
-                })() : undefined}
-              />
+               <MetaClusterTree
+                onClusterSelect={(clusterId) => {
+                  setSelectedClusters(new Set([clusterId]));
+                  }}
+                selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+                sortMetric={clusterSortMetric}
+                clusterColors={clusterColorsFromAPI}
+                dateFrom={dateFrom || undefined}
+                dateTo={dateTo || undefined}
+                searchClusterIds={debouncedQuery && searchResults.length > 0 ? (() => {
+                  const ids = new Set<string>();
+                  searchResults.forEach((r) => {
+                    ids.add(r.display_topic_id || r.cluster_id || '-1');
+                    });
+                  return ids;
+                  })() : undefined}
+                searchResults={debouncedQuery && searchResults.length > 0 ? searchResults.map((r) => ({
+                  cluster_id: r.cluster_id || '-1',
+                  display_topic_id: r.display_topic_id || r.cluster_id || '-1',
+                  distance: r.distance,
+                  })) : undefined}
+                />
             </div>
 
 
