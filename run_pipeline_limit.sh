@@ -18,12 +18,6 @@ echo "Running server CLI..."
 cd "$ROOT_DIR/server"
 bun cli.ts --mode=incremental --max="$LIMIT"
 
-# 1.5. Create FTS (full-text search) indexes before BERTopic
-echo ""
-echo "Creating FTS (full-text search) indexes..."
-cd "$ROOT_DIR"
-python3 backend/scripts/create_inverted_index.py
-
 # 2. Run backend/analysis/run_bertopic.py
 echo "Running BERTopic analysis..."
 cd "$ROOT_DIR/backend/analysis"
@@ -35,7 +29,7 @@ python load_topic_model.py
 
 echo "Topic generation step finished."
 
-# 1.5. Create FTS (full-text search) indexes before BERTopic
+# 4. Create FTS (full-text search) indexes before BERTopic
 echo ""
 echo "Creating FTS (full-text search) indexes..."
 cd "$ROOT_DIR"
