@@ -35,4 +35,10 @@ python load_topic_model.py
 
 echo "Topic generation step finished."
 
+# 1.5. Create FTS (full-text search) indexes before BERTopic
+echo ""
+echo "Creating FTS (full-text search) indexes..."
+cd "$ROOT_DIR"
+python3 backend/scripts/create_inverted_index.py
+
 echo "Pipeline finished successfully."
