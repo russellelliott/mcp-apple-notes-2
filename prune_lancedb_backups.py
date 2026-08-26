@@ -4,7 +4,7 @@
 Keeps only:
   - notes
   - notes_interactions
-  - the 10 newest notes_backup_<timestamp> tables
+    - the 3 newest notes_backup_<timestamp> tables
 
 Drops:
   - older notes_backup_<timestamp> tables
@@ -72,8 +72,8 @@ def main() -> int:
     parser.add_argument(
         "--keep",
         type=int,
-        default=10,
-        help="Number of newest notes_backup_<timestamp> tables to keep (default: 10).",
+        default=3,
+        help="Number of newest notes_backup_<timestamp> tables to keep (default: 3).",
     )
     args = parser.parse_args()
 
