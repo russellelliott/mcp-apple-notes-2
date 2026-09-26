@@ -18,6 +18,7 @@ import {
 } from "@lancedb/lancedb/embedding";
 import { type Float, Float32, Utf8, FixedSizeList, Field } from "apache-arrow";
 import { pipeline as hfPipeline } from "@huggingface/transformers";
+import { computeProximityScore, computeProximityScores, tokenize } from "./proximity_rank.js";
 
 // Remove the turndown instance
 const db = await lancedb.connect(
@@ -2171,7 +2172,7 @@ export const searchAndCombineResults = async (
     console.log(`❌ FTS Error: ${(error as Error).message}`);
   }
   
-  // Strategy 3: Database-level exact phrase matching (much more efficient)
+   // Strategy 3: Database-level exact phrase matching (much more efficient)
   console.log(`\n3️⃣ Database-level exact phrase search...`);
   try {
     // Use SQL-like filtering instead of loading all chunks
@@ -2249,11 +2250,59 @@ export const searchAndCombineResults = async (
     }
   }
   
-  // Combine and rank results
-  const combinedResults = Array.from(noteResults.values())
-    .sort((a, b) => b._relevance_score - a._relevance_score);
+   // Combine and rank results
+   const combinedResults = Array.from(noteResults.values())
+      .sort((a, b) => b._relevance_score - a._relevance_score);
 
-  console.log(`\n📊 Final results: ${combinedResults.length} notes (from ${noteResults.size} total matches)`);
+   // =========================================================================
+   // Apply proximity-based ranking bonus (multi-word keyword queries)
+   // =========================================================================
+   // Only apply proximity boosting when query has meaningful multi-term content.
+   // This runs AFTER all retrieval phases so every chunk gets a fair shot.
+   const stopWordSet = new Set([
+      "a","an","the","and","or","but","not","nor","in","on","at","to","for","of",
+      "with","by","is","it","its","this","that","these","those","are","was","were",
+      "be","been","being","have","has","had","do","does","did","will","would",
+      "could","should","may","might","shall","i","me","my","we","our","you",
+      "your","he","him","his","she","her","they","them","their","what","which",
+      "who","whom","how","when","where","why","if","then","than","so","as",
+      "about","up","out","just","also","too","very","can","into","over",
+      "after","before","between","through","during","from","above","below",
+      "both","each","few","more","most","other","some","such","no","any",
+    ]);
+   const cleanQueryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+   const cleanTerms = cleanQueryWords.filter(t => !stopWordSet.has(t) && t.length > 1);
+
+   if (cleanTerms.length >= 2) {
+      console.log(`\n4️⃣ Applying proximity boost for ${cleanTerms.length}-term query...`);
+
+      // Determine quoted phrase intent
+      const isQuoted = /"([^"]+)"/.test(query);
+      const chunkTexts = combinedResults.map(r => `${r.title || ''} ${(r._matching_chunk_preview as string) || ''}`);
+      const proximityBonuses = computeProximityScores(chunkTexts, query, isQuoted);
+
+      // Apply bonuses to results (higher score = better in TS, so add bonus)
+      for (let i = 0; i < combinedResults.length; i++) {
+         const bonus = proximityBonuses[i] ?? 0;
+         if (bonus > 0) {
+            (combinedResults[i] as any)._proximity_bonus = bonus;
+            // Scale factor to match Python implementation (bonus * 100 since TS scores are on 0-100 scale)
+            (combinedResults[i] as any)._relevance_score = Math.min(200, (combinedResults[i] as any)._relevance_score + bonus * 100);
+         } else {
+            (combinedResults[i] as any)._proximity_bonus = 0;
+         }
+      }
+
+      const boostedCount = proximityBonuses.filter((b: number) => b > 0).length;
+      console.log(`   Applied proximity boost to ${boostedCount} of ${combinedResults.length} results`);
+   } else {
+      // Initialize _proximity_bonus to 0 for all results when not applicable
+      for (const r of combinedResults) {
+         (r as any)._proximity_bonus = 0;
+      }
+   }
+
+   console.log(`\n📊 Final results: ${combinedResults.length} notes (from ${noteResults.size} total matches)`);
 
   if (combinedResults.length > 0) {
     combinedResults.forEach((result, idx) => {

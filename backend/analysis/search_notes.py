@@ -5,10 +5,11 @@ This function implements:
 1) Vector semantic search (cosine similarity)
 2) Full-text search (FTS) with AND/OR query expansion
 3) Database-level LIKE fallback
+4) Proximity-based ranking bonus for multi-word keyword queries
 
 Returns a list of dicts with keys:
   title, creation_date, modification_date, _relevance_score, _source,
-   _chunk_index, _total_chunks, _matching_chunk_preview, _chunk_id,
+    _chunk_index, _total_chunks, _matching_chunk_preview, _chunk_id,
   cluster_id, cluster_label
 """
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -16,6 +17,12 @@ import math
 import re
 import traceback
 import numpy as np
+
+# Import proximity ranking module (handle both module and __main__ execution)
+try:
+    from .proximity_rank import compute_proximity_score
+except ImportError:
+    from proximity_rank import compute_proximity_score
 
 # ---------------------------------------------------------------------------
 # Common English stop words - remove these before building keyword queries
@@ -602,12 +609,41 @@ def search_and_combine_results(
             print(f"Fallback also failed: {getattr(fallback_error, 'message', repr(fallback_error))}")
             traceback.print_exc()
 
-    # =========================================================================
-    # Combine and rank results (lower _relevance_score = more relevant)
-    # =========================================================================
+     # =========================================================================
+     # Apply proximity-based ranking bonus (multi-word keyword queries)
+     # =========================================================================
+     # Only apply proximity boosting when query has meaningful multi-term content.
+     # This runs AFTER all retrieval phases so every chunk gets a fair shot.
+    if len(terms) >= 2:
+         print(f"\n4) Applying proximity boost for {len(terms)}-term query...")
+         # Determine if the user used quotes (explicit phrase intent).
+         is_quoted = bool(re.findall(r'"([^"]+)"', query))
+
+         for result in chunk_results:
+             # Build the text to score: combine chunk content + title for best coverage.
+             chunk_text = _get_field(result, "_matching_chunk_content") or ""
+             chunk_title = _get_field(result, "title") or ""
+             full_text = f"{chunk_title} {chunk_text}"
+
+             prox_bonus = compute_proximity_score(full_text, query, is_quoted=is_quoted)
+             if prox_bonus > 0:
+                 # Store the bonus on the result for visibility.
+                 result["_proximity_bonus"] = round(prox_bonus, 6)
+                 # Boost the existing hybrid score (lower = better, so subtract bonus).
+                 result["_relevance_score"] = max(0.0, result["_relevance_score"] - prox_bonus * 10)
+
+         print(f"  Applied proximity boost to {sum(1 for r in chunk_results if r.get('_proximity_bonus', 0) > 0)} of {len(chunk_results)} results")
+    else:
+         # Initialize _proximity_bonus to 0.0 for all results when not applicable.
+         for result in chunk_results:
+             result["_proximity_bonus"] = 0.0
+
+     # =========================================================================
+     # Combine and rank results (lower _relevance_score = more relevant)
+     # =========================================================================
     combined_results = sorted(chunk_results, key=lambda r: r.get("_relevance_score", float('inf')))
 
-    # Count unique notes for summary
+     # Count unique notes for summary
     unique_notes = set(c['title'] for c in combined_results)
     print(f"\nFinal results: {len(combined_results)} chunks from {len(unique_notes)} unique notes")
 
