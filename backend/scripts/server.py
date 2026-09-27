@@ -1622,10 +1622,8 @@ async def get_filtered_notes_all(
 @app.get("/interactions_by_titles")
 async def get_interactions_by_titles(
     titles: str = Query(..., description="JSON-encoded list of note titles"),
-    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
 ):
-    """Return interaction dates for specific note titles within an optional date range."""
+    """Return latest interaction dates for specific note titles."""
     import json as _json
     try:
         title_list = _json.loads(titles) if isinstance(titles, str) else titles
@@ -1637,36 +1635,37 @@ async def get_interactions_by_titles(
     if not title_list:
         return {"titles": []}
 
-    # Set defaults for date range
-    dt_from = pd.Timestamp(date_from + " 00:00:00") if date_from else pd.Timestamp.min
-    dt_to = pd.Timestamp((date_to + " 23:59:59") if date_to else "9999-12-31 23:59:59")
+    # Strip titles for consistent matching
+    normalized_lookup: Dict[str, str] = {}  # stripped_title -> original_title
+    result: Dict[str, Optional[str]] = {}
+    for t in title_list:
+        s = str(t).strip()
+        normalized_lookup[s] = t
+        result[t] = None
 
     db = NotesDatabase(db_path=DB_PATH)
     _, interactions_table = db.get_interactions_db()
-    
-    result: Dict[str, Optional[str]] = {t: None for t in title_list}
-    
+
     if interactions_table is not None:
         int_df = interactions_table.to_pandas()
         if not int_df.empty and "interaction_log" in int_df.columns:
             for _, row in int_df.iterrows():
                 row_title = str(row.get("title", "")).strip()
-                if row_title not in result:
+                if row_title not in normalized_lookup:
                     continue
-                    
+
                 events = _parse_interaction_events(row.get("interaction_log", "[]"))
                 latest_dt: Optional[str] = None
-                
+
                 for ev in events:
                     ev_date_str = _event_date(ev.get("dt", ""))
                     if ev_date_str:
-                        ev_ts = pd.Timestamp(ev_date_str + " 12:00:00")
-                        if dt_from <= ev_ts <= dt_to:
-                            # Track the latest interaction date within range
-                            if latest_dt is None or ev_date_str > latest_dt:
-                                latest_dt = ev_date_str
-                
-                result[row_title] = latest_dt
+                         # Track the latest interaction date across all time
+                        if latest_dt is None or ev_date_str > latest_dt:
+                            latest_dt = ev_date_str
+
+                original_key = normalized_lookup[row_title]
+                result[original_key] = latest_dt
 
     return {"titles": [{"title": t, "latest_date": result.get(t)} for t in title_list]}
 
