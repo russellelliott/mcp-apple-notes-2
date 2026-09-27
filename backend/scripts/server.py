@@ -875,7 +875,7 @@ async def search(
         for field in (["creation_date", "modification_date"] if date_field == "both"
                       else [date_field]):
             if field in df.columns:
-                parsed = pd.to_datetime(df[field], errors="coerce", format="%Y-%m-%d")
+                parsed = pd.to_datetime(df[field], errors="coerce")
                 note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
 
         title_from_notes: set = set(df[note_mask]["title"].astype(str).unique())
@@ -1069,7 +1069,7 @@ class InteractionsByDateResponse(BaseModel):
 
 
 def _get_titles_in_date_range(date_from: Optional[str], date_to: Optional[str]) -> set:
-    """Get note titles that were interacted with in the specified date range."""
+    """Get note titles that were created, modified, or interacted with in the specified date range."""
     db = NotesDatabase(db_path=DB_PATH)
     _, interactions_table = db.get_interactions_db()
     if interactions_table is None:
@@ -1103,12 +1103,14 @@ def _get_titles_in_date_range(date_from: Optional[str], date_to: Optional[str]) 
         note_mask = pd.Series([False] * len(df_viz), index=df_viz.index)
         for field in ["creation_date", "modification_date"]:
             if field in df_viz.columns:
-                parsed = pd.to_datetime(df_viz[field], errors="coerce", format="%Y-%m-%d")
+                parsed = pd.to_datetime(df_viz[field], errors="coerce")
                 note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
         titles_from_notes = set(df_viz[note_mask]["title"].astype(str).unique())
         titles_set = titles_set | titles_from_notes
 
     return titles_set
+
+
 
 
 @app.get("/interactions_by_date", response_model=InteractionsByDateResponse)
