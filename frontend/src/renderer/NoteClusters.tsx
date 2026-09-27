@@ -628,7 +628,10 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
 
     Object.keys(processingGroups).forEach((label) => {
       const points = processingGroups[label];
-      processingColors[label] = clusterColorsFromAPI[label] || points.clusterColor || '#6b7280';
+      processingColors[label] = clusterColorsFromMetaTree[label]
+        || clusterColorsFromAPI[label]
+        || points.clusterColor
+        || '#6b7280';
     });
 
     Object.entries(processingColors).forEach(([label, baseColor]) => {
@@ -646,7 +649,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
       clusterHoverTints: processingHoverTints,
       clusterOpaqueTints: processingOpaqueTints,
     };
-  }, [data, clusterColorsFromAPI]);
+  }, [data, clusterColorsFromAPI, clusterColorsFromMetaTree]);
 
   const clusterAverageRelevance = useMemo(() => {
     // compute average relevance per cluster from searchResults (lower distance = better)
@@ -1482,9 +1485,12 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
 
   const getClusterColor = useCallback(
     (clusterId: string) => {
-      return clusterColors[clusterId] || '#6b7280';
+      return clusterColorsFromMetaTree[clusterId]
+        || clusterColorsFromAPI[clusterId]
+        || clusterColors[clusterId]
+        || '#6b7280';
     },
-    [clusterColors],
+    [clusterColors, clusterColorsFromAPI, clusterColorsFromMetaTree],
   );
 
   const displayedSidebarNotes = useMemo(() => {
@@ -1743,8 +1749,10 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                 const isHovered = hoveredId === result.unique_key;
                 const pointMatch = data.find((d) => d.unique_key === result.unique_key);
                 // Use API colors for search snippet backgrounds in the left column
-                const apiColor = clusterColorsFromAPI[resultClusterKey];
-                const apiTint = apiColor ? mixColorWithWhite(apiColor, 0.82) : undefined;
+                const resolvedColor = clusterColorsFromMetaTree[resultClusterKey]
+                  || clusterColorsFromAPI[resultClusterKey]
+                  || clusterColors[resultClusterKey];
+                const apiTint = resolvedColor ? mixColorWithWhite(resolvedColor, 0.82) : undefined;
                 return (
                   <div
                     key={result.unique_key}
@@ -1912,8 +1920,10 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                         if (chunk.in_cluster) {
                           const preview = (chunk.text || '').trim() || '(Empty chunk)';
                           // Resolve cluster color from the API so it matches the right column
-                          const apiChunkColor = clusterColorsFromAPI[chunk.cluster_id];
-                          const resolvedColor = apiChunkColor || clusterColors[chunk.cluster_id] || '#f3f4f6';
+                          const resolvedColor = clusterColorsFromMetaTree[chunk.cluster_id]
+                            || clusterColorsFromAPI[chunk.cluster_id]
+                            || clusterColors[chunk.cluster_id]
+                            || '#f3f4f6';
                           const lightenedColor = new THREE.Color(resolvedColor).lerp(new THREE.Color('#ffffff'), 0.75).getStyle();
                           rows.push(
                             <button
@@ -2255,7 +2265,10 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                       chunks={modalRailChunks}
                       activeClusterIds={new Set([selectedNode.display_topic_id || selectedNode.cluster_id || ''])}
                       currentChunkIndex={selectedNode.chunk_index}
-                      getClusterColor={(clusterId) => clusterColors[clusterId] || '#6b7280'}
+                      getClusterColor={(clusterId) => clusterColorsFromMetaTree[clusterId]
+                        || clusterColorsFromAPI[clusterId]
+                        || clusterColors[clusterId]
+                        || '#6b7280'}
                       onActiveDotClick={(chunk) => handleModalChunkJump(chunk.chunk_index)}
                       onInactiveDashClick={(chunk) => {
                         // Clicking a dash: select that cluster, navigate to the chunk

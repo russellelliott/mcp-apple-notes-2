@@ -455,17 +455,14 @@ async def get_meta_clusters_filtered(
     # Get titles that were interacted with in this date window
     allowed_titles = _get_titles_in_date_range(date_from, date_to)
 
-    if not allowed_titles:
-        return []
-
-    # Filter df to only rows for notes active in the date range
+    # Keep the complete hierarchy visible. Counts below indicate how many
+    # distinct notes in each cluster matched the date range.
     filtered_df = state.df_viz[state.df_viz["title"].isin(allowed_titles)].copy()
 
-    if filtered_df.empty:
-        return []
-
-    # Apply same grouping logic as /meta_clusters on the filtered subset
-    meta_centroids_df = _compute_meta_centroids(filtered_df)
+    # Compute colors and hierarchy from the full dataset so empty clusters
+    # retain their normal identity and remain visible in the sidebar.
+    hierarchy_df = state.df_viz
+    meta_centroids_df = _compute_meta_centroids(hierarchy_df)
     if meta_centroids_df.empty:
         return []
 
@@ -498,10 +495,14 @@ async def get_meta_clusters_filtered(
 
     # Group by meta_cluster_id
     meta_groups: Dict[str, Dict[str, Any]] = {}
-    for cid_str in filtered_df["display_topic_id"].astype(str).unique():
-        child_df = filtered_df[filtered_df["display_topic_id"] == cid_str]
+    for cid_str in hierarchy_df["display_topic_id"].astype(str).unique():
+        child_df = hierarchy_df[hierarchy_df["display_topic_id"] == cid_str]
         if child_df.empty:
             continue
+        filtered_child_df = filtered_df[filtered_df["display_topic_id"] == cid_str]
+        note_count = filtered_child_df[
+            ["title", "creation_date", "modification_date"]
+        ].drop_duplicates().shape[0]
         mid = str(child_df.iloc[0].get("meta_cluster_id", "unknown"))
         mlabel = str(child_df.iloc[0].get("meta_cluster_label", f"Meta {mid}"))
         if mid not in meta_groups:
@@ -514,7 +515,7 @@ async def get_meta_clusters_filtered(
         meta_groups[mid]["children"].append({
             "cluster_id": cid_str,
             "label": str(child_df.iloc[0].get("cluster_label", cid_str)),
-            "chunk_count": len(child_df),
+            "chunk_count": note_count,
             "color": color,
             "centroid": centroid_list,
         })
@@ -535,8 +536,8 @@ async def get_meta_clusters_filtered(
         best: Optional[str] = None
         for child in mg["children"]:
             cid = child["cluster_id"]
-            mask = filtered_df["display_topic_id"] == cid
-            mod_dates = filtered_df.loc[mask, "modification_date"]
+            mask = hierarchy_df["display_topic_id"] == cid
+            mod_dates = hierarchy_df.loc[mask, "modification_date"]
             for d in mod_dates:
                 date_str = _parse_mod_date(d)
                 if date_str:
