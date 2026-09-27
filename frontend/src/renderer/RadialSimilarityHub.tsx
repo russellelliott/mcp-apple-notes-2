@@ -183,8 +183,15 @@ export const RadialSimilarityHub: React.FC<Props> = ({
    // Resolve center node color from the clusterColors map or API data
   const centerNodeColor = useMemo(() => {
     if (!selectedClusterId) return DEFAULT_CENTER_COLOR;
-    return propClusterColors?.[selectedClusterId] || similarData.find((c) => c.cluster_id === selectedClusterId)?.color || DEFAULT_CENTER_COLOR;
+    return propClusterColors?.[String(selectedClusterId)] || similarData.find((c) => c.cluster_id === selectedClusterId)?.color || DEFAULT_CENTER_COLOR;
    }, [selectedClusterId, propClusterColors, similarData]);
+
+  const resolveClusterColor = useCallback(
+    (clusterId: string, fallback?: string | null): string => (
+      propClusterColors?.[String(clusterId)] || fallback || '#6b7280'
+    ),
+    [propClusterColors],
+  );
 
   // ── Search mode cluster aggregation + spiral positions ────────────────────
    // Determine if search mode is active: searchResultsProp provided AND non-empty, and no selectedClusterId
@@ -198,7 +205,7 @@ export const RadialSimilarityHub: React.FC<Props> = ({
       const cid = r.display_topic_id || r.cluster_id || '-1';
       let entry = byCluster.get(cid);
       if (!entry) {
-        entry = { distances: [], label: r.cluster_label, color: propClusterColors?.[cid] || '#6b7280' };
+        entry = { distances: [], label: r.cluster_label, color: resolveClusterColor(cid) };
         byCluster.set(cid, entry);
        }
       // distance is already the score from search (lower = more relevant)
@@ -211,7 +218,7 @@ export const RadialSimilarityHub: React.FC<Props> = ({
       color: info.color,
       chunkCount: info.distances.length,
     }));
-  }, [isSearchMode, searchResultsProp, propClusterColors]);
+  }, [isSearchMode, searchResultsProp, resolveClusterColor]);
 
    // Spiral layout positions — cluster dots radiate outward from center by avg distance
   const searchNodePositions = useMemo<{ node: SearchClusterNode; x: number; y: number; radius: number; angle: number }[]>(() => {
@@ -258,9 +265,9 @@ export const RadialSimilarityHub: React.FC<Props> = ({
   // Compute the effective color for any orbiting node — prefer its own API color, fall back to assigned palette
   const getNodeColor = useCallback(
     (node: SimilarClusterInfo): string => {
-      return node.color || propClusterColors?.[node.cluster_id] || `hsl(${210 + node.cluster_id.charCodeAt(0) * 15}, 75%, 45%)`;
+      return resolveClusterColor(node.cluster_id, node.color);
     },
-    [propClusterColors],
+    [resolveClusterColor],
   );
 
   // Compute positions using polar → cartesian with full-circle multi-ring layout
@@ -513,7 +520,7 @@ export const RadialSimilarityHub: React.FC<Props> = ({
        {/* Search mode cluster dots (non-clickable, informational) */}
        {isSearchMode && searchNodePositions.map((pos) => {
          const isHovered = hoveredNodeId === pos.node.cluster_id;
-         const dotColor = pos.node.color || '#6b7280';
+         const dotColor = resolveClusterColor(pos.node.cluster_id, pos.node.color);
          return (
            <g
             key={pos.node.cluster_id}

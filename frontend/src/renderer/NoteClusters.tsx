@@ -243,6 +243,7 @@ export default function NoteClusters() {
   const [selectedClusters, setSelectedClusters] = useState<Set<string>>(new Set());
   const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
   const [clusterColorsFromAPI, setClusterColorsFromAPI] = useState<Record<string, string>>({});
+  const [clusterColorsFromMetaTree, setClusterColorsFromMetaTree] = useState<Record<string, string>>({});
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
@@ -2070,7 +2071,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                 onNodeClick={(clusterId) => {
                   setSelectedClusters(new Set([clusterId]));
                  }}
-                clusterColors={clusterColorsFromAPI}
+                clusterColors={{ ...clusterColorsFromAPI, ...clusterColorsFromMetaTree }}
                 searchResults={debouncedQuery && searchResults.length > 0 && selectedClusters.size === 0 ? searchResults : undefined}
                />
              </div>
@@ -2097,6 +2098,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                 selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
                 sortMetric={clusterSortMetric}
                 clusterColors={clusterColorsFromAPI}
+                onClusterColorsLoaded={setClusterColorsFromMetaTree}
                 dateFrom={dateFrom || undefined}
                 dateTo={dateTo || undefined}
                 searchClusterIds={debouncedQuery && searchResults.length > 0 ? (() => {

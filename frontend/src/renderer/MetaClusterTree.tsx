@@ -29,6 +29,8 @@ interface Props {
   filterText?: string;
   /**Map of cluster_id → hex color (from /cluster_colors API) */
   clusterColors?: Record<string, string>;
+  /**Publishes colors from the same meta-cluster response rendered by this tree. */
+  onClusterColorsLoaded?: (colors: Record<string, string>) => void;
   /**Optional date range to filter meta-clusters */
   dateFrom?: string;
   dateTo?: string;
@@ -279,6 +281,7 @@ export const MetaClusterTree: React.FC<Props> = ({
   sortMetric,
   filterText,
   clusterColors,
+  onClusterColorsLoaded,
   dateFrom,
   dateTo,
   searchClusterIds,
@@ -320,6 +323,15 @@ export const MetaClusterTree: React.FC<Props> = ({
         if (!active) return;
 
         setMetaData(data);
+        if (onClusterColorsLoaded) {
+          const colors: Record<string, string> = {};
+          data.forEach((meta) => {
+            meta.child_clusters.forEach((child) => {
+              if (child.color) colors[child.cluster_id] = child.color;
+            });
+          });
+          onClusterColorsLoaded(colors);
+        }
 
         /**Initialize expanded state on first load (if still empty) */
         setExpandedMetaIds((prev) => {
@@ -343,7 +355,7 @@ export const MetaClusterTree: React.FC<Props> = ({
       }
     })();
     return () => { active = true; };
-  }, [useFiltered, dateFrom, dateTo]); // ← searchResults intentionally excluded to prevent re-fetch
+  }, [useFiltered, dateFrom, dateTo, onClusterColorsLoaded]); // ← searchResults intentionally excluded to prevent re-fetch
 
   /**Re-sort metaData when searchResults changes (no API call needed).
    * Uses metaDataRef to avoid circular dependency: setMetaData → metaData → sort → setMetaData … */
