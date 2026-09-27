@@ -875,7 +875,8 @@ async def search(
         for field in (["creation_date", "modification_date"] if date_field == "both"
                       else [date_field]):
             if field in df.columns:
-                parsed = pd.to_datetime(df[field], errors="coerce", format="%Y-%m-%d")
+                 # Remove strict format to handle Apple Notes date formats like "9/25/2026, 10:30:00 AM"
+                parsed = pd.to_datetime(df[field], errors="coerce")
                 note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
 
         title_from_notes: set = set(df[note_mask]["title"].astype(str).unique())
@@ -1097,13 +1098,14 @@ def _get_titles_in_date_range(date_from: Optional[str], date_to: Optional[str]) 
                     titles_set.add(title)
                     break
 
-    # Also include notes that were created/modified in the date range
+     # Also include notes that were created/modified in the date range
     df_viz = state.df_viz
     if not df_viz.empty:
         note_mask = pd.Series([False] * len(df_viz), index=df_viz.index)
         for field in ["creation_date", "modification_date"]:
             if field in df_viz.columns:
-                parsed = pd.to_datetime(df_viz[field], errors="coerce", format="%Y-%m-%d")
+                # Remove strict format to handle Apple Notes date formats like "9/25/2026, 10:30:00 AM"
+                parsed = pd.to_datetime(df_viz[field], errors="coerce")
                 note_mask |= (parsed >= dt_from) & (parsed <= dt_to)
         titles_from_notes = set(df_viz[note_mask]["title"].astype(str).unique())
         titles_set = titles_set | titles_from_notes
@@ -1700,6 +1702,75 @@ def _event_date(dt_str: Any) -> Optional[str]:
     return None
 
 
+def _get_latest_interaction_date(title: str, interactions_df: pd.DataFrame) -> Optional[str]:
+    """Get the latest interaction date for a specific note title.
+    
+    Returns the ISO date string (YYYY-MM-DD) of the latest interaction event,
+    or None if no interactions found.
+    """
+    if interactions_df is None or interactions_df.empty:
+        return None
+    
+    # Find the row for this title
+    mask = interactions_df["title"].astype(str).str.strip() == title
+    title_rows = interactions_df[mask]
+    
+    if title_rows.empty:
+        return None
+    
+    for _, row in title_rows.iterrows():
+        log_data = row.get("interaction_log", "[]")
+        events = _parse_interaction_events(log_data)
+        
+        latest_dt = None
+        for ev in events:
+            dt_str = ev.get("dt", "")
+            date_only = _event_date(dt_str)
+            if date_only:
+                if latest_dt is None or date_only > latest_dt:
+                    latest_dt = date_only
+        
+        if latest_dt:
+            return latest_dt
+    
+    return None
+
+
+def _get_effective_modification_date(
+    stored_mod_date: Optional[str], 
+    title: str,
+    interactions_df: Optional[pd.DataFrame] = None
+) -> Optional[str]:
+    """Get the effective modification date for display purposes.
+    
+    If the interaction log has a more recent date than the stored modification_date,
+    return the interaction date instead. This ensures that notes interacted with
+    recently (even if not modified) show the correct "last active" date.
+    """
+    # First try the stored modification date
+    display_date = stored_mod_date
+    
+    # Parse both dates for comparison
+    stored_parsed = None
+    if display_date:
+        try:
+            stored_parsed = pd.to_datetime(display_date, errors="coerce")
+        except:
+            stored_parsed = None
+    
+    # Get the latest interaction date
+    latest_interaction = _get_latest_interaction_date(title, interactions_df) if interactions_df is not None else None
+    
+    if latest_interaction:
+        latest_interaction_parsed = pd.to_datetime(latest_interaction, errors="coerce")
+        
+        # If no stored date or interaction is more recent, use interaction date
+        if stored_parsed is None or latest_interaction_parsed > stored_parsed:
+            return latest_interaction
+    
+    return display_date
+
+
 def _build_search_results_from_raw(results, df_viz):
     """Build SearchResult list from search_and_combine_results output."""
     cluster_map = {}
@@ -1763,6 +1834,11 @@ def _build_search_results(filtered_df, df_viz):
 
 
 def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:
+    """Collect interaction history by title for a specific date.
+    
+    Returns a dict mapping title -> {title, opened_at, last_opened_at, opened_count}
+    based on notes_interactions table.
+    """
     history_by_title: Dict[str, Dict[str, Any]] = {}
 
     db = NotesDatabase(db_path=DB_PATH)
@@ -1796,9 +1872,10 @@ def _collect_history_by_title(date_str: str) -> Dict[str, Dict[str, Any]]:
                 "title": title,
                 "opened_at": matching_timestamps[0],
                 "last_opened_at": matching_timestamps[-1],
-                "opened_count": 0,
-            },
-        )
+                 "opened_count": 0,
+                 "_latest_interaction_dt": matching_timestamps[-1],  # Internal field for effective date
+             },
+         )
         title_info["opened_count"] += len(matching_timestamps)
         title_info["opened_at"] = min(title_info["opened_at"], matching_timestamps[0])
         title_info["last_opened_at"] = max(title_info["last_opened_at"], matching_timestamps[-1])
@@ -1833,12 +1910,26 @@ async def get_history_dates():
 
 @app.get("/history/day/{date_str}")
 async def get_history_for_day(date_str: str):
-    """Get all distinct note titles and their full metadata opened on a given date."""
+    """Get all distinct note titles and their full metadata opened on a given date.
+    
+    For the modification_date display: if the note has a more recent interaction date
+    from notes_interactions, that will be used as the effective modification date instead
+    of the stored modification_date from the main notes table.
+    """
     try:
         if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
+         # Get interaction history from notes_interactions table
         history_by_title = _collect_history_by_title(date_str)
+        
+         # Also collect ALL titles (not just those interacted with this date) to build a complete interactions_df
+        db = NotesDatabase(db_path=DB_PATH)
+        _, interactions_table = db.get_interactions_db()
+        interactions_df = None
+        if interactions_table is not None:
+            interactions_df = interactions_table.to_pandas()
+        
         active_titles = sorted(history_by_title.keys())
 
         if not active_titles:
@@ -1857,15 +1948,15 @@ async def get_history_for_day(date_str: str):
                     working_df[col] = 'Unclustered' if col == 'cluster_label' else '-1'
                 else:
                     working_df[col] = working_df[col].astype(str).fillna(
-                        'Unclustered' if col == 'cluster_label' else '-1'
-                    )
+                         'Unclustered' if col == 'cluster_label' else '-1'
+                     )
 
             notes_df = working_df[working_df['title'].isin(active_titles)].copy()
             note_identity_cols = ['title', 'creation_date', 'modification_date']
             note_keys_df = notes_df[note_identity_cols].drop_duplicates().copy()
             note_keys_df['note_key'] = (
                 note_keys_df['title'] + '|||' + note_keys_df['creation_date'] + '|||' + note_keys_df['modification_date']
-            )
+             )
 
             merged = working_df.merge(note_keys_df, on=note_identity_cols, how='inner')
             merged = merged.sort_values(['note_key', 'chunk_index'])
@@ -1875,7 +1966,12 @@ async def get_history_for_day(date_str: str):
                 title = str(group.iloc[0].get('title', ''))
                 history_info = history_by_title.get(title, {})
                 creation_date = str(group.iloc[0].get('creation_date', ''))
-                modification_date = str(group.iloc[0].get('modification_date', ''))
+                stored_mod_date = str(group.iloc[0].get('modification_date', ''))
+                
+                 # Use effective modification date: if interaction date is more recent than stored mod date, use it
+                display_modification_date = _get_effective_modification_date(
+                    stored_mod_date, title, interactions_df
+                )
 
                 cluster_counts: Dict[str, int] = {}
                 cluster_first_seen: Dict[str, int] = {}
@@ -1892,7 +1988,7 @@ async def get_history_for_day(date_str: str):
                     primary_cluster_id = sorted(
                         cluster_counts.items(),
                         key=lambda item: (-item[1], cluster_first_seen.get(item[0], 0)),
-                    )[0][0]
+                     )[0][0]
 
                 chunks = []
                 seen_chunk_indexes = set()
@@ -1913,24 +2009,24 @@ async def get_history_for_day(date_str: str):
                         ckid = '-1'
 
                     chunks.append({
-                        "chunk_index": chunk_index_val,
-                        "cluster_id": ckid,
-                        "cluster_name": str(row.get('cluster_label', 'Unclustered')),
-                        "in_cluster": ckid == primary_cluster_id,
-                        "text": str(chunk_text),
-                    })
+                         "chunk_index": chunk_index_val,
+                         "cluster_id": ckid,
+                         "cluster_name": str(row.get('cluster_label', 'Unclustered')),
+                         "in_cluster": ckid == primary_cluster_id,
+                         "text": str(chunk_text),
+                     })
 
                 notes_list.append({
-                    "note_key": str(note_key),
-                    "title": title,
-                    "creation_date": creation_date,
-                    "modification_date": modification_date,
-                    "primary_cluster_id": primary_cluster_id,
-                    "opened_at": history_info.get("opened_at"),
-                    "last_opened_at": history_info.get("last_opened_at"),
-                    "opened_count": history_info.get("opened_count", 0),
-                    "chunks": chunks,
-                })
+                     "note_key": str(note_key),
+                     "title": title,
+                      "creation_date": creation_date,
+                     "modification_date": display_modification_date,
+                     "primary_cluster_id": primary_cluster_id,
+                      "opened_at": history_info.get("opened_at"),
+                      "last_opened_at": history_info.get("last_opened_at"),
+                      "opened_count": history_info.get("opened_count", 0),
+                     "chunks": chunks,
+                 })
 
             notes_list.sort(key=lambda item: item.get("opened_at") or "", reverse=True)
             return {"date": date_str, "titles": active_titles, "notes": notes_list}
