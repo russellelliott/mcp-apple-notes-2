@@ -69,7 +69,6 @@ interface SidebarNoteData {
   title: string;
   creation_date?: string;
   modification_date?: string;
-  latest_interaction_date?: string;   // ← Added for date-range sorting
   meta_cluster_id?: string | null;
   meta_cluster_label?: string | null;
   chunks: SidebarChunkData[];
@@ -628,11 +627,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
 
     Object.keys(processingGroups).forEach((label) => {
       const points = processingGroups[label];
-      if (points.clusterColor) {
-        processingColors[label] = points.clusterColor;
-        return;
-      }
-      processingColors[label] = '#6b7280';
+      processingColors[label] = clusterColorsFromAPI[label] || points.clusterColor || '#6b7280';
     });
 
     Object.entries(processingColors).forEach(([label, baseColor]) => {
@@ -650,7 +645,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
       clusterHoverTints: processingHoverTints,
       clusterOpaqueTints: processingOpaqueTints,
     };
-  }, [data]);
+  }, [data, clusterColorsFromAPI]);
 
   const clusterAverageRelevance = useMemo(() => {
     // compute average relevance per cluster from searchResults (lower distance = better)
@@ -1135,31 +1130,6 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
   const hasActiveClusterFilter = selectedClusters.size > 0;
   const visibleLabels = displayedClusterLabels;
 
-  // Helper: fetch interaction data for a list of note titles → Map<title -> latest_date>
-  const fetchInteractionMap = useCallback(async (titles: string[]): Promise<Map<string, string>> => {
-     // Returns Map<title -> latest interaction date string (YYYY-MM-DD) or undefined>
-    const result = new Map<string, string>();
-    if (titles.length === 0) return result;
-
-    try {
-      const titlesParam = encodeURIComponent(JSON.stringify(titles));
-      const res = await axios.get(
-         `http://127.0.0.1:8000/interactions_by_titles?titles=${titlesParam}` +
-         (dateFrom ? `&date_from=${dateFrom}` : '') +
-         (dateTo ? `&date_to=${dateTo}` : ''),
-       );
-      const data = res.data;
-      if (data && Array.isArray(data.titles)) {
-        data.titles.forEach((item: { title: string; latest_date?: string }) => {
-          result.set(item.title, item.latest_date ?? '');
-         });
-       }
-     } catch {
-       // Silently fail - we'll fall back to modification dates
-     }
-    return result;
-   }, [dateFrom, dateTo]);
-
    // ── Batch fetch all filtered notes when date range changes ──
    useEffect(() => {
      let active = true;
@@ -1208,14 +1178,14 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
        // Use cached filtered data when date range is specified
       if (allFilteredNotes) {
         const allNotes: SidebarNoteData[] = [];
-        const noteTitles = new Set<string>();
+        const noteKeys = new Set<string>();
 
         for (const clusterId of clusterArray) {
           const notes = allFilteredNotes[clusterId] || [];
           notes.forEach((note: SidebarNoteData) => {
-            if (!noteTitles.has(note.title)) {
+            if (!noteKeys.has(note.note_key)) {
               allNotes.push(note);
-              noteTitles.add(note.title);
+              noteKeys.add(note.note_key);
              }
            });
          }
@@ -1225,7 +1195,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
        } else if (dateFrom || dateTo) {
         // Date range active but batch data not yet loaded — fall back to individual fetches
         const allNotes: SidebarNoteData[] = [];
-        const noteTitles = new Set<string>();
+        const noteKeys = new Set<string>();
 
         for (const clusterId of clusterArray) {
           const params = new URLSearchParams({
@@ -1238,9 +1208,9 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
            );
           const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
           notes.forEach((note: SidebarNoteData) => {
-            if (!noteTitles.has(note.title)) {
+            if (!noteKeys.has(note.note_key)) {
               allNotes.push(note);
-              noteTitles.add(note.title);
+              noteKeys.add(note.note_key);
              }
            });
          }
@@ -1250,7 +1220,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
        } else {
         // Use normal endpoint when no date range
         const allNotes: SidebarNoteData[] = [];
-        const noteTitles = new Set<string>();
+        const noteKeys = new Set<string>();
 
         for (const clusterId of clusterArray) {
           const response = await axios.get(
@@ -1258,9 +1228,9 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
           );
           const notes = Array.isArray(response.data?.notes) ? response.data.notes : [];
           notes.forEach((note: SidebarNoteData) => {
-            if (!noteTitles.has(note.title)) {
+            if (!noteKeys.has(note.note_key)) {
               allNotes.push(note);
-              noteTitles.add(note.title);
+              noteKeys.add(note.note_key);
             }
           });
         }
@@ -1277,55 +1247,11 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
     }
   };
 
-  // After sidebar notes load, enrich with interaction dates and sort by them (when date range specified)
-  useEffect(() => {
-    let active = true;
-
-    const enrichSidebarDates = async () => {
-      if (sidebarNotes.length === 0 || !dateFrom || !dateTo) {
-         // No enrichment needed — leave as-is
-        return;
-       }
-
-      try {
-        const titles = sidebarNotes.map((n) => n.title);
-        const interactionMap = await fetchInteractionMap(titles);
-
-        // Build enriched notes array with latest_interaction_date attached
-        const enriched: SidebarNoteData[] = sidebarNotes.map((note) => ({
-          ...note,
-          latest_interaction_date: interactionMap.get(note.title) || undefined,
-         }));
-
-        // Sort: prefer latest interaction date (desc), fallback to modification date
-        enriched.sort((a, b) => {
-          const aTs = a.latest_interaction_date
-            ? Date.parse(a.latest_interaction_date + 'T12:00:00')
-            : Date.parse(String(a.modification_date || ''));
-          const bTs = b.latest_interaction_date
-            ? Date.parse(b.latest_interaction_date + 'T12:00:00')
-            : Date.parse(String(b.modification_date || ''));
-          const safeA = Number.isFinite(aTs) ? aTs : Number.NEGATIVE_INFINITY;
-          const safeB = Number.isFinite(bTs) ? bTs : Number.NEGATIVE_INFINITY;
-          return safeB - safeA; // descending: newest first
-         });
-
-        setSidebarNotes(enriched);
-      } catch {
-        // Silently fail — already have sidebar notes
-       }
-     };
-
-    enrichSidebarDates();
-
-    return () => { active = false; };
-   }, [sidebarNotes.length, dateFrom, dateTo, fetchInteractionMap]);
-
   useEffect(() => {
     let active = true;
     fetchSidebar();
     return () => { active = false; };
-   }, [selectedClusters, viewMode]);
+  }, [selectedClusters, viewMode, allFilteredNotes, dateFrom, dateTo]);
 
 
   useEffect(() => {
@@ -1805,6 +1731,11 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                   Select clusters to view their notes.
                 </div>
               )}
+              {dateFrom && dateTo && selectedClusters.size > 0 && allFilteredNotes !== null && displayedSidebarNotes.length === 0 && (
+                <div style={{ color: '#666', fontStyle: 'italic', padding: '10px' }}>
+                  No notes were interacted with in this date range for the selected cluster.
+                </div>
+              )}
               {displayedSearchResults.map((result) => {
                 const resultClusterKey = result.display_topic_id || result.cluster_id || '-1';
                 const preview = (result.preview || '').trim();
@@ -1941,13 +1872,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
                    title={note.title}
                   >
                    <span>{note.title}</span>
-                   {dateFrom && dateTo && note.latest_interaction_date ? (
-                     // Show interaction date when both dates are specified and note has interactions
-                     <span style={{ marginLeft: 8, fontWeight: 600, color: '#2563eb', fontSize: '0.85em' }}>
-                       {formatDateMMDDYYYY(note.latest_interaction_date)}
-                     </span>
-                   ) : note.modification_date ? (
-                     // Fallback to modification date when no interaction date or date range
+                   {note.modification_date ? (
                      <span style={{ marginLeft: 8, fontWeight: 500, color: '#6b7280', fontSize: '0.85em' }}>
                        {formatDateMMDDYYYY(note.modification_date)}
                      </span>

@@ -13,7 +13,7 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 # ── REQUIRED PATH FIX: must happen before any `backend.*` import ──────────────────────
@@ -641,56 +641,45 @@ async def get_similar_clusters(
 
 # ── Cluster Colors Endpoint ────────────────────────────────────────────────
 @app.get("/cluster_colors")
-async def get_cluster_colors():
-    """Return a dict of cluster_id → color for all clusters."""
-    if state.df_viz.empty:
+async def get_cluster_colors() -> Dict[str, str]:
+    """Return the stable display color for every cluster."""
+    if state.df_viz.empty or "display_topic_id" not in state.df_viz.columns:
         return {}
 
-    df = state.df_viz
-    if "display_topic_id" not in df.columns:
-        return {}
+    colors: Dict[str, str] = {}
+    for cluster_id, group in state.df_viz.groupby("display_topic_id"):
+        cluster_id = str(cluster_id)
+        if "vector" not in group.columns:
+            colors[cluster_id] = "#6b7280"
+            continue
 
-    # Compute stable color per cluster based on 5D UMAP position (same logic as meta_clusters)
-    centroids_arr = []
-    for cid, group in df.groupby("display_topic_id"):
-        vectors = np.stack(group["vector"].values) if "vector" in group.columns else np.zeros((1, 5))
-        centroid = vectors.mean(axis=0) if len(vectors) > 0 else np.zeros(5)
-        centroids_arr.append((str(cid), centroid))
-
-    if not centroids_arr:
-        return {}
-
-    all_cents = np.array([c[1] for c in centroids_arr])
-    global_cent = all_cents.mean(axis=0)
-
-    def _color(cid_str):
-        cent = dict(centroids_arr).get(cid_str, np.zeros(5))
-        dx = float(cent[0] - global_cent[0])
-        dy = float(cent[1] - global_cent[1])
+        vectors = np.stack(group["vector"].values)
+        centroid = vectors.mean(axis=0)
+        dx = float(centroid[0])
+        dy = float(centroid[1])
         if not math.isfinite(dx) or not math.isfinite(dy):
-            return "#6b7280"
-        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
-            return "hsl(210, 75%, 45%)"
+            colors[cluster_id] = "#6b7280"
+            continue
+
         angle = math.degrees(math.atan2(dy, dx)) % 360.0
-        return f"hsl({int(round(angle))}, 75%, 45%)"
+        colors[cluster_id] = f"hsl({int(round(angle))}, 75%, 45%)"
 
-    return {cid: _color(cid) for cid, _ in centroids_arr}
+    return colors
 
 
-# ── Original Endpoints ─────────────────────────────────────────────────────
 @app.get("/note_content", response_model=NoteContent)
 async def get_note_content(
-    title: str,
-    chunk_index: int,
-    creation_date: Optional[str] = None,
-    modification_date: Optional[str] = None,
+    title: str = Query(...),
+    chunk_index: int = Query(...),
+    creation_date: Optional[str] = Query(None),
+    modification_date: Optional[str] = Query(None),
 ):
-    """Get full content for a specific chunk."""
-    if state.df_viz.empty:
-        raise HTTPException(status_code=503, detail="Data not loaded")
-
+    """Return the content and metadata for one note chunk."""
     try:
-        mask = (state.df_viz['title'] == title) & (state.df_viz['chunk_index'] == chunk_index)
+        mask = (
+            (state.df_viz['title'].astype(str) == str(title))
+            & (state.df_viz['chunk_index'].astype(int) == int(chunk_index))
+        )
         if creation_date is not None and 'creation_date' in state.df_viz.columns:
             mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
         if modification_date is not None and 'modification_date' in state.df_viz.columns:
@@ -719,7 +708,7 @@ async def get_note_content(
             display_topic_id=(str(row.iloc[0].get('display_topic_id')) if row.iloc[0].get('display_topic_id') is not None else None),
             meta_cluster_id=(str(row.iloc[0].get('meta_cluster_id')) if row.iloc[0].get('meta_cluster_id') is not None else None),
             meta_cluster_label=(str(row.iloc[0].get('meta_cluster_label')) if row.iloc[0].get('meta_cluster_label') is not None else None),
-         )
+        )
     except Exception as e:
         print(f"Error fetching content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1584,9 +1573,13 @@ async def get_filtered_notes_all(
         cluster_chunks_for_marking: Dict[str, Set[int]] = {}  # note_key -> set of chunk_indexes in this cluster
 
         for _, row in working_df[working_df['display_topic_id'] == cluster_id_val].iterrows():
-            title_match = note_keys_df[note_keys_df['title'] == row['title']]
-            if len(title_match) > 0:
-                nk = str(title_match.iloc[0]['note_key'])
+            note_match = note_keys_df[
+                (note_keys_df['title'] == row['title'])
+                & (note_keys_df['creation_date'] == row['creation_date'])
+                & (note_keys_df['modification_date'] == row['modification_date'])
+            ]
+            if len(note_match) > 0:
+                nk = str(note_match.iloc[0]['note_key'])
                 if nk and nk in note_chunks_map:
                     chunk_idx = int(row.get('chunk_index', 0))
                     cluster_note_keys.add(nk)
@@ -1617,58 +1610,6 @@ async def get_filtered_notes_all(
             notes_by_cluster[cluster_id_val] = notes_list
 
     return {"notes_by_cluster": notes_by_cluster}
-
-
-@app.get("/interactions_by_titles")
-async def get_interactions_by_titles(
-    titles: str = Query(..., description="JSON-encoded list of note titles"),
-    date_from: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="YYYY-MM-DD"),
-):
-    """Return interaction dates for specific note titles within an optional date range."""
-    import json as _json
-    try:
-        title_list = _json.loads(titles) if isinstance(titles, str) else titles
-        if not isinstance(title_list, list):
-            raise HTTPException(status_code=400, detail="titles must be a JSON array of strings")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid titles format: {e}")
-
-    if not title_list:
-        return {"titles": []}
-
-    # Set defaults for date range
-    dt_from = pd.Timestamp(date_from + " 00:00:00") if date_from else pd.Timestamp.min
-    dt_to = pd.Timestamp((date_to + " 23:59:59") if date_to else "9999-12-31 23:59:59")
-
-    db = NotesDatabase(db_path=DB_PATH)
-    _, interactions_table = db.get_interactions_db()
-    
-    result: Dict[str, Optional[str]] = {t: None for t in title_list}
-    
-    if interactions_table is not None:
-        int_df = interactions_table.to_pandas()
-        if not int_df.empty and "interaction_log" in int_df.columns:
-            for _, row in int_df.iterrows():
-                row_title = str(row.get("title", "")).strip()
-                if row_title not in result:
-                    continue
-                    
-                events = _parse_interaction_events(row.get("interaction_log", "[]"))
-                latest_dt: Optional[str] = None
-                
-                for ev in events:
-                    ev_date_str = _event_date(ev.get("dt", ""))
-                    if ev_date_str:
-                        ev_ts = pd.Timestamp(ev_date_str + " 12:00:00")
-                        if dt_from <= ev_ts <= dt_to:
-                            # Track the latest interaction date within range
-                            if latest_dt is None or ev_date_str > latest_dt:
-                                latest_dt = ev_date_str
-                
-                result[row_title] = latest_dt
-
-    return {"titles": [{"title": t, "latest_date": result.get(t)} for t in title_list]}
 
 
 # ── Daily History Endpoints ────────────────────────────────────────────────
