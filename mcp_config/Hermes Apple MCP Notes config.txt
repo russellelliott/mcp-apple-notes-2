@@ -1,0 +1,11 @@
+mcp_servers:
+  apple-notes:
+    command: "/Users/russellelliott/.bun/bin/bun"
+    args:
+      - "/Users/russellelliott/Desktop/mcp-apple-notes-2/server/index.ts"
+    env:
+      BACKEND_URL: "http://127.0.0.1:8000"
+    tools:
+      include:
+        - search-notes
+        - get-notes-by-date

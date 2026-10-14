@@ -1,0 +1,64 @@
+---
+name: apple-notes
+description: Search Apple Notes through MCP.
+version: 1.0.0
+platforms: [macos]
+metadata:
+  hermes:
+    tags: [apple-notes, mcp, search]
+    category: productivity
+---
+
+# Apple Notes Skill
+
+Use the configured `apple-notes` MCP server to search the user's already-indexed Apple Notes.
+
+## When to Use
+
+Use this skill when the user asks about notes, note history, note contents, or semantic search.
+
+## Prerequisites
+
+- The `apple-notes` MCP server must be available.
+- The FastAPI backend must be running at `http://127.0.0.1:8000` for search and date-range retrieval.
+
+## Quick Reference
+
+Use these MCP tools:
+
+- `search-notes`
+  - Arguments are optional:
+    - `query`
+    - `date_from`: `YYYY-MM-DD`
+    - `date_to`: `YYYY-MM-DD`
+    - `date_field`: `creation_date`, `modification_date`, or `both`
+    - `limit`
+- `get-notes-by-date`
+  - Required arguments:
+    - `date_from`
+    - `date_to`
+
+## Procedure
+
+1. For normal note questions, call `search-notes` with a semantic `query`.
+2. For questions about a period, add `date_from` and `date_to`.
+3. For all notes created or modified during a period, use `get-notes-by-date`.
+4. Summarize results with note titles, dates, and relevant excerpts.
+5. Do not claim that a note was found unless it appears in the MCP response.
+
+## Pitfalls
+
+- `search-notes` requires the FastAPI backend to be running.
+- Date arguments must use `YYYY-MM-DD`.
+- Date-only searches default to the current day when no dates are supplied.
+- The server formats and truncates displayed search results, so avoid implying that the response contains every matching chunk.
+
+## Verification
+
+After configuration, run Hermes with a new session and ask:
+
+> Search my Apple Notes for notes about job applications.
+
+For an explicit tool test, ask:
+
+> Search my Apple Notes for notes about clustering.
