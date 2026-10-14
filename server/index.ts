@@ -535,19 +535,10 @@ export const shutdown = async () => {
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
-      {
-        name: "list-notes",
-        description: "Lists just the titles of all my Apple Notes",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      },
-      {
+       {
         name: "index-notes",
         description:
-          "Index all my Apple Notes for Semantic Search using enhanced method that handles duplicate note titles better. Uses incremental mode by default to only process new/modified notes. Please tell the user that the sync takes couple of seconds up to couple of minutes depending on how many notes you have.",
+           "Index all my Apple Notes for Semantic Search using enhanced method that handles duplicate note titles better. Uses incremental mode by default to only process new/modified notes. Please tell the user that the sync takes couple of seconds up to couple of minutes depending on how many notes you have.",
         inputSchema: {
           type: "object",
           properties: {
@@ -556,101 +547,64 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               enum: ["fresh", "incremental"],
               description: "fresh: reindex all notes from scratch, incremental: only process new/modified notes",
               default: "incremental"
-            }
-          },
-          required: [],
-        },
-      },
-      {
-        name: "get-note",
-        description: "Get a note full content and details by title. If multiple notes have the same title, you can specify creation_date to get a specific one.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: z.string(),
-            creation_date: z.string().optional(),
-          },
-          required: ["title"],
-        },
-      },
-       {
-         name: "search-notes",
-         description: "Search for notes by title or content",
-         inputSchema: {
-           type: "object",
-           properties: {
-             query: z.string(),
+             }
             },
-           required: ["query"],
-          },
+          required: [],
          },
+        },
         {
-         name: "search-notes-by-date",
-         description: "Search notes by semantic query and/or date range via FastAPI backend. Supports 3 modes: (1) query only for semantic search, (2) query + date range for filtered semantic search, (3) date range only (useful for daily reflection — defaults to today if no dates given). All parameters are optional; modes are inferred server-side.",
+         name: "search-notes",
+         description: "Search Apple Notes by semantic query and/or date range. Supports 3 modes: (1) query only for semantic search, (2) query + date range for filtered semantic search, (3) date range only - returns all notes in range (useful for daily reflection — defaults to today if no dates given). All parameters are optional; modes are inferred server-side.",
          inputSchema: {
            type: "object",
            properties: {
              query: { 
                type: "string", 
                description: "Semantic search query (omit for date-only mode)" 
-              },
+               },
              date_from: { 
                type: "string", 
                description: "Start date YYYY-MM-DD (inclusive)" 
-              },
+               },
              date_to: { 
                type: "string", 
                description: "End date YYYY-MM-DD (inclusive)" 
-              },
+               },
              date_field: {
                type: "string",
                enum: ["creation_date", "modification_date", "both"],
                default: "both",
                description: "Which date field(s) to filter on"
-              },
+               },
              limit: { 
                type: "number", 
                default: 20,
                description: "Maximum number of results" 
-              }
-             },
+               }
+              },
             required: []
-           }
-         },
-        {
-         name: "create-note",
-        description:
-          "Create a new Apple Note with specified title and content. Must be in HTML format WITHOUT newlines",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            content: { type: "string" },
+            }
           },
-          required: ["title", "content"],
-        },
-       },
-       {
-        name: "open-in-apple-notes",
-        description:
-           "Open a specific Apple Note by title and creation date. Handles duplicate titles by using creation date for precise targeting. Automatically logs the interaction in the notes_interactions table.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: { 
-              type: "string",
-              description: "The title of the note to open"
-             },
-            creation_date: { 
-              type: "string",
-              description: "The creation date of the note (used to disambiguate duplicate titles)"
+         {
+          name: "get-notes-by-date",
+          description: "Get all notes with full chunk content created or modified within a date range. Returns note metadata and all associated chunks.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              date_from: { 
+                type: "string", 
+                description: "Start date YYYY-MM-DD (inclusive)" 
+                },
+              date_to: { 
+                type: "string", 
+                description: "End date YYYY-MM-DD (inclusive)" 
+                }
+               },
+             required: ["date_from", "date_to"]
              }
            },
-required: ["title"]
-            }
-          }
-        ]
-      };
+    ]
+   };
 });
 
 const getNotes = async function* (maxNotes?: number) {
@@ -1814,251 +1768,155 @@ export const createNotesTable = async (overrideName?: string) => {
 
 // Handle tool execution
 server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
-  const { notesTable } = await createNotesTable();
   const { name, arguments: args } = request.params;
 
   try {
-    if (name === "create-note") {
-      // Remove createNote functionality since it's not needed
-      return createTextResponse(`Create note functionality not implemented.`);
-    } else if (name === "list-notes") {
-      const totalChunks = await notesTable.countRows();
-      // Get unique note titles to count actual notes
-      const allChunks = await notesTable.search("").limit(50000).toArray();
-      const uniqueNotes = new Set(allChunks.map(chunk => chunk.title));
-      return createTextResponse(
-        `There are ${uniqueNotes.size} notes (${totalChunks} chunks) in your Apple Notes database.`
-      );
-    } else if (name == "get-note") {
-      try {
-        const { title, creation_date } = GetNoteSchema.parse(args);
-        const note = await getNoteDetailsByTitle(title, creation_date);
-
-        return createTextResponse(`${JSON.stringify(note, null, 2)}`);
-      } catch (error) {
-        return createTextResponse((error as Error).message);
-      }
-    } else if (name === "index-notes") {
-      // Use the enhanced method by default for better reliability
+    if (name === "index-notes") {
+       // Index notes - this requires direct Apple Notes access via JXA
+      const { notesTable } = await createNotesTable();
       const { mode } = IndexNotesSchema.parse(args);
       const { processed, totalChunks, failed, skipped, timeSeconds } = await fetchAndIndexAllNotes(notesTable, undefined, mode);
       
       let message = `Successfully indexed ${processed} notes into ${totalChunks} chunks in ${timeSeconds.toFixed(1)}s using enhanced method.\n\n` +
-        `📊 Summary:\n` +
-        `• Notes processed: ${processed}\n` +
-        `• Chunks created: ${totalChunks}\n` +
-        `• Failed: ${failed}\n`;
+         `📊 Summary:\n` +
+         `• Notes processed: ${processed}\n` +
+         `• Chunks created: ${totalChunks}\n` +
+         `• Failed: ${failed}\n`;
       
       if (skipped > 0) {
         message += `• Skipped unchanged: ${skipped}\n`;
-      }
+       }
       
       message += `• Average chunks per note: ${processed > 0 ? (totalChunks/processed).toFixed(1) : '0'}\n` +
-        `• Processing time: ${timeSeconds.toFixed(1)} seconds\n` +
-        `• Mode: ${mode}\n\n` +
-        `✨ Enhanced indexing handles duplicate titles better by using creation dates!\n`;
+         `• Processing time: ${timeSeconds.toFixed(1)} seconds\n` +
+         `• Mode: ${mode}\n\n` +
+         `✨ Enhanced indexing handles duplicate titles better by using creation dates!\n`;
       
       if (mode === 'incremental' && skipped > 0) {
         message += `⚡ Incremental mode: Only processed new/modified notes. ${skipped} notes unchanged.\n`;
-      }
+       }
       
       message += `Your notes are now ready for semantic search using the "search-notes" tool!`;
       
       return createTextResponse(message);
-    } else if (name === "index-notes-enhanced") {
-      const { processed, totalChunks, failed, timeSeconds } = await fetchAndIndexAllNotes(notesTable);
-      return createTextResponse(
-        `Successfully indexed ${processed} notes into ${totalChunks} chunks in ${timeSeconds.toFixed(1)}s using enhanced method.\n\n` +
-        `📊 Summary:\n` +
-        `• Notes processed: ${processed}\n` +
-        `• Chunks created: ${totalChunks}\n` +
-        `• Failed: ${failed}\n` +
-        `• Average chunks per note: ${(totalChunks/processed).toFixed(1)}\n` +
-        `• Processing time: ${timeSeconds.toFixed(1)} seconds\n\n` +
-        `✨ Enhanced indexing handles duplicate titles better by using creation dates!\n` +
-        `Your notes are now ready for semantic search using the "search-notes" tool!`
-      );
      } else if (name === "search-notes") {
-      const { query } = QueryNotesSchema.parse(args);
-      const combinedResults = await searchAndCombineResults(notesTable, query);
-      return createTextResponse(JSON.stringify(combinedResults, null, 2));
-     } else if (name === "search-notes-by-date") {
-        // Proxy to FastAPI backend for date-range + interaction-aware search
-       const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
-       const params = new URLSearchParams();
-       if ((args as any).query)         params.set("q",          String((args as any).query));
-       if ((args as any).date_from)     params.set("date_from",  String((args as any).date_from));
-       if ((args as any).date_to)       params.set("date_to",    String((args as any).date_to));
-       if ((args as any).date_field)    params.set("date_field", String((args as any).date_field));
-       if ((args as any).limit)         params.set("limit",      String((args as any).limit));
-
-       const resp = await fetch(`${BACKEND_URL}/search?${params.toString()}`);
-       if (!resp.ok) {
-         throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${await resp.text()}`);
+       // Unified search endpoint - proxy to FastAPI backend
+       // Supports 3 modes: (1) query only, (2) query + date range, (3) date range only
+      const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+      const params = new URLSearchParams();
+      
+      if ((args as any).query) {
+        params.set("q", String((args as any).query));
        }
-       const data = await resp.json();
+      if ((args as any).date_from) {
+        params.set("date_from", String((args as any).date_from));
+       }
+      if ((args as any).date_to) {
+        params.set("date_to", String((args as any).date_to));
+       }
+      if ((args as any).date_field) {
+        params.set("date_field", String((args as any).date_field));
+       }
+      if ((args as any).limit) {
+        params.set("limit", String((args as any).limit));
+       }
 
-       const summary = (data.results || []).slice(0, 20).map((r: any) =>
-          `• ${r.title} [chunk ${r.chunk_index}/${r.total_chunks}] (cluster: ${r.cluster_label}, score: ${r.distance.toFixed(3)})\n    ${r.preview || ""}`
-        ).join("\n\n");
+      const url = `${BACKEND_URL}/search?${params.toString()}`;
+      console.error(`🔍 Search proxy: ${url}`);
+      
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${errorText}`);
+       }
+      
+      const data = await resp.json();
 
-       return {
-         content: [{
-           type: "text",
-           text: `Found ${data.stats?.unique_notes ?? 0} notes (${data.stats?.total_chunks ?? 0} chunks)\n\n${summary || "No results found."}`
-          }]
-        };
-     } else if (name === "open-in-apple-notes") {
-      try {
-        const { title, creation_date } = z.object({
-          title: z.string(),
-          creation_date: z.string().optional(),
-        }).parse(args);
+      // Format results for display
+      const summary = (data.results || []).slice(0, 20).map((r: any) => 
+          `• ${r.title} [chunk ${r.chunk_index}/${r.total_chunks}] (cluster: ${r.cluster_label}, score: ${r.distance.toFixed(3)})\n     ${r.preview || ""}`
+       ).join("\n\n");
+
+      return {
+        content: [{
+          type: "text",
+          text: `Found ${data.stats?.unique_notes ?? 0} notes (${data.stats?.total_chunks ?? 0} chunks)\n\n${summary || "No results found."}`
+        }]
+      };
+     } else if (name === "get-notes-by-date") {
+       // Get all notes within a date range - proxy to FastAPI backend
+      const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+      const { date_from, date_to } = z.object({
+        date_from: z.string().describe("Start date YYYY-MM-DD (inclusive)"),
+        date_to: z.string().describe("End date YYYY-MM-DD (inclusive)")
+      }).parse(args);
+
+      const params = new URLSearchParams();
+      params.set("date_from", date_from);
+      params.set("date_to", date_to);
+
+      const url = `${BACKEND_URL}/notes_by_date_range?${params.toString()}`;
+      console.error(`📅 Notes by date proxy: ${url}`);
+      
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${errorText}`);
+       }
+      
+      const data = await resp.json();
+
+      // Format notes with chunks for display
+      let output = `Found ${data.total_notes} notes (${data.total_chunks} chunks) in date range ${date_from} to ${date_to}\n\n`;
+      output += `${"=".repeat(60)}\n`;
+      
+      for (const note of data.notes.slice(0, 20)) {
+        output += `\n📝 ${note.title}\n`;
+        output += `${"─".repeat(40)}\n`;
+        output += `Created: ${note.creation_date}\n`;
+        output += `Modified: ${note.modification_date}\n`;
         
-        console.log(`📖 Opening note: "${title}"${creation_date ? ` (creation date: ${creation_date})` : ""}`);
+        if (note.meta_cluster_label) {
+          output += `Cluster: ${note.meta_cluster_label}\n`;
+         }
         
-        // JXA script to open a specific note
-        const creationDateParam = creation_date ? `"${creation_date}"` : "null";
-        const jxaScript = `
-(function(title, creationDateStr) {
-  const Notes = Application("Notes");
-  Notes.includeStandardAdditions = true;
-  
-  try {
-    const matches = Notes.notes.whose({ name: title })();
-    let noteToOpen = null;
-    
-    for (let i = 0; i < matches.length; i++) {
-      const note = matches[i];
-      if (!creationDateStr || note.creationDate().toLocaleString() === creationDateStr) {
-        noteToOpen = note;
-        break;
-      }
-    }
-    
-    if (noteToOpen) {
-      Notes.activate();
-      Notes.show(noteToOpen);
-      return JSON.stringify({ status: "success", title: title });
-    }
-    return JSON.stringify({ status: "not_found", title: title });
-  } catch (error) {
-    return JSON.stringify({ status: "error", message: error.message });
-  }
-})("${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}", ${creationDateParam});
-`;
+        output += `\nChunks (${note.chunks.length}):\n${"─".repeat(40)}\n`;
         
-        const result = await runJxa(jxaScript);
-        const parsedResult = JSON.parse(result as string) as {
-          status: "success" | "not_found" | "error";
-          title?: string;
-          message?: string;
-        };
+        for (const chunk of note.chunks.slice(0, 5)) {
+          output += `\n[Chunk ${chunk.chunk_index + 1}/${chunk.total_chunks}] (${chunk.cluster_label})\n`;
+          output += `${chunk.content.substring(0, 300)}${chunk.content.length > 300 ? '...' : ''}\n`;
+         }
         
-        if (parsedResult.status === "success") {
-          // Log the interaction in notes_interactions table
-          try {
-            const interactionsDb = await lancedb.connect(INTERACTIONS_DB_PATH);
-            let interactionsTable;
-            
-            const tableNames = await interactionsDb.tableNames();
-            if (tableNames.includes(INTERACTIONS_TABLE_NAME)) {
-              interactionsTable = await interactionsDb.openTable(INTERACTIONS_TABLE_NAME);
-              
-              const now = new Date().toISOString();
-              const event = { dt: now, type: "opened" as const };
-              
-              try {
-                 // Check if title exists
-                const existing = await interactionsTable
-                     .query()
-                     .where(`title = '${title.replace(/'/g, "''")}'`)
-                     .limit(1)
-                     .toArray();
-                
-                if (existing.length > 0) {
-                  // Update existing record
-                  const record = existing[0];
-                  const log = JSON.parse(record.interaction_log || "[]");
-                  log.push(event);
-                  
-                  await interactionsTable.update(
-                      { last_opened: now, interaction_log: JSON.stringify(log) },
-                      { where: `title = '${title.replace(/'/g, "''")}'` }
-                    );
-                  await interactionsTable.update(
-                      { last_opened: now, interaction_log: JSON.stringify(log) },
-                      { where: `title = '${title.replace(/'/g, "''")}'` }
-                    );
-                  await interactionsTable.update(
-                      { last_opened: now, interaction_log: JSON.stringify(log) },
-                      { where: `title = '${title.replace(/'/g, "''")}'` }
-                    );
-                  await interactionsTable.update(
-                      { last_opened: now, interaction_log: JSON.stringify(log) },
-                      { where: `title = '${title.replace(/'/g, "''")}'` }
-                    );
-                  console.log(`  ✏️ Logged "opened" event for "${title}"`);
-                } else {
-                  // Insert new record
-                  await interactionsTable.add([{
-                    title,
-                    last_opened: now,
-                    interaction_log: JSON.stringify([event])
-                  }]);
-                  console.log(`  ➕ Created new interaction record for "${title}"`);
-                }
-                
-                await interactionsDb.close();
-              } catch (logError) {
-                console.log(`  ⚠️ Could not log interaction: ${(logError as Error).message}`);
-              }
-            } else {
-              console.log(`  ℹ️ notes_interactions table doesn't exist yet. Tracker script needs to be run first.`);
-            }
-          } catch (logError) {
-            console.log(`  ⚠️ Interaction logging failed: ${(logError as Error).message}`);
-          }
-          
-          return createTextResponse(
-            `Successfully opened note "${title}" in Apple Notes.\n\n` +
-            `📊 Status: ${parsedResult.status}\n` +
-            `📅 Title: ${title}${creation_date ? `\n📅 Creation Date: ${creation_date}` : ""}`
-          );
-        } else if (parsedResult.status === "not_found") {
-          return createTextResponse(
-            `Note "${title}" not found in Apple Notes.\n\n` +
-            `💡 Tip: If you have multiple notes with the same title, try providing the creation_date parameter to disambiguate.`
-          );
-        } else {
-          return createTextResponse(
-            `Failed to open note: ${parsedResult.message || "Unknown error"}\n\n` +
-            `📝 Title: ${title}`
-          );
-        }
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new Error(
-            `Invalid arguments: ${error.errors
-              .map((e) => `${e.path.join(".")}: ${e.message}`)
-              .join(", ")}`
-          );
-        }
-        return createTextResponse(`Error opening note: ${(error as Error).message}`);
-      }
-    } else {
+        if (note.chunks.length > 5) {
+          output += `\n... and ${note.chunks.length - 5} more chunks per note\n`;
+         }
+        
+        output += `\n${"=".repeat(60)}\n`;
+       }
+      
+      if (data.notes.length > 20) {
+        output += `\n... and ${data.notes.length - 20} more notes`;
+       }
+
+      return {
+        content: [{
+          type: "text",
+          text: output
+        }]
+      };
+     } else {
       throw new Error(`Unknown tool: ${name}`);
-    }
-  } catch (error) {
+     }
+   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error(
-        `Invalid arguments: ${error.errors
-          .map((e) => `${e.path.join(".")}: ${e.message}`)
-          .join(", ")}`
-      );
-    }
+         `Invalid arguments: ${error.errors
+           .map((e) => `${e.path.join(".")}: ${e.message}`)
+           .join(", ")}`
+       );
+     }
     throw error;
-  }
+   }
 });
 
 // Start the server

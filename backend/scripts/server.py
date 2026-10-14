@@ -1981,6 +1981,128 @@ async def get_history_for_day(date_str: str):
         raise HTTPException(status_code=500, detail=f"Failed to fetch day history: {str(e)}")
 
 
+# ── Notes by Date Range Endpoint ─────────────────────────────────────────────
+class NotesByDateRangeResponse(BaseModel):
+    notes: List[Dict[str, Any]]
+    total_notes: int
+    total_chunks: int
+
+
+@app.get("/notes_by_date_range", response_model=NotesByDateRangeResponse)
+async def get_notes_by_date_range(
+    date_from: str = Query(..., description="YYYY-MM-DD inclusive start"),
+    date_to: str = Query(..., description="YYYY-MM-DD inclusive end"),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """Return all notes with full chunk content for notes created or modified in the specified date range."""
+    if state.df_viz.empty:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    # Parse dates
+    dt_from = pd.Timestamp(date_from + " 00:00:00")
+    dt_to = pd.Timestamp(date_to + " 23:59:59")
+
+    # Filter notes by creation_date or modification_date
+    working_df = state.df_viz.copy()
+    
+    # Normalize date columns
+    for col in ['creation_date', 'modification_date']:
+        if col in working_df.columns:
+            working_df[col] = pd.to_datetime(working_df[col], errors="coerce")
+    
+    # Build mask for notes within date range (either creation or modification)
+    date_mask = pd.Series([False] * len(working_df), index=working_df.index)
+    
+    if 'creation_date' in working_df.columns:
+        creation_mask = (working_df['creation_date'] >= dt_from) & (working_df['creation_date'] <= dt_to)
+        date_mask |= creation_mask
+    
+    if 'modification_date' in working_df.columns:
+        modification_mask = (working_df['modification_date'] >= dt_from) & (working_df['modification_date'] <= dt_to)
+        date_mask |= modification_mask
+    
+    filtered_df = working_df[date_mask]
+    
+    if filtered_df.empty:
+        return NotesByDateRangeResponse(notes=[], total_notes=0, total_chunks=0)
+    
+    # Deduplicate by title + creation_date to get unique notes
+    note_identity_cols = ['title', 'creation_date', 'modification_date']
+    note_keys_df = filtered_df[note_identity_cols].drop_duplicates().copy()
+    note_keys_df['note_key'] = (
+        note_keys_df['title'] + '|||' + 
+        note_keys_df['creation_date'].astype(str) + '|||' + 
+        note_keys_df['modification_date'].astype(str)
+    )
+    
+    merged = filtered_df.merge(note_keys_df, on=note_identity_cols, how='inner')
+    merged = merged.sort_values(['note_key', 'chunk_index'])
+    
+    # Build note objects with full chunk content
+    notes_list = []
+    seen_note_keys = set()
+    
+    for note_key, group in merged.groupby('note_key', sort=False):
+        if len(seen_note_keys) >= limit:
+            break
+            
+        title_val = str(group.iloc[0].get('title', ''))
+        creation_date_val = str(group.iloc[0].get('creation_date', ''))
+        modification_date_val = str(group.iloc[0].get('modification_date', ''))
+        
+        # Build chunks for this note
+        chunks_list = []
+        seen_chunk_indexes = set()
+        for _, row in group.iterrows():
+            chunk_index_val = int(row.get('chunk_index', 0))
+            if chunk_index_val in seen_chunk_indexes:
+                continue
+            seen_chunk_indexes.add(chunk_index_val)
+            
+            chunk_text = row.get('chunk_content', '')
+            if pd.isna(chunk_text) or chunk_text == '':
+                chunk_text = row.get('text', '')
+            if pd.isna(chunk_text):
+                chunk_text = ''
+            
+            chunks_list.append({
+                "chunk_index": chunk_index_val,
+                "total_chunks": int(row.get('total_chunks', 1)),
+                "cluster_id": str(row.get('display_topic_id', row.get('cluster_id', '-1'))),
+                "cluster_label": str(row.get('cluster_label', 'Unclustered')),
+                "content": str(chunk_text),
+            })
+        
+        note_meta = next(
+            (c.get("meta_cluster_id") for c in chunks_list if c.get("meta_cluster_id")),
+            None,
+        )
+        note_meta_label = next(
+            (c.get("meta_cluster_label") for c in chunks_list if c.get("meta_cluster_label")),
+            None,
+        )
+        
+        notes_list.append({
+            "note_key": str(note_key),
+            "title": title_val,
+            "creation_date": creation_date_val,
+            "modification_date": modification_date_val,
+            "chunks": chunks_list,
+            "meta_cluster_id": note_meta,
+            "meta_cluster_label": note_meta_label,
+        })
+        
+        seen_note_keys.add(note_key)
+    
+    total_chunks = sum(len(n["chunks"]) for n in notes_list)
+    
+    return NotesByDateRangeResponse(
+        notes=notes_list,
+        total_notes=len(notes_list),
+        total_chunks=total_chunks,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
