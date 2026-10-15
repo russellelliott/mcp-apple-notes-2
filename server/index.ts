@@ -585,24 +585,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             required: []
             }
           },
-         {
-          name: "get-notes-by-date",
-          description: "Get all notes with full chunk content created or modified within a date range. Returns note metadata and all associated chunks.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              date_from: { 
-                type: "string", 
-                description: "Start date YYYY-MM-DD (inclusive)" 
-                },
-              date_to: { 
-                type: "string", 
-                description: "End date YYYY-MM-DD (inclusive)" 
-                }
-               },
-             required: ["date_from", "date_to"]
-             }
-           },
     ]
    };
 });
@@ -1841,67 +1823,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
         content: [{
           type: "text",
           text: `Found ${data.stats?.unique_notes ?? 0} notes (${data.stats?.total_chunks ?? 0} chunks)\n\n${summary || "No results found."}`
-        }]
-      };
-     } else if (name === "get-notes-by-date") {
-       // Get all notes within a date range - proxy to FastAPI backend
-      const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
-      const { date_from, date_to } = z.object({
-        date_from: z.string().describe("Start date YYYY-MM-DD (inclusive)"),
-        date_to: z.string().describe("End date YYYY-MM-DD (inclusive)")
-      }).parse(args);
-
-      const params = new URLSearchParams();
-      params.set("date_from", date_from);
-      params.set("date_to", date_to);
-
-      const url = `${BACKEND_URL}/notes_by_date_range?${params.toString()}`;
-      console.error(`📅 Notes by date proxy: ${url}`);
-      
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        const errorText = await resp.text();
-        throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${errorText}`);
-       }
-      
-      const data = await resp.json();
-
-      // Format notes with chunks for display
-      let output = `Found ${data.total_notes} notes (${data.total_chunks} chunks) in date range ${date_from} to ${date_to}\n\n`;
-      output += `${"=".repeat(60)}\n`;
-      
-      for (const note of data.notes.slice(0, 20)) {
-        output += `\n📝 ${note.title}\n`;
-        output += `${"─".repeat(40)}\n`;
-        output += `Created: ${note.creation_date}\n`;
-        output += `Modified: ${note.modification_date}\n`;
-        
-        if (note.meta_cluster_label) {
-          output += `Cluster: ${note.meta_cluster_label}\n`;
-         }
-        
-        output += `\nChunks (${note.chunks.length}):\n${"─".repeat(40)}\n`;
-        
-        for (const chunk of note.chunks.slice(0, 5)) {
-          output += `\n[Chunk ${chunk.chunk_index + 1}/${chunk.total_chunks}] (${chunk.cluster_label})\n`;
-          output += `${chunk.content.substring(0, 300)}${chunk.content.length > 300 ? '...' : ''}\n`;
-         }
-        
-        if (note.chunks.length > 5) {
-          output += `\n... and ${note.chunks.length - 5} more chunks per note\n`;
-         }
-        
-        output += `\n${"=".repeat(60)}\n`;
-       }
-      
-      if (data.notes.length > 20) {
-        output += `\n... and ${data.notes.length - 20} more notes`;
-       }
-
-      return {
-        content: [{
-          type: "text",
-          text: output
         }]
       };
      } else {
