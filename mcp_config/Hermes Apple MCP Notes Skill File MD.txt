@@ -33,20 +33,30 @@ Use these MCP tools:
     - `date_to`: `YYYY-MM-DD`
     - `date_field`: `creation_date`, `modification_date`, or `both`
     - `limit`
+- `get-note-content`
+  - Required arguments:
+    - `title`
+    - `chunk_index` (zero-based)
+  - Optional arguments:
+    - `creation_date`
+    - `modification_date`
 
 ## Procedure
 
 1. For normal note questions, call `search-notes` with a semantic `query`.
 2. For questions about a period, add `date_from` and `date_to`.
 3. For all notes associated with a period, omit `query` and use the date filters; date-only searches also include matching `notes_interactions` activity.
-4. Summarize results with note titles, dates, and relevant excerpts.
-5. Do not claim that a note was found unless it appears in the MCP response.
+4. When a specific search result needs to be read in full, call `get-note-content` with its exact `title` and zero-based `chunk_index`.
+5. If duplicate titles exist, include `creation_date` or `modification_date` to disambiguate the note.
+6. Summarize results with note titles, dates, and relevant excerpts.
+7. Do not claim that a note was found unless it appears in the MCP response.
 
 ## Pitfalls
 
 - `search-notes` requires the FastAPI backend to be running.
 - Date arguments must use `YYYY-MM-DD`.
 - Date-only searches default to the current day when no dates are supplied.
+- `get-note-content` returns one indexed chunk, not every chunk of the note; use the result's `total_chunks` and request additional chunk indexes when needed.
 - The server formats and truncates displayed search results, so avoid implying that the response contains every matching chunk.
 
 ## Verification

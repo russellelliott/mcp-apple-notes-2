@@ -585,6 +585,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             required: []
             }
           },
+        {
+         name: "get-note-content",
+         description: "Get the content and metadata for one indexed Apple Notes chunk by title and chunk index, optionally disambiguated by creation or modification date.",
+         inputSchema: {
+           type: "object",
+           properties: {
+             title: {
+               type: "string",
+               description: "Exact Apple Note title"
+             },
+             chunk_index: {
+               type: "number",
+               description: "Zero-based chunk index"
+             },
+             creation_date: {
+               type: "string",
+               description: "Optional creation date used to disambiguate duplicate titles"
+             },
+             modification_date: {
+               type: "string",
+               description: "Optional modification date used to disambiguate duplicate titles"
+             }
+           },
+           required: ["title", "chunk_index"]
+         }
+        },
     ]
    };
 });
@@ -1825,6 +1851,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
           text: `Found ${data.stats?.unique_notes ?? 0} notes (${data.stats?.total_chunks ?? 0} chunks)\n\n${summary || "No results found."}`
         }]
       };
+     } else if (name === "get-note-content") {
+      const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+      const contentArgs = z.object({
+        title: z.string(),
+        chunk_index: z.number().int().nonnegative(),
+        creation_date: z.string().optional(),
+        modification_date: z.string().optional(),
+      }).parse(args);
+      const params = new URLSearchParams({
+        title: contentArgs.title,
+        chunk_index: String(contentArgs.chunk_index),
+      });
+
+      if (contentArgs.creation_date) {
+        params.set("creation_date", contentArgs.creation_date);
+      }
+      if (contentArgs.modification_date) {
+        params.set("modification_date", contentArgs.modification_date);
+      }
+
+      const url = `${BACKEND_URL}/note_content?${params.toString()}`;
+      console.error(`📄 Note content proxy: ${url}`);
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`Backend error: ${resp.status} ${resp.statusText} - ${errorText}`);
+      }
+
+      const data = await resp.json();
+      return createTextResponse(
+        `Title: ${data.title}\n` +
+        `Chunk: ${data.chunk_index + 1}/${data.total_chunks}\n` +
+        `${data.creation_date ? `Created: ${data.creation_date}\n` : ""}` +
+        `${data.modification_date ? `Modified: ${data.modification_date}\n` : ""}` +
+        `${data.cluster_label ? `Cluster: ${data.cluster_label}\n` : ""}\n` +
+        data.content
+      );
      } else {
       throw new Error(`Unknown tool: ${name}`);
      }

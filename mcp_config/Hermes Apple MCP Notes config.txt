@@ -8,3 +8,4 @@ mcp_servers:
     tools:
       include:
         - search-notes
+        - get-note-content
