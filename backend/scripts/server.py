@@ -674,7 +674,7 @@ async def get_cluster_colors() -> Dict[str, str]:
 async def get_note_content(
     title: str = Query(...),
     chunk_index: int = Query(...),
-    creation_date: Optional[str] = Query(None),
+    creation_date: str = Query(...),
 ):
     """Return the content and metadata for one note chunk."""
     try:
@@ -682,8 +682,9 @@ async def get_note_content(
             (state.df_viz['title'].astype(str) == str(title))
             & (state.df_viz['chunk_index'].astype(int) == int(chunk_index))
         )
-        if creation_date is not None and 'creation_date' in state.df_viz.columns:
-            mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
+        if 'creation_date' not in state.df_viz.columns:
+            raise HTTPException(status_code=500, detail="Creation date column is unavailable")
+        mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
         row = state.df_viz[mask]
 
         if row.empty:

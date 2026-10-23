@@ -587,7 +587,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         {
          name: "get-note-content",
-         description: "Get the content and metadata for one indexed Apple Notes chunk by title and chunk index, optionally disambiguated by creation date.",
+         description: "Get the content and metadata for one indexed Apple Notes chunk by title, creation date, and chunk index.",
          inputSchema: {
            type: "object",
            properties: {
@@ -601,10 +601,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
              },
              creation_date: {
                type: "string",
-               description: "Optional creation date used to disambiguate duplicate titles"
+               description: "Creation date used to identify the note"
              },
            },
-           required: ["title", "chunk_index"]
+           required: ["title", "chunk_index", "creation_date"]
          }
         },
     ]
@@ -1852,16 +1852,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
       const contentArgs = z.object({
         title: z.string(),
         chunk_index: z.number().int().nonnegative(),
-        creation_date: z.string().optional(),
+        creation_date: z.string(),
       }).parse(args);
       const params = new URLSearchParams({
         title: contentArgs.title,
         chunk_index: String(contentArgs.chunk_index),
       });
 
-      if (contentArgs.creation_date) {
-        params.set("creation_date", contentArgs.creation_date);
-      }
+      params.set("creation_date", contentArgs.creation_date);
       const url = `${BACKEND_URL}/note_content?${params.toString()}`;
       console.error(`📄 Note content proxy: ${url}`);
       const resp = await fetch(url);
