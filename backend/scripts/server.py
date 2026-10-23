@@ -224,6 +224,7 @@ class NotePoint(BaseModel):
 class SearchResult(BaseModel):
     unique_key: str
     title: str
+    creation_date: Optional[Any] = None
     chunk_index: int
     total_chunks: Optional[int] = None
     distance: float
@@ -247,6 +248,7 @@ class SearchResponse(BaseModel):
 
 class NoteContent(BaseModel):
     title: str
+    creation_date: Optional[Any] = None
     chunk_index: int
     content: str
     total_chunks: int
@@ -673,7 +675,6 @@ async def get_note_content(
     title: str = Query(...),
     chunk_index: int = Query(...),
     creation_date: Optional[str] = Query(None),
-    modification_date: Optional[str] = Query(None),
 ):
     """Return the content and metadata for one note chunk."""
     try:
@@ -683,8 +684,6 @@ async def get_note_content(
         )
         if creation_date is not None and 'creation_date' in state.df_viz.columns:
             mask = mask & (state.df_viz['creation_date'].astype(str) == str(creation_date))
-        if modification_date is not None and 'modification_date' in state.df_viz.columns:
-            mask = mask & (state.df_viz['modification_date'].astype(str) == str(modification_date))
         row = state.df_viz[mask]
 
         if row.empty:
@@ -700,6 +699,7 @@ async def get_note_content(
 
         return NoteContent(
             title=title,
+            creation_date=(str(row.iloc[0].get('creation_date')) if row.iloc[0].get('creation_date') is not None else None),
             chunk_index=chunk_index,
             content=str(content),
             total_chunks=int(total),
@@ -1738,7 +1738,9 @@ def _build_search_results_from_raw(results, df_viz):
         dt = str(display_topic_id_map.get(uk, cluster_id_map.get(uk, "-1")))
         bt = str(base_topic_id_map.get(uk, cluster_id_map.get(uk, "-1")))
         formatted.append(SearchResult(
-            unique_key=uk, title=title, chunk_index=int(idx) if isinstance(idx, (int, float, str)) else 0,
+            unique_key=uk, title=title,
+            creation_date=r.get('creation_date'),
+            chunk_index=int(idx) if isinstance(idx, (int, float, str)) else 0,
             total_chunks=int(total) if total is not None else None,
             distance=float(score), cluster_id=dt, base_topic_id=bt,
             display_topic_id=dt, cluster_label=cluster_map.get(uk, "Unknown"), preview=str(preview) if preview else None,
@@ -1762,6 +1764,7 @@ def _build_search_results(filtered_df, df_viz):
         formatted.append(SearchResult(
             unique_key=uk,
             title=str(row.get('title', '')),
+            creation_date=row.get('creation_date'),
             chunk_index=int(chunk_index_val) if pd.notna(chunk_index_val) else 0,
             total_chunks=int(total_chunks_val) if pd.notna(total_chunks_val) else None,
             distance=0.0,

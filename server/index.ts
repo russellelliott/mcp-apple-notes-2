@@ -587,7 +587,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         {
          name: "get-note-content",
-         description: "Get the content and metadata for one indexed Apple Notes chunk by title and chunk index, optionally disambiguated by creation or modification date.",
+         description: "Get the content and metadata for one indexed Apple Notes chunk by title and chunk index, optionally disambiguated by creation date.",
          inputSchema: {
            type: "object",
            properties: {
@@ -603,10 +603,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                type: "string",
                description: "Optional creation date used to disambiguate duplicate titles"
              },
-             modification_date: {
-               type: "string",
-               description: "Optional modification date used to disambiguate duplicate titles"
-             }
            },
            required: ["title", "chunk_index"]
          }
@@ -1842,7 +1838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
 
       // Format results for display
       const summary = (data.results || []).slice(0, 20).map((r: any) => 
-          `• ${r.title} [chunk ${r.chunk_index}/${r.total_chunks}] (cluster: ${r.cluster_label}, score: ${r.distance.toFixed(3)})\n     ${r.preview || ""}`
+          `• ${r.title} [created: ${r.creation_date || "unknown"}] [chunk ${r.chunk_index}/${r.total_chunks}] (cluster: ${r.cluster_label}, score: ${r.distance.toFixed(3)})\n     ${r.preview || ""}`
        ).join("\n\n");
 
       return {
@@ -1857,7 +1853,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
         title: z.string(),
         chunk_index: z.number().int().nonnegative(),
         creation_date: z.string().optional(),
-        modification_date: z.string().optional(),
       }).parse(args);
       const params = new URLSearchParams({
         title: contentArgs.title,
@@ -1867,10 +1862,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
       if (contentArgs.creation_date) {
         params.set("creation_date", contentArgs.creation_date);
       }
-      if (contentArgs.modification_date) {
-        params.set("modification_date", contentArgs.modification_date);
-      }
-
       const url = `${BACKEND_URL}/note_content?${params.toString()}`;
       console.error(`📄 Note content proxy: ${url}`);
       const resp = await fetch(url);
@@ -1884,7 +1875,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
         `Title: ${data.title}\n` +
         `Chunk: ${data.chunk_index + 1}/${data.total_chunks}\n` +
         `${data.creation_date ? `Created: ${data.creation_date}\n` : ""}` +
-        `${data.modification_date ? `Modified: ${data.modification_date}\n` : ""}` +
         `${data.cluster_label ? `Cluster: ${data.cluster_label}\n` : ""}\n` +
         data.content
       );

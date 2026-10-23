@@ -39,17 +39,17 @@ Use these MCP tools:
     - `chunk_index` (zero-based)
   - Optional arguments:
     - `creation_date`
-    - `modification_date`
 
 ## Procedure
 
 1. For normal note questions, call `search-notes` with a semantic `query`.
 2. For questions about a period, add `date_from` and `date_to`.
 3. For all notes associated with a period, omit `query` and use the date filters; date-only searches also include matching `notes_interactions` activity.
-4. When a specific search result needs to be read in full, call `get-note-content` with its exact `title` and zero-based `chunk_index`.
-5. If duplicate titles exist, include `creation_date` or `modification_date` to disambiguate the note.
-6. Summarize results with note titles, dates, and relevant excerpts.
-7. Do not claim that a note was found unless it appears in the MCP response.
+4. Use the `creation_date` returned with a search result when calling `get-note-content`.
+5. When a specific search result needs to be read in full, call `get-note-content` with its exact `title`, `creation_date`, and zero-based `chunk_index`.
+6. If duplicate titles exist, include `creation_date` to disambiguate the note.
+7. Summarize results with note titles, dates, and relevant excerpts.
+8. Do not claim that a note was found unless it appears in the MCP response.
 
 ## Pitfalls
 
