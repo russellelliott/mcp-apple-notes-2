@@ -196,7 +196,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const currentlyExpanded = effectiveExpanded.has(meta.meta_cluster_id);
 
   return (
-    <div style={{ marginLeft: depth * 12 }}>
+    <div style={{ marginLeft: depth * 12 }} data-meta-cluster-id={meta.meta_cluster_id}>
       {/* Meta-cluster folder row */}
       <div
         onClick={() => toggleMeta(meta.meta_cluster_id)}
@@ -234,6 +234,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         return (
           <div
             key={child.cluster_id}
+            data-cluster-id={child.cluster_id}
             onClick={(e) => { e.stopPropagation(); onClusterSelect(child.cluster_id); }}
             style={{
               display: 'flex',
@@ -387,6 +388,7 @@ export const MetaClusterTree: React.FC<Props> = ({
   }, []);
 
   /**Expand the meta-cluster containing a selected child */
+  const treeContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!selectedClusterId || metaData.length === 0) return;
     const target = metaData.find((m) =>
@@ -400,6 +402,29 @@ export const MetaClusterTree: React.FC<Props> = ({
       return next;
     });
   }, [selectedClusterId, metaData]); // ← expandedMetaIds removed
+
+  /**Scroll the tree container so the target meta-cluster is visible. */
+  const prevSelectedClusterId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedClusterId || !treeContainerRef.current) return;
+    // Only scroll when the selected cluster actually changes (not on re-renders, not on manual scroll)
+    if (prevSelectedClusterId.current === selectedClusterId) return;
+    prevSelectedClusterId.current = selectedClusterId;
+
+    requestAnimationFrame(() => {
+      const container = treeContainerRef.current;
+      if (!container) return;
+      const element = container.querySelector(`[data-cluster-id="${selectedClusterId}"]`);
+      if (!element) return;
+      const containerRect = container.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const headerHeight = 48; // header + stats + optional filter
+      const offsetFromTop = containerRect.top;
+      const elementTop = elementRect.top;
+      const scrollDelta = elementTop - offsetFromTop - headerHeight + 4;
+      container.scrollTo({ top: container.scrollTop + scrollDelta, behavior: 'smooth' });
+    });
+  }, [selectedClusterId]);  // only fires when the selected cluster ID actually changes
 
   if (loading) return <div style={{ padding: 12, color: '#9ca3af', fontSize: 12 }}>Loading meta-clusters…</div>;
   if (error) return <div style={{ padding: 12, color: '#dc2626', fontSize: 12 }}>Error: {error}</div>;
@@ -443,7 +468,7 @@ export const MetaClusterTree: React.FC<Props> = ({
       )}
 
       {/* Tree */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+      <div ref={treeContainerRef} style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {metaData.map((meta) => (
           <TreeNode
             key={meta.meta_cluster_id}
