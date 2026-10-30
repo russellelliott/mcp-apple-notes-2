@@ -52,8 +52,6 @@ interface SpatialClusterCanvasProps {
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
-/** Similarity (cosine) above which a ray is drawn in focus mode */
-const RAY_SIM_THRESHOLD = 0.55;
 /** Similarity above which an orbiting metacluster stays fully visible */
 const DIM_SIM_THRESHOLD = 0.5;
 
@@ -318,74 +316,6 @@ export default function SpatialClusterCanvas({
           height={WORLD_HEIGHT}
           style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}
         >
-          {/* Connective web links between similar metaclusters */}
-          {layout.metaLinks.map((link) => {
-            const srcMeta = metaClusters.find((m) => m.id === link.sourceId);
-            const isHot =
-              viewMode === 'focus' &&
-              (link.sourceId === activeMetaId || link.targetId === activeMetaId);
-            const stroke = srcMeta?.color.accent || '#8b93b8';
-            return (
-              <line
-                key={`${link.sourceId}-${link.targetId}`}
-                x1={link.sourceCenter.x}
-                y1={link.sourceCenter.y}
-                x2={link.targetCenter.x}
-                y2={link.targetCenter.y}
-                stroke={stroke}
-                strokeWidth={isHot ? 2.5 : 1.5}
-                strokeOpacity={isHot ? 0.5 : 0.14 + (link.similarity - 0.6) * 0.4}
-                strokeDasharray={isHot ? undefined : '6 10'}
-              />
-            );
-          })}
-
-          {/* Similarity rays from the centered metacluster in focus mode */}
-          {viewMode === 'focus' &&
-            selectedCluster &&
-            metaClusters
-              .filter((m) => m.id !== activeMetaId)
-              .map((m) => {
-                const sim = cosineSimilarity(selectedCluster.centroid, metaCentroidMap[m.id]);
-                if (sim < RAY_SIM_THRESHOLD) return null;
-                const center = layout.metaCircleCenters[m.id];
-                if (!center) return null;
-                const mx = (WORLD_CENTER.x + center.x) / 2;
-                const my = (WORLD_CENTER.y + center.y) / 2;
-                const isHovered =
-                  hoveredMetaId === m.id || hoveredCluster?.metaClusterId === m.id;
-                return (
-                  <g key={`ray-${m.id}`}>
-                    <line
-                      x1={WORLD_CENTER.x}
-                      y1={WORLD_CENTER.y}
-                      x2={center.x}
-                      y2={center.y}
-                      stroke={m.color.accent}
-                      strokeOpacity={isHovered ? 0.5 : 0.18}
-                      strokeWidth={isHovered ? 2 : 1}
-                    />
-                    <circle
-                      cx={mx}
-                      cy={my}
-                      r={11}
-                      fill="#ffffff"
-                      stroke={m.color.accent}
-                      strokeOpacity={0.5}
-                    />
-                    <text
-                      x={mx}
-                      y={my + 3}
-                      textAnchor="middle"
-                      fontSize={9}
-                      fontFamily={MONO}
-                      fill={m.color.text}
-                    >
-                      {(sim * 100).toFixed(0)}%
-                    </text>
-                  </g>
-                );
-              })}
 
           {/* Orbit guide rings in focus mode */}
           {viewMode === 'focus' && (
@@ -393,7 +323,7 @@ export default function SpatialClusterCanvas({
               <circle
                 cx={WORLD_CENTER.x}
                 cy={WORLD_CENTER.y}
-                r={300}
+                r={520}
                 fill="none"
                 stroke="#9aa3c0"
                 strokeOpacity={0.25}
@@ -402,7 +332,7 @@ export default function SpatialClusterCanvas({
               <circle
                 cx={WORLD_CENTER.x}
                 cy={WORLD_CENTER.y}
-                r={680}
+                r={1480}
                 fill="none"
                 stroke="#9aa3c0"
                 strokeOpacity={0.18}
@@ -410,7 +340,7 @@ export default function SpatialClusterCanvas({
               />
               <text
                 x={WORLD_CENTER.x}
-                y={WORLD_CENTER.y - 306}
+                y={WORLD_CENTER.y - 526}
                 textAnchor="middle"
                 fontSize={10}
                 fill="#7c86a8"
@@ -419,7 +349,7 @@ export default function SpatialClusterCanvas({
               </text>
               <text
                 x={WORLD_CENTER.x}
-                y={WORLD_CENTER.y - 686}
+                y={WORLD_CENTER.y - 1486}
                 textAnchor="middle"
                 fontSize={10}
                 fill="#7c86a8"

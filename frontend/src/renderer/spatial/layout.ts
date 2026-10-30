@@ -191,8 +191,8 @@ export function buildMetaPalette(baseColor: string | null | undefined): SpatialC
 
 /** Base radius of a metacluster circle, scaled by content volume. */
 export function metaCircleRadius(totalChunks: number, clusterCount: number): number {
-  const r = 60 + Math.sqrt(Math.max(1, totalChunks)) * 5 + Math.min(clusterCount, 40) * 2.5;
-  return Math.max(64, Math.min(150, r));
+  const r = 38 + Math.sqrt(Math.max(1, totalChunks)) * 2.5 + Math.min(clusterCount, 40) * 1.5;
+  return Math.max(48, Math.min(100, r));
 }
 
 /** Disc size for cluster nodes, shrunk for crowded metaclusters. */
@@ -206,7 +206,7 @@ export function clusterDiscSize(clusterCount: number): number {
 /** Deterministic golden-angle (phyllotaxis) fallback position. */
 function spiralPosition(index: number): XY {
   const goldenAngle = 2.399963229728653;
-  const r = 34 * Math.sqrt(index + 1);
+  const r = 55 * Math.sqrt(index + 1);
   const a = index * goldenAngle;
   return {
     x: WORLD_CENTER.x + r * Math.cos(a),
@@ -364,16 +364,22 @@ export function buildSpatialMetaClusters(
 /**
  * Positions of clusters distributed inside a metacluster circle, ensuring
  * discs stay within the boundary. Ported from the reference implementation.
+ * When `selectedCluster` is provided and the cluster belongs to that metacluster,
+ * clusters are laid out by spiral proximity (more similar = closer to center).
  */
 export function getClusterPositionsInsideMetaCircle(
   meta: SpatialMetaCluster,
   metaCenter: XY,
   metaRadius: number,
+  selectedCluster?: SpatialCluster,
 ): Record<string, XY> {
   const positions: Record<string, XY> = {};
   const clusters = meta.clusters;
   const n = clusters.length;
   if (n === 0) return positions;
+
+  // Check if this is the selected cluster's metacluster
+  const isActiveMeta = selectedCluster?.metaClusterId === meta.id;
 
   if (n === 1) {
     positions[clusters[0].id] = { x: metaCenter.x, y: metaCenter.y + 10 };
@@ -381,28 +387,59 @@ export function getClusterPositionsInsideMetaCircle(
   }
 
   // Leave room for the title pill at the top of the circle
-  const availableRadius = Math.max(24, metaRadius - 55);
+  const availableRadius = Math.max(24, metaRadius - 35);
 
-  clusters.forEach((cluster, idx) => {
-    // When crowded, park the first cluster at the center of the circle
-    if (n >= 5 && idx === 0) {
-      positions[cluster.id] = { x: metaCenter.x, y: metaCenter.y + 12 };
-      return;
-    }
+  if (isActiveMeta && selectedCluster) {
+    // Spiral layout sorted by similarity to the selected cluster
+    // More similar clusters go closer to center on the spiral
+    const sorted = [...clusters]
+      .filter((c) => c.id !== selectedCluster.id)
+      .sort((a, b) => {
+        const simA = cosineSimilarity(a.centroid, selectedCluster.centroid);
+        const simB = cosineSimilarity(b.centroid, selectedCluster.centroid);
+        return simB - simA; // higher similarity (closer) = sorted first (inner)
+      });
 
-    const outerCount = n >= 5 ? n - 1 : n;
-    const adjustedIdx = n >= 5 && idx > 0 ? idx - 1 : idx;
+    const goldenAngle = 2.399963229728653;
 
-    // Distribute along a circle starting near the top-right
-    const angleOffset = -Math.PI / 2 + 0.35;
-    const angle = angleOffset + (adjustedIdx / outerCount) * Math.PI * 2;
-    const orbitalRadius = availableRadius * 0.72;
+    // Place selected cluster at center
+    positions[selectedCluster.id] = { x: metaCenter.x, y: metaCenter.y + 8 };
 
-    positions[cluster.id] = {
-      x: metaCenter.x + orbitalRadius * Math.cos(angle),
-      y: metaCenter.y + 12 + orbitalRadius * Math.sin(angle),
-    };
-  });
+    // True phyllotaxis spiral: angle increases by golden angle, radius by sqrt
+    sorted.forEach((cluster, idx) => {
+      const sim = cosineSimilarity(cluster.centroid, selectedCluster.centroid);
+      const effectiveIdx = idx * (0.4 + (1 - sim) * 0.6); // more similar = lower effective index = inner spiral
+      const angle = effectiveIdx * goldenAngle - Math.PI / 2;
+      const r = 26 + 48 * Math.sqrt(effectiveIdx + 1);
+      positions[cluster.id] = {
+        x: metaCenter.x + r * Math.cos(angle),
+        y: metaCenter.y + 12 + r * Math.sin(angle),
+      };
+    });
+  } else {
+    // Original behavior for non-selected metaclusters
+    clusters.forEach((cluster, idx) => {
+      // When crowded, park the first cluster at the center of the circle
+      if (n >= 5 && idx === 0) {
+        positions[cluster.id] = { x: metaCenter.x, y: metaCenter.y + 12 };
+        return;
+      }
+
+      const outerCount = n >= 5 ? n - 1 : n;
+      const adjustedIdx = n >= 5 && idx > 0 ? idx - 1 : idx;
+
+      // Spiral layout for cloud metaclusters — dots spiral toward metacluster center
+    clusters.forEach((cluster, idx) => {
+      const goldenAngle = 2.399963229728653;
+      const angle = idx * goldenAngle - Math.PI / 2;
+      const r = 16 + 24 * Math.sqrt(idx + 1);
+      positions[cluster.id] = {
+        x: metaCenter.x + r * Math.cos(angle),
+        y: metaCenter.y + 12 + r * Math.sin(angle),
+      };
+    });
+    });
+  }
 
   return positions;
 }
@@ -445,17 +482,26 @@ export function calculateDynamicCircleWebLayout(
       .sort((a, b) => a.dist - b.dist);
 
     if (activeMeta) {
+      // Expand the active metacluster ring to contain all cluster spiral dots
+      const expandedRadius = activeMeta.radius * 2.5;
       metaCircleCenters[activeMeta.id] = {
         x: canvasCenter.x,
         y: canvasCenter.y,
-        radius: activeMeta.radius,
+        radius: expandedRadius,
       };
     }
 
     const numOthers = otherMetas.length;
+    // Multi-wrap phyllotaxis spiral for metaclusters
+    // More similar metaclusters placed on inner wraps, closer to center
+    const goldenAngle = 2.399963229728653;
     otherMetas.forEach((item, index) => {
-      const orbitRadius = 340 + item.dist * 640;
-      const angle = (index / Math.max(1, numOthers)) * Math.PI * 2 - Math.PI / 2;
+      const sim = cosineSimilarity(selectedCluster.centroid, centroids[item.mc.id]);
+      // More similar = lower effective index = inner spiral wrap
+      const effectiveIdx = index * (0.3 + (1 - sim) * 0.7);
+      // Spiral angle and radius: sqrt growth pushes layers well beyond selected cluster ring
+      const angle = effectiveIdx * goldenAngle - Math.PI / 2;
+      const orbitRadius = 300 + 260 * Math.sqrt(effectiveIdx + 1);
       metaCircleCenters[item.mc.id] = {
         x: canvasCenter.x + orbitRadius * Math.cos(angle),
         y: canvasCenter.y + orbitRadius * Math.sin(angle),
@@ -480,6 +526,7 @@ export function calculateDynamicCircleWebLayout(
       mc,
       { x: metaCircle.x, y: metaCircle.y },
       metaCircle.radius,
+      selectedCluster ?? undefined,
     );
     for (const [clusterId, pos] of Object.entries(nested)) {
       clusterCoordinates[clusterId] = pos;
