@@ -323,30 +323,12 @@ export default function SpatialClusterCanvas({
               <circle
                 cx={WORLD_CENTER.x}
                 cy={WORLD_CENTER.y}
-                r={520}
-                fill="none"
-                stroke="#9aa3c0"
-                strokeOpacity={0.25}
-                strokeDasharray="4 10"
-              />
-              <circle
-                cx={WORLD_CENTER.x}
-                cy={WORLD_CENTER.y}
                 r={1480}
                 fill="none"
                 stroke="#9aa3c0"
                 strokeOpacity={0.18}
                 strokeDasharray="4 10"
               />
-              <text
-                x={WORLD_CENTER.x}
-                y={WORLD_CENTER.y - 526}
-                textAnchor="middle"
-                fontSize={10}
-                fill="#7c86a8"
-              >
-                core
-              </text>
               <text
                 x={WORLD_CENTER.x}
                 y={WORLD_CENTER.y - 1486}
