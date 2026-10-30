@@ -417,28 +417,27 @@ export function getClusterPositionsInsideMetaCircle(
       };
     });
   } else {
-    // Original behavior for non-selected metaclusters
-    clusters.forEach((cluster, idx) => {
-      // When crowded, park the first cluster at the center of the circle
-      if (n >= 5 && idx === 0) {
-        positions[cluster.id] = { x: metaCenter.x, y: metaCenter.y + 12 };
-        return;
-      }
+    // Non-selected metacluster: spiral layout scaled to fit inside the ring
+    const goldenAngle = 2.399963229728653;
 
-      const outerCount = n >= 5 ? n - 1 : n;
-      const adjustedIdx = n >= 5 && idx > 0 ? idx - 1 : idx;
+    // Compute maximum spiral radius needed so we can scale to fit
+    let maxSpiralR = 0;
+    for (let i = 0; i < n; i++) {
+      const r = 16 + 24 * Math.sqrt(i + 1);
+      if (r > maxSpiralR) maxSpiralR = r;
+    }
 
-      // Spiral layout for cloud metaclusters — dots spiral toward metacluster center
-    clusters.forEach((cluster, idx) => {
-      const goldenAngle = 2.399963229728653;
-      const angle = idx * goldenAngle - Math.PI / 2;
-      const r = 16 + 24 * Math.sqrt(idx + 1);
-      positions[cluster.id] = {
+    // Scale factor so the outermost cluster fits within availableRadius
+    const scaleFactor = maxSpiralR > 0 ? availableRadius / maxSpiralR : 1;
+
+    for (let i = 0; i < n; i++) {
+      const angle = i * goldenAngle - Math.PI / 2;
+      const r = (16 + 24 * Math.sqrt(i + 1)) * scaleFactor;
+      positions[clusters[i].id] = {
         x: metaCenter.x + r * Math.cos(angle),
         y: metaCenter.y + 12 + r * Math.sin(angle),
       };
-    });
-    });
+    }
   }
 
   return positions;
@@ -481,9 +480,10 @@ export function calculateDynamicCircleWebLayout(
       })
       .sort((a, b) => a.dist - b.dist);
 
+    // Compute expanded radius for the active metacluster (used to set minimum orbit)
+    const expandedRadius = activeMeta ? activeMeta.radius * 2.5 : 80;
     if (activeMeta) {
       // Expand the active metacluster ring to contain all cluster spiral dots
-      const expandedRadius = activeMeta.radius * 2.5;
       metaCircleCenters[activeMeta.id] = {
         x: canvasCenter.x,
         y: canvasCenter.y,
@@ -492,35 +492,163 @@ export function calculateDynamicCircleWebLayout(
     }
 
     const numOthers = otherMetas.length;
-    // Multi-wrap phyllotaxis spiral for metaclusters
-    // Orbital radius based on similarity to selected cluster (more similar = closer to center)
-    // Angular spacing based on pairwise similarity (more similar = tighter angular gap)
+    // Nearest-neighbor ordering: similar metaclusters grouped adjacently
+    // Angular position based on pairwise similarity (similar = closer, dissimilar = further)
     const goldenAngle = 2.399963229728653;
-    otherMetas.forEach((item, index) => {
-      // Similarity to selected cluster determines radial position (more similar = closer)
+
+    // Compute pairwise similarity matrix for nearest-neighbor ordering
+    const pairwiseSimMatrix = new Map<string, Map<string, number>>();
+    for (const a of otherMetas) {
+      for (const b of otherMetas) {
+        if (a.mc.id !== b.mc.id) {
+          if (!pairwiseSimMatrix.has(a.mc.id)) {
+            pairwiseSimMatrix.set(a.mc.id, new Map());
+          }
+          pairwiseSimMatrix.get(a.mc.id)!.set(b.mc.id, cosineSimilarity(centroids[a.mc.id], centroids[b.mc.id]));
+        }
+      }
+    }
+
+    // Greedy nearest-neighbor ordering: start with most similar to selected cluster, then greedily place most similar to any already-placed
+    const ordered: typeof otherMetas = [];
+    const used = new Set<string>();
+
+    // Start with the metacluster most similar to the selected cluster (innermost)
+    let current = otherMetas[otherMetas.reduce((bestIdx, m, idx) =>
+      cosineSimilarity(selectedCluster.centroid, centroids[m.mc.id]) > cosineSimilarity(selectedCluster.centroid, centroids[otherMetas[bestIdx].mc.id]) ? idx : bestIdx
+    , 0)];
+    ordered.push(current);
+    used.add(current.mc.id);
+
+    while (used.size < otherMetas.length) {
+      // Pick unplaced metacluster most similar to any placed metacluster
+      let bestMeta = otherMetas[0];
+      let bestScore = -Infinity;
+      for (const m of otherMetas) {
+        if (used.has(m.mc.id)) continue;
+        const score = Math.max(...ordered.map((o) => pairwiseSimMatrix.get(o.mc.id)?.get(m.mc.id) ?? 0));
+        if (score > bestScore) {
+          bestScore = score;
+          bestMeta = m;
+        }
+      }
+      ordered.push(bestMeta);
+      used.add(bestMeta.mc.id);
+    }
+
+    // Sector-based layout: semantically similar metaclusters share angular sectors
+    // so they appear physically close to each other (Issue 3).
+    // Collision resolution pushes overlapping metaclusters apart (Issue 2).
+
+    // Greedy sector clustering: group similar metaclusters into angular sectors
+    const sectorLeaderIds: string[] = [];
+    const sectorMembers: Map<string, string[]> = new Map(); // leaderId -> [memberIds]
+    const sectorUsed = new Set<string>();
+
+    for (const item of ordered) {
+      if (sectorUsed.has(item.mc.id)) continue;
+
+      // Find the most similar already-placed metacluster that is a sector leader
+      let bestLeaderId: string | null = null;
+      let bestSim = 0.3; // Minimum similarity to join an existing sector
+      for (const placedId of sectorLeaderIds) {
+        const sim = pairwiseSimMatrix.get(placedId)?.get(item.mc.id) ?? 0;
+        if (sim > bestSim) {
+          bestSim = sim;
+          bestLeaderId = placedId;
+        }
+      }
+
+      if (bestLeaderId) {
+        // Join the sector of the most similar leader
+        sectorMembers.get(bestLeaderId)!.push(item.mc.id);
+      } else {
+        // Start a new sector
+        sectorLeaderIds.push(item.mc.id);
+        sectorMembers.set(item.mc.id, [item.mc.id]);
+      }
+      sectorUsed.add(item.mc.id);
+    }
+
+    // Assign angular sectors proportional to sector size (use 80% of full circle)
+    let angleAccum = 0;
+    const sectorBaseAngles: Map<string, number> = new Map(); // leaderId -> base angle
+
+    for (const [leaderId, members] of sectorMembers) {
+      const sectorAngleSpan = (members.length / numOthers) * Math.PI * 2 * 0.8;
+      const baseAngle = angleAccum + sectorAngleSpan / 2;
+      angleAccum += sectorAngleSpan;
+      sectorBaseAngles.set(leaderId, baseAngle);
+    }
+
+    // Build a lookup: memberId -> { baseAngle, sectorMemberIndex, totalInSector }
+    const memberAngleInfo: Map<string, { baseAngle: number; memberIdx: number; totalInSector: number }> = new Map();
+    for (const [leaderId, members] of sectorMembers) {
+      const baseAngle = sectorBaseAngles.get(leaderId)!;
+      for (let i = 0; i < members.length; i++) {
+        memberAngleInfo.set(members[i], {
+          baseAngle,
+          memberIdx: i,
+          totalInSector: members.length,
+        });
+      }
+    }
+
+    // Place each metacluster within its sector
+    for (const item of ordered) {
       const sim = cosineSimilarity(selectedCluster.centroid, centroids[item.mc.id]);
-      const orbitRadius = 100 + (1 - sim) * 4500 + item.mc.radius * 0.6;
+      const orbitRadius = (expandedRadius + 40) + (1 - sim) * 2200 + item.mc.radius * 0.5;
 
-      // Pairwise similarity: compute average cosine similarity to neighboring cloud metaclusters
-      const pairwiseSims = otherMetas
-        .filter((o) => o.mc.id !== item.mc.id)
-        .map((o) => cosineSimilarity(centroids[item.mc.id], centroids[o.mc.id]));
-      const avgPairwiseSim =
-        pairwiseSims.length > 0
-          ? pairwiseSims.reduce((a, b) => a + b, 0) / pairwiseSims.length
-          : 0;
-
-      // Higher pairwise similarity → wider angular gap (more spread apart from similar neighbors)
-      // Higher dissimilarity → tighter angular gap (can be closer to dissimilar neighbors)
-      const angleSpacing = 2.0 + (1 - avgPairwiseSim) * 1.5;
-      const angle = index * angleSpacing * goldenAngle - Math.PI / 2;
+      const info = memberAngleInfo.get(item.mc.id)!;
+      // Within sector, spread members by their rank (more similar to center = inner members)
+      const sectorSpan = (info.totalInSector > 1) ? (Math.PI * 2 * 0.8) / numOthers * 2 : 0;
+      const angleOffset = (info.memberIdx - (info.totalInSector - 1) / 2) * sectorSpan;
+      const angle = info.baseAngle + angleOffset - Math.PI / 2;
 
       metaCircleCenters[item.mc.id] = {
         x: canvasCenter.x + orbitRadius * Math.cos(angle),
         y: canvasCenter.y + orbitRadius * Math.sin(angle),
         radius: item.mc.radius * 0.92,
       };
-    });
+    }
+
+    // ── Collision resolution (Issue 2) ──
+    // Build mutable position/radius array from metaCircleCenters
+    const posArray: Array<{ id: string; x: number; y: number; radius: number }> = Object.entries(metaCircleCenters).map(
+      ([id, data]) => ({ id, x: data.x, y: data.y, radius: data.radius }),
+    );
+
+    // Iteratively push overlapping metaclusters apart (up to 30 iterations)
+    for (let iter = 0; iter < 30; iter++) {
+      let anyOverlap = false;
+      for (let i = 0; i < posArray.length; i++) {
+        for (let j = i + 1; j < posArray.length; j++) {
+          const a = posArray[i];
+          const b = posArray[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = a.radius + b.radius;
+          if (dist < minDist && dist > 0.1) {
+            anyOverlap = true;
+            const overlap = minDist - dist;
+            const pushX = (dx / dist) * (overlap / 2);
+            const pushY = (dy / dist) * (overlap / 2);
+            a.x -= pushX;
+            a.y -= pushY;
+            b.x += pushX;
+            b.y += pushY;
+
+            // Update the circle centers record
+            metaCircleCenters[a.id].x = a.x;
+            metaCircleCenters[a.id].y = a.y;
+            metaCircleCenters[b.id].x = b.x;
+            metaCircleCenters[b.id].y = b.y;
+          }
+        }
+      }
+      if (!anyOverlap) break;
+    }
   } else {
     for (const mc of metaClusters) {
       metaCircleCenters[mc.id] = {
