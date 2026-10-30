@@ -191,8 +191,8 @@ export function buildMetaPalette(baseColor: string | null | undefined): SpatialC
 
 /** Base radius of a metacluster circle, scaled by content volume. */
 export function metaCircleRadius(totalChunks: number, clusterCount: number): number {
-  const r = 38 + Math.sqrt(Math.max(1, totalChunks)) * 2.5 + Math.min(clusterCount, 40) * 1.5;
-  return Math.max(48, Math.min(100, r));
+  const r = 38 + Math.sqrt(Math.max(1, totalChunks)) * 2.5 + clusterCount * 3.0;
+  return Math.max(48, Math.min(200, r));
 }
 
 /** Disc size for cluster nodes, shrunk for crowded metaclusters. */
@@ -406,11 +406,21 @@ export function getClusterPositionsInsideMetaCircle(
     positions[selectedCluster.id] = { x: metaCenter.x, y: metaCenter.y + 8 };
 
     // True phyllotaxis spiral: angle increases by golden angle, radius by sqrt
+    // Scale the spiral to fit inside the expanded ring
+    let maxSpiralR = 0;
+    for (let idx = 0; idx < sorted.length; idx++) {
+      const sim = cosineSimilarity(sorted[idx].centroid, selectedCluster.centroid);
+      const effectiveIdx = idx * (0.4 + (1 - sim) * 0.6);
+      const r = 26 + 60 * Math.sqrt(effectiveIdx + 1);
+      if (r > maxSpiralR) maxSpiralR = r;
+    }
+    const spiralScale = maxSpiralR > 0 ? availableRadius / maxSpiralR : 1;
+
     sorted.forEach((cluster, idx) => {
       const sim = cosineSimilarity(cluster.centroid, selectedCluster.centroid);
-      const effectiveIdx = idx * (0.4 + (1 - sim) * 0.6); // more similar = lower effective index = inner spiral
+      const effectiveIdx = idx * (0.4 + (1 - sim) * 0.6);
       const angle = effectiveIdx * goldenAngle - Math.PI / 2;
-      const r = 26 + 48 * Math.sqrt(effectiveIdx + 1);
+      const r = (26 + 60 * Math.sqrt(effectiveIdx + 1)) * spiralScale;
       positions[cluster.id] = {
         x: metaCenter.x + r * Math.cos(angle),
         y: metaCenter.y + 12 + r * Math.sin(angle),
@@ -423,7 +433,7 @@ export function getClusterPositionsInsideMetaCircle(
     // Compute maximum spiral radius needed so we can scale to fit
     let maxSpiralR = 0;
     for (let i = 0; i < n; i++) {
-      const r = 16 + 24 * Math.sqrt(i + 1);
+      const r = 16 + 32 * Math.sqrt(i + 1);
       if (r > maxSpiralR) maxSpiralR = r;
     }
 
@@ -432,7 +442,7 @@ export function getClusterPositionsInsideMetaCircle(
 
     for (let i = 0; i < n; i++) {
       const angle = i * goldenAngle - Math.PI / 2;
-      const r = (16 + 24 * Math.sqrt(i + 1)) * scaleFactor;
+      const r = (16 + 32 * Math.sqrt(i + 1)) * scaleFactor;
       positions[clusters[i].id] = {
         x: metaCenter.x + r * Math.cos(angle),
         y: metaCenter.y + 12 + r * Math.sin(angle),
@@ -619,7 +629,7 @@ export function calculateDynamicCircleWebLayout(
     );
 
     // Iteratively push overlapping metaclusters apart (up to 30 iterations)
-    for (let iter = 0; iter < 30; iter++) {
+    for (let iter = 0; iter < 100; iter++) {
       let anyOverlap = false;
       for (let i = 0; i < posArray.length; i++) {
         for (let j = i + 1; j < posArray.length; j++) {
@@ -632,8 +642,8 @@ export function calculateDynamicCircleWebLayout(
           if (dist < minDist && dist > 0.1) {
             anyOverlap = true;
             const overlap = minDist - dist;
-            const pushX = (dx / dist) * (overlap / 2);
-            const pushY = (dy / dist) * (overlap / 2);
+            const pushX = (dx / dist) * (overlap * 0.7);
+            const pushY = (dy / dist) * (overlap * 0.7);
             a.x -= pushX;
             a.y -= pushY;
             b.x += pushX;
