@@ -499,7 +499,7 @@ export default function SpatialClusterCanvas({
                     justifyContent: 'center',
                   }}
                 >
-                  {size >= 34 && (
+                  {size >= 32 && (
                     <span
                       style={{
                         fontSize: 9,

@@ -195,11 +195,8 @@ export function metaCircleRadius(totalChunks: number, clusterCount: number): num
   return Math.max(48, Math.min(200, r));
 }
 
-/** Disc size for cluster nodes, shrunk for crowded metaclusters. */
-export function clusterDiscSize(clusterCount: number): number {
-  if (clusterCount <= 6) return 54;
-  if (clusterCount <= 12) return 44;
-  if (clusterCount <= 24) return 38;
+/** Fixed disc size for all cluster nodes (prevents overlapping within rings). */
+export function clusterDiscSize(_clusterCount: number): number {
   return 32;
 }
 
@@ -363,7 +360,7 @@ export function buildSpatialMetaClusters(
 }
 /**
  * Positions of clusters distributed inside a metacluster circle, ensuring
- * discs stay within the boundary. Ported from the reference implementation.
+ * discs stay within the boundary and do not overlap each other.
  * When `selectedCluster` is provided and the cluster belongs to that metacluster,
  * clusters are laid out by spiral proximity (more similar = closer to center).
  */
@@ -376,6 +373,8 @@ export function getClusterPositionsInsideMetaCircle(
   const positions: Record<string, XY> = {};
   const clusters = meta.clusters;
   const n = clusters.length;
+  const HALF_DOT = 16; // half of the fixed 32px dot diameter
+  const DOT_DIAMETER = 32;
   if (n === 0) return positions;
 
   // Check if this is the selected cluster's metacluster
@@ -388,6 +387,10 @@ export function getClusterPositionsInsideMetaCircle(
 
   // Leave room for the title pill at the top of the circle
   const availableRadius = Math.max(24, metaRadius - 35);
+
+  // Build an array of dot positions for collision resolution
+  type Dot = { id: string; x: number; y: number };
+  let dots: Dot[] = [];
 
   if (isActiveMeta && selectedCluster) {
     // Spiral layout sorted by similarity to the selected cluster
@@ -404,9 +407,9 @@ export function getClusterPositionsInsideMetaCircle(
 
     // Place selected cluster at center
     positions[selectedCluster.id] = { x: metaCenter.x, y: metaCenter.y + 8 };
+    dots.push({ id: selectedCluster.id, x: metaCenter.x, y: metaCenter.y + 8 });
 
-    // True phyllotaxis spiral: angle increases by golden angle, radius by sqrt
-    // Scale the spiral to fit inside the expanded ring
+    // Compute max spiral radius and scale to fit the available radius
     let maxSpiralR = 0;
     for (let idx = 0; idx < sorted.length; idx++) {
       const sim = cosineSimilarity(sorted[idx].centroid, selectedCluster.centroid);
@@ -414,40 +417,69 @@ export function getClusterPositionsInsideMetaCircle(
       const r = 26 + 60 * Math.sqrt(effectiveIdx + 1);
       if (r > maxSpiralR) maxSpiralR = r;
     }
-    const spiralScale = maxSpiralR > 0 ? availableRadius / maxSpiralR : 1;
+    const spiralScale = maxSpiralR > 0 ? (availableRadius - HALF_DOT) / maxSpiralR : 1;
 
     sorted.forEach((cluster, idx) => {
       const sim = cosineSimilarity(cluster.centroid, selectedCluster.centroid);
       const effectiveIdx = idx * (0.4 + (1 - sim) * 0.6);
       const angle = effectiveIdx * goldenAngle - Math.PI / 2;
       const r = (26 + 60 * Math.sqrt(effectiveIdx + 1)) * spiralScale;
-      positions[cluster.id] = {
-        x: metaCenter.x + r * Math.cos(angle),
-        y: metaCenter.y + 12 + r * Math.sin(angle),
-      };
+      const dx = metaCenter.x + r * Math.cos(angle);
+      const dy = metaCenter.y + 12 + r * Math.sin(angle);
+      positions[cluster.id] = { x: dx, y: dy };
+      dots.push({ id: cluster.id, x: dx, y: dy });
     });
   } else {
     // Non-selected metacluster: spiral layout scaled to fit inside the ring
     const goldenAngle = 2.399963229728653;
 
-    // Compute maximum spiral radius needed so we can scale to fit
+    // Compute max spiral radius and scale to fit the available radius
     let maxSpiralR = 0;
     for (let i = 0; i < n; i++) {
       const r = 16 + 32 * Math.sqrt(i + 1);
       if (r > maxSpiralR) maxSpiralR = r;
     }
-
-    // Scale factor so the outermost cluster fits within availableRadius
-    const scaleFactor = maxSpiralR > 0 ? availableRadius / maxSpiralR : 1;
+    const scaleFactor = maxSpiralR > 0 ? (availableRadius - HALF_DOT) / maxSpiralR : 1;
 
     for (let i = 0; i < n; i++) {
       const angle = i * goldenAngle - Math.PI / 2;
       const r = (16 + 32 * Math.sqrt(i + 1)) * scaleFactor;
-      positions[clusters[i].id] = {
-        x: metaCenter.x + r * Math.cos(angle),
-        y: metaCenter.y + 12 + r * Math.sin(angle),
-      };
+      const dx = metaCenter.x + r * Math.cos(angle);
+      const dy = metaCenter.y + 12 + r * Math.sin(angle);
+      positions[clusters[i].id] = { x: dx, y: dy };
+      dots.push({ id: clusters[i].id, x: dx, y: dy });
     }
+  }
+
+  // ── Collision resolution: push overlapping dots apart ──
+  // Iterate multiple times, pushing pairs that are closer than DOT_DIAMETER apart
+  const PUSH_FACTOR = 0.7; // 70% of the overlap distance
+  for (let iter = 0; iter < 50; iter++) {
+    let anyOverlap = false;
+    for (let i = 0; i < dots.length; i++) {
+      for (let j = i + 1; j < dots.length; j++) {
+        const a = dots[i];
+        const b = dots[j];
+        const ddx = b.x - a.x;
+        const ddy = b.y - a.y;
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+        const minDist = DOT_DIAMETER; // dots must not overlap
+        if (dist < minDist && dist > 0.1) {
+          anyOverlap = true;
+          const overlap = minDist - dist;
+          const pushX = (ddx / dist) * (overlap * PUSH_FACTOR);
+          const pushY = (ddy / dist) * (overlap * PUSH_FACTOR);
+          a.x -= pushX;
+          a.y -= pushY;
+          b.x += pushX;
+          b.y += pushY;
+          // Update positions record
+          positions[a.id] = { x: a.x, y: a.y };
+          positions[b.id] = { x: b.x, y: b.y };
+        }
+      }
+    }
+    if (!anyOverlap) break;
   }
 
   return positions;
