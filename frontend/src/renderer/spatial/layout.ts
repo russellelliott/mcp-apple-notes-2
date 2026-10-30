@@ -493,15 +493,28 @@ export function calculateDynamicCircleWebLayout(
 
     const numOthers = otherMetas.length;
     // Multi-wrap phyllotaxis spiral for metaclusters
-    // More similar metaclusters placed on inner wraps, closer to center
+    // Orbital radius based on similarity to selected cluster (more similar = closer to center)
+    // Angular spacing based on pairwise similarity (more similar = tighter angular gap)
     const goldenAngle = 2.399963229728653;
     otherMetas.forEach((item, index) => {
+      // Similarity to selected cluster determines radial position (more similar = closer)
       const sim = cosineSimilarity(selectedCluster.centroid, centroids[item.mc.id]);
-      // More similar = lower effective index = inner spiral wrap
-      const effectiveIdx = index * (0.3 + (1 - sim) * 0.7);
-      // Spiral angle and radius: sqrt growth pushes layers well beyond selected cluster ring
-      const angle = effectiveIdx * goldenAngle - Math.PI / 2;
-      const orbitRadius = 300 + 260 * Math.sqrt(effectiveIdx + 1);
+      const orbitRadius = 100 + (1 - sim) * 4500 + item.mc.radius * 0.6;
+
+      // Pairwise similarity: compute average cosine similarity to neighboring cloud metaclusters
+      const pairwiseSims = otherMetas
+        .filter((o) => o.mc.id !== item.mc.id)
+        .map((o) => cosineSimilarity(centroids[item.mc.id], centroids[o.mc.id]));
+      const avgPairwiseSim =
+        pairwiseSims.length > 0
+          ? pairwiseSims.reduce((a, b) => a + b, 0) / pairwiseSims.length
+          : 0;
+
+      // Higher pairwise similarity → wider angular gap (more spread apart from similar neighbors)
+      // Higher dissimilarity → tighter angular gap (can be closer to dissimilar neighbors)
+      const angleSpacing = 2.0 + (1 - avgPairwiseSim) * 1.5;
+      const angle = index * angleSpacing * goldenAngle - Math.PI / 2;
+
       metaCircleCenters[item.mc.id] = {
         x: canvasCenter.x + orbitRadius * Math.cos(angle),
         y: canvasCenter.y + orbitRadius * Math.sin(angle),
