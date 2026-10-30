@@ -318,28 +318,6 @@ export default function SpatialClusterCanvas({
         >
 
           {/* Orbit guide rings in focus mode */}
-          {viewMode === 'focus' && (
-            <g>
-              <circle
-                cx={WORLD_CENTER.x}
-                cy={WORLD_CENTER.y}
-                r={1480}
-                fill="none"
-                stroke="#9aa3c0"
-                strokeOpacity={0.18}
-                strokeDasharray="4 10"
-              />
-              <text
-                x={WORLD_CENTER.x}
-                y={WORLD_CENTER.y - 1486}
-                textAnchor="middle"
-                fontSize={10}
-                fill="#7c86a8"
-              >
-                similar orbit
-              </text>
-            </g>
-          )}
         </svg>
 
         {/* Metacluster circles */}
