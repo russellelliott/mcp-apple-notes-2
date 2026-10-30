@@ -660,12 +660,54 @@ export function calculateDynamicCircleWebLayout(
       if (!anyOverlap) break;
     }
   } else {
+    // Base mode: scale outward from world center, then apply collision resolution
+    const SCALE_FACTOR = 1.4; // Spread metaclusters 40% further from center
+
     for (const mc of metaClusters) {
+      // Offset from world center, scaled outward
+      const dx = mc.basePosition.x - WORLD_CENTER.x;
+      const dy = mc.basePosition.y - WORLD_CENTER.y;
       metaCircleCenters[mc.id] = {
-        x: mc.basePosition.x,
-        y: mc.basePosition.y,
+        x: WORLD_CENTER.x + dx * SCALE_FACTOR,
+        y: WORLD_CENTER.y + dy * SCALE_FACTOR,
         radius: mc.radius,
       };
+    }
+
+    // ── Collision resolution for base mode ──
+    const basePosArray: Array<{ id: string; x: number; y: number; radius: number }> =
+      Object.entries(metaCircleCenters).map(
+        ([id, data]) => ({ id, x: data.x, y: data.y, radius: data.radius }),
+      );
+
+    // 100 iterations, 70% overlap push
+    for (let iter = 0; iter < 100; iter++) {
+      let anyOverlap = false;
+      for (let i = 0; i < basePosArray.length; i++) {
+        for (let j = i + 1; j < basePosArray.length; j++) {
+          const a = basePosArray[i];
+          const b = basePosArray[j];
+          const ddx = b.x - a.x;
+          const ddy = b.y - a.y;
+          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          const minDist = a.radius + b.radius;
+          if (dist < minDist && dist > 0.1) {
+            anyOverlap = true;
+            const overlap = minDist - dist;
+            const pushX = (ddx / dist) * (overlap * 0.7);
+            const pushY = (ddy / dist) * (overlap * 0.7);
+            a.x -= pushX;
+            a.y -= pushY;
+            b.x += pushX;
+            b.y += pushY;
+            metaCircleCenters[a.id].x = a.x;
+            metaCircleCenters[a.id].y = a.y;
+            metaCircleCenters[b.id].x = b.x;
+            metaCircleCenters[b.id].y = b.y;
+          }
+        }
+      }
+      if (!anyOverlap) break;
     }
   }
 
