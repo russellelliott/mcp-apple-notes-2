@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import * as THREE from 'three';
-import { RadialSimilarityHub } from './RadialSimilarityHub';
-import { MetaClusterTree } from './MetaClusterTree';
+import SpatialClusterCanvas from './spatial/SpatialClusterCanvas';
+import { buildSpatialMetaClusters } from './spatial/layout';
+import type { ApiMetaCluster, SearchMatchCounts, SpatialMetaCluster } from './spatial/types';
 
 interface NotePoint {
   unique_key: string;
@@ -244,6 +245,42 @@ export default function NoteClusters() {
   const [savedClustersBeforeSearch, setSavedClustersBeforeSearch] = useState<Set<string>>(new Set());
   const [clusterColorsFromAPI, setClusterColorsFromAPI] = useState<Record<string, string>>({});
   const [clusterColorsFromMetaTree, setClusterColorsFromMetaTree] = useState<Record<string, string>>({});
+  const [apiMetaClusters, setApiMetaClusters] = useState<ApiMetaCluster[]>([]);
+
+  // ── spatial canvas: fetch metaclusters (honoring the date range filter) ──
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        let url = 'http://127.0.0.1:8000/meta_clusters';
+        if (dateFrom || dateTo) {
+          const params = new URLSearchParams();
+          if (dateFrom) params.set('date_from', dateFrom);
+          if (dateTo) params.set('date_to', dateTo);
+          url = `http://127.0.0.1:8000/meta_clusters_filtered?${params.toString()}`;
+        }
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json: ApiMetaCluster[] = await res.json();
+        if (!active) return;
+        setApiMetaClusters(json);
+        // Publish per-cluster colors so the 3D dots stay in sync
+        const colors: Record<string, string> = {};
+        json.forEach((meta) => {
+          meta.child_clusters.forEach((child) => {
+            if (child.color) colors[child.cluster_id] = child.color;
+          });
+        });
+        setClusterColorsFromMetaTree(colors);
+      } catch (err) {
+        if (!active) return;
+        console.warn('Failed to fetch meta_clusters for spatial canvas:', err);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [dateFrom, dateTo]);
   const sidebarCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendClusterRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const legendContainerRef = useRef<HTMLDivElement | null>(null);
@@ -416,6 +453,27 @@ export default function NoteClusters() {
     })();
     return () => { active = false; };
   }, []);
+
+  // ── spatial layout data ───────────────────────────────────────────────────
+  const spatialMetaClusters = useMemo<SpatialMetaCluster[]>(
+    () =>
+      buildSpatialMetaClusters(
+        apiMetaClusters,
+        data,
+        { ...clusterColorsFromAPI, ...clusterColorsFromMetaTree },
+      ),
+    [apiMetaClusters, data, clusterColorsFromAPI, clusterColorsFromMetaTree],
+  );
+
+  const spatialSearchMatches = useMemo<SearchMatchCounts | undefined>(() => {
+    if (!debouncedQuery || searchResults.length === 0) return undefined;
+    const map: SearchMatchCounts = {};
+    for (const r of searchResults) {
+      const key = r.display_topic_id || r.cluster_id || '-1';
+      map[key] = (map[key] || 0) + 1;
+    }
+    return map;
+  }, [debouncedQuery, searchResults]);
 
   useEffect(() => {
     let active = true;
@@ -1553,7 +1611,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
   // Resolve authoritative cluster color from the API for header accent
   const modalClusterKey = selectedNode?.display_topic_id || selectedNode?.cluster_id || '';
   const modalApiColor = modalClusterKey
-    ? (clusterColorsFromAPI[modalClusterKey] || selectedNode.cluster_color || selectedNode.dot_color || null)
+    ? (clusterColorsFromAPI[modalClusterKey] || selectedNode?.cluster_color || selectedNode?.dot_color || null)
     : null;
 
   const modalRailChunks = useMemo(() => {
@@ -1983,7 +2041,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
           </div>
 
 
-           {/* Center column: Date range + RadialSimilarityHub */}
+           {/* Center column: Date range + SpatialClusterCanvas */}
            <div style={{
             flex: 1,
             minWidth: '200px',
@@ -2004,7 +2062,7 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
               textAlign: 'center',
               flexShrink: 0,
              }}>
-              Similar Clusters
+              Spatial Clusters
              </div>
 
              {/* Date Range Input */}
@@ -2071,60 +2129,24 @@ const formatDateMMDDYYYY = (value?: string | number | null) => {
              </div>
 
              <div style={{
-              flex: 1,
-              minHeight: 0,
-              minWidth: 0,
-              display: 'flex',
-             }}>
-               <RadialSimilarityHub
-                selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-                onNodeClick={(clusterId) => {
-                  setSelectedClusters(new Set([clusterId]));
-                 }}
-                clusterColors={{ ...clusterColorsFromAPI, ...clusterColorsFromMetaTree }}
-                searchResults={debouncedQuery && searchResults.length > 0 && selectedClusters.size === 0 ? searchResults : undefined}
-               />
-             </div>
+               flex: 1,
+               minHeight: 0,
+               minWidth: 0,
+              }}>
+                <SpatialClusterCanvas
+                 metaClusters={spatialMetaClusters}
+                 selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
+                 onSelectCluster={(clusterId) => {
+                   setSelectedClusters(clusterId ? new Set([clusterId]) : new Set());
+                  }}
+                 searchMatches={spatialSearchMatches}
+                 isSearchActive={!!debouncedQuery && searchResults.length > 0 && selectedClusters.size === 0}
+                />
+              </div>
           </div>
 
 
-            {/* Right column: MetaClusterTree with date props */}
-            <div style={{
-             width: '26%',
-             flexShrink: 0,
-             display: 'flex',
-             flexDirection: 'column',
-             borderLeft: '1px solid #e0e0e0',
-             backgroundColor: '#f9f9f9',
-             padding: '10px',
-             boxSizing: 'border-box',
-             fontSize: '11px',
-             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-            }}>
-               <MetaClusterTree
-                onClusterSelect={(clusterId) => {
-                  setSelectedClusters(new Set([clusterId]));
-                  }}
-                selectedClusterId={selectedClusters.size > 0 ? Array.from(selectedClusters)[0] : null}
-                sortMetric={clusterSortMetric}
-                clusterColors={clusterColorsFromAPI}
-                onClusterColorsLoaded={setClusterColorsFromMetaTree}
-                dateFrom={dateFrom || undefined}
-                dateTo={dateTo || undefined}
-                searchClusterIds={debouncedQuery && searchResults.length > 0 ? (() => {
-                  const ids = new Set<string>();
-                  searchResults.forEach((r) => {
-                    ids.add(r.display_topic_id || r.cluster_id || '-1');
-                    });
-                  return ids;
-                  })() : undefined}
-                searchResults={debouncedQuery && searchResults.length > 0 ? searchResults.map((r) => ({
-                  cluster_id: r.cluster_id || '-1',
-                  display_topic_id: r.display_topic_id || r.cluster_id || '-1',
-                  distance: r.distance,
-                  })) : undefined}
-                />
-            </div>
+
 
 
           {/* Modal Popup for Note Content */}
