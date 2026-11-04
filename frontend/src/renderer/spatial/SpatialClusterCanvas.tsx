@@ -634,9 +634,6 @@ export default function SpatialClusterCanvas({
               style={{
                 fontWeight: 700,
                 color: '#23283c',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
               }}
             >
               {hoveredCluster.title}
